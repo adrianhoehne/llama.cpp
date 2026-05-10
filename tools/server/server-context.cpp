@@ -3609,6 +3609,15 @@ void server_routes::init_routes() {
         return res;
     };
 
+    this->get_moe_layer_perf = [this](const server_http_req &) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+
+        res->status = 200;
+        res->data = llama_moe_layer_perf_json(nullptr);
+
+        return res;
+    };
+
     this->get_metrics = [this](const server_http_req & req) {
         auto res = create_response();
         if (!params.endpoint_metrics) {
