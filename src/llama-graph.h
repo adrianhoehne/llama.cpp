@@ -660,6 +660,7 @@ public:
 
     void set_inputs(const llama_ubatch * ubatch);
     void set_outputs();
+    void add_parallel_region(const ggml_backend_sched_parallel_region & region);
 
     // try to update the existing graph result using the new graph parameters in order to reuse it
     // this can only be done if we determine that the resulting graph using the new graph parameters
@@ -685,6 +686,7 @@ public:
     std::map<llama_seq_id, ggml_tensor*> t_sampled_probs;
 
     std::vector<llm_graph_input_ptr> inputs;
+    std::vector<ggml_backend_sched_parallel_region> parallel_regions;
 
     ggml_context_ptr ctx_compute;
 

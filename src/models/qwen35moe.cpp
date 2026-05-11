@@ -611,6 +611,18 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         return ggml_view_1d(ctx0, worklist, capacity, field*worklist->nb[1]);
     };
 
+    const auto view_worklist_scalar_field = [&](int32_t field) {
+        return ggml_view_1d(ctx0, worklist, 1, field*worklist->nb[1]);
+    };
+
+    ggml_tensor * hot_count = ggml_cast(ctx0, view_worklist_scalar_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT), GGML_TYPE_I32);
+    cb(hot_count, "ffn_moe_hot_count", il);
+    ggml_build_forward_expand(gf, hot_count);
+
+    ggml_tensor * cold_count = ggml_cast(ctx0, view_worklist_scalar_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT), GGML_TYPE_I32);
+    cb(cold_count, "ffn_moe_cold_count", il);
+    ggml_build_forward_expand(gf, cold_count);
+
     ggml_tensor * hot_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID), GGML_TYPE_I32);
     hot_ids = ggml_reshape_2d(ctx0, hot_ids, 1, capacity);
     cb(hot_ids, "ffn_moe_hot_ids_compact", il);
@@ -653,9 +665,11 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     cb(hot_slots, "ffn_moe_hot_slots", il);
 
     ggml_tensor * out_slots = hot_slots;
+    ggml_tensor * cold_ids = nullptr;
+    ggml_tensor * cold_slots = nullptr;
 
     if (cache.n_hot != cache.n_expert) {
-        ggml_tensor * cold_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID), GGML_TYPE_I32);
+        cold_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID), GGML_TYPE_I32);
         cold_ids = ggml_reshape_2d(ctx0, cold_ids, 1, capacity);
         cb(cold_ids, "ffn_moe_cold_ids_compact", il);
 
@@ -689,7 +703,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
                 "cold");
         cb(cold_out, "ffn_moe_cold_out", il);
 
-        ggml_tensor * cold_slots = ggml_scale(ctx0, cold_inputs, 0.0f);
+        cold_slots = ggml_scale(ctx0, cold_inputs, 0.0f);
         cold_slots = ggml_pad(ctx0, cold_slots, 0, 1, 0, 0);
         cold_slots = ggml_set_rows(ctx0, cold_slots, cold_out, cold_src_slots);
         cold_slots = ggml_view_2d(ctx0, cold_slots, n_embd, capacity, cold_slots->nb[1], 0);
@@ -717,5 +731,26 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     }
 
     cb(out, "ffn_moe_out", il);
+
+    if (!cparams.warmup) {
+        res->add_parallel_region({
+            /*.layer         =*/ il,
+            /*.routing_first =*/ logits,
+            /*.routing_last  =*/ weights,
+            /*.worklist_first=*/ worklist,
+            /*.worklist_last =*/ cold_count,
+            /*.hot_count     =*/ hot_count,
+            /*.hot_first     =*/ hot_ids,
+            /*.hot_last      =*/ hot_slots,
+            /*.hot_zero      =*/ hot_slots,
+            /*.cold_count    =*/ cold_count,
+            /*.cold_first    =*/ cold_ids,
+            /*.cold_last     =*/ cold_slots,
+            /*.cold_zero     =*/ cold_slots,
+            /*.merge_first   =*/ out_slots,
+            /*.merge_last    =*/ out,
+        });
+    }
+
     return out;
 }
