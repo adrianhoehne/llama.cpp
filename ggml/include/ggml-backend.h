@@ -313,58 +313,6 @@ extern "C" {
     //
     typedef bool (*ggml_backend_sched_eval_callback)(struct ggml_tensor * t, bool ask, void * user_data);
 
-    enum ggml_backend_sched_parallel_mode {
-        GGML_BACKEND_SCHED_PARALLEL_MODE_OFF   = 0,
-        GGML_BACKEND_SCHED_PARALLEL_MODE_AUTO  = 1,
-        GGML_BACKEND_SCHED_PARALLEL_MODE_FORCE = 2,
-    };
-
-    struct ggml_backend_sched_parallel_region {
-        int32_t layer;
-
-        struct ggml_tensor * routing_first;
-        struct ggml_tensor * routing_last;
-
-        struct ggml_tensor * worklist_first;
-        struct ggml_tensor * worklist_last;
-
-        struct ggml_tensor * hot_count;
-        struct ggml_tensor * hot_first;
-        struct ggml_tensor * hot_last;
-        struct ggml_tensor * hot_zero;
-
-        struct ggml_tensor * cold_count;
-        struct ggml_tensor * cold_first;
-        struct ggml_tensor * cold_last;
-        struct ggml_tensor * cold_zero;
-
-        struct ggml_tensor * merge_first;
-        struct ggml_tensor * merge_last;
-    };
-
-    struct ggml_backend_sched_parallel_region_stats {
-        int32_t layer;
-
-        uint64_t hot_count;
-        uint64_t cold_count;
-
-        uint64_t routing_time_us;
-        uint64_t worklist_time_us;
-        uint64_t merge_time_us;
-
-        uint64_t parallel_region_wall_time_us;
-        uint64_t parallel_hot_lane_wall_time_us;
-        uint64_t parallel_cold_lane_wall_time_us;
-        uint64_t parallel_join_wait_time_us;
-        uint64_t parallel_overlap_estimate_us;
-
-        uint64_t parallel_hot_launches;
-        uint64_t parallel_cold_launches;
-        uint64_t parallel_hot_skips_zero;
-        uint64_t parallel_cold_skips_zero;
-        uint64_t parallel_fallbacks;
-    };
-
     // Initialize a backend scheduler, backends with low index are given priority over backends with high index
     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel, bool op_offload);
     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
@@ -385,11 +333,6 @@ extern "C" {
 
     GGML_API void                 ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend);
     GGML_API ggml_backend_t       ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node);
-
-    GGML_API void                 ggml_backend_sched_set_parallel_mode(ggml_backend_sched_t sched, enum ggml_backend_sched_parallel_mode mode);
-    GGML_API void                 ggml_backend_sched_set_parallel_regions(ggml_backend_sched_t sched, struct ggml_cgraph * graph, const struct ggml_backend_sched_parallel_region * regions, int n_regions);
-    GGML_API bool                 ggml_backend_sched_has_parallel_regions(ggml_backend_sched_t sched);
-    GGML_API int                  ggml_backend_sched_get_parallel_region_stats(ggml_backend_sched_t sched, const struct ggml_backend_sched_parallel_region_stats ** stats);
 
     // Split graph without allocating it
     GGML_API void                 ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph);

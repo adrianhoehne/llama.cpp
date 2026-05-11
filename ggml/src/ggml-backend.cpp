@@ -20,8 +20,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
-#include <string>
-#include <thread>
 #include <vector>
 
 #ifdef __APPLE__
@@ -773,35 +771,6 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
-struct ggml_backend_sched_parallel_lane_state {
-    struct ggml_tensor * count = nullptr;
-    struct ggml_tensor * zero = nullptr;
-
-    int split_start = -1;
-    int split_end = -1;
-    int backend_id = -1;
-
-    bool present = false;
-};
-
-struct ggml_backend_sched_parallel_region_state {
-    int32_t layer = -1;
-
-    int routing_split_start = -1;
-    int routing_split_end = -1;
-    int worklist_split_start = -1;
-    int worklist_split_end = -1;
-    int merge_split_start = -1;
-    int merge_split_end = -1;
-
-    ggml_backend_sched_parallel_lane_state hot;
-    ggml_backend_sched_parallel_lane_state cold;
-
-    bool enabled = false;
-    bool fallback = false;
-    std::string fallback_reason;
-};
-
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -856,13 +825,6 @@ struct ggml_backend_sched {
     int debug_realloc;
     int debug_graph_size;
     int debug_prev_graph_size;
-
-    enum ggml_backend_sched_parallel_mode parallel_mode = GGML_BACKEND_SCHED_PARALLEL_MODE_OFF;
-    struct ggml_cgraph * parallel_graph = nullptr;
-    std::vector<ggml_backend_sched_parallel_region> parallel_regions;
-    std::vector<ggml_backend_sched_parallel_region_state> parallel_regions_resolved;
-    std::vector<ggml_backend_sched_parallel_region_stats> parallel_region_stats_last;
-    bool parallel_regions_active = false;
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -1045,469 +1007,6 @@ static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, stru
     if (ggml_backend_supports_op(sched->backends[cur_backend_id], node)) {
         *node_backend_id = cur_backend_id;
         SET_CAUSE(node, "2.sup");
-    }
-}
-
-struct ggml_backend_sched_exec_state {
-    ggml_tensor * prev_ids_tensor = nullptr;
-    std::vector<int32_t> ids;
-    std::vector<ggml_bitset_t> used_ids;
-};
-
-static bool ggml_backend_sched_backend_is_cpu(ggml_backend_sched_t sched, int backend_id) {
-    return ggml_backend_dev_type(ggml_backend_get_device(sched->backends[backend_id])) == GGML_BACKEND_DEVICE_TYPE_CPU;
-}
-
-static bool ggml_backend_sched_backend_is_cuda(ggml_backend_sched_t sched, int backend_id) {
-    ggml_backend_dev_t device = ggml_backend_get_device(sched->backends[backend_id]);
-    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
-    const char * reg_name = ggml_backend_reg_name(reg);
-
-    return reg_name != NULL && strcmp(reg_name, "CUDA") == 0;
-}
-
-static int ggml_backend_sched_find_node_index(const struct ggml_cgraph * graph, const struct ggml_tensor * tensor) {
-    if (graph == nullptr || tensor == nullptr) {
-        return -1;
-    }
-
-    for (int i = 0; i < graph->n_nodes; ++i) {
-        if (graph->nodes[i] == tensor) {
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-static int ggml_backend_sched_find_split_for_node(ggml_backend_sched_t sched, int node_index) {
-    if (node_index < 0) {
-        return -1;
-    }
-
-    for (int split_id = 0; split_id < sched->n_splits; ++split_id) {
-        const struct ggml_backend_sched_split & split = sched->splits[split_id];
-        if (node_index >= split.i_start && node_index < split.i_end) {
-            return split_id;
-        }
-    }
-
-    return -1;
-}
-
-static bool ggml_backend_sched_read_control_i32(ggml_backend_sched_t sched, struct ggml_tensor * tensor, int32_t * value) {
-    if (sched == nullptr || tensor == nullptr || value == nullptr) {
-        return false;
-    }
-
-    ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
-    if (backend == nullptr) {
-        return false;
-    }
-
-    ggml_backend_tensor_get_async(backend, tensor, value, 0, sizeof(*value));
-    ggml_backend_synchronize(backend);
-    return true;
-}
-
-static enum ggml_status ggml_backend_sched_compute_split_internal(
-        ggml_backend_sched_t sched,
-        int split_id,
-        bool allow_callback,
-        ggml_backend_sched_exec_state & state) {
-    struct ggml_backend_sched_split * split = &sched->splits[split_id];
-    int split_backend_id = split->backend_id;
-    ggml_backend_t split_backend = sched->backends[split_backend_id];
-
-    for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-        ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
-        struct ggml_tensor * input = split->inputs[input_id];
-        struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
-
-        if (input->flags & GGML_TENSOR_FLAG_INPUT) {
-            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-            } else {
-                ggml_backend_synchronize(split_backend);
-            }
-            ggml_backend_tensor_copy(input, input_cpy);
-        } else {
-            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
-            } else {
-                ggml_backend_synchronize(split_backend);
-            }
-
-            ggml_tensor * node = split->graph.nodes[0];
-            if (split->graph.n_nodes > 0 &&
-                ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
-                ggml_backend_buffer_is_host(input->buffer) && (
-                (node->src[0] == input_cpy && node->op == GGML_OP_MUL_MAT_ID)
-                )) {
-
-                const int64_t n_expert   = node->op == GGML_OP_MUL_MAT_ID ? input->ne[2] : input->ne[1];
-                const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
-                int32_t flags = 0;
-                memcpy(&flags, node->op_params, sizeof(flags));
-                const bool allow_negative_ids = (flags & (1 << 1)) != 0;
-
-                ggml_backend_synchronize(input_backend);
-
-                ggml_tensor * ids_tensor = node->src[2];
-                ggml_backend_t ids_backend = split_backend;
-
-                for (int i = input_id + 1; i < split->n_inputs; i++) {
-                    if (ids_tensor == tensor_copy(split->inputs[i], split_backend_id, sched->cur_copy)) {
-                        ids_tensor = split->inputs[i];
-                        ids_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[i]);
-                        break;
-                    }
-                }
-
-                if (ids_tensor != state.prev_ids_tensor) {
-                    state.ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
-                    ggml_backend_tensor_get_async(ids_backend, ids_tensor, state.ids.data(), 0, ggml_nbytes(ids_tensor));
-                    ggml_backend_synchronize(ids_backend);
-
-                    state.used_ids.clear();
-                    state.used_ids.resize(ggml_bitset_size(n_expert));
-                    for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
-                        for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
-                            int32_t id = state.ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
-                            if (allow_negative_ids && id < 0) {
-                                continue;
-                            }
-                            GGML_ASSERT(id >= 0 && id < n_expert);
-                            ggml_bitset_set(state.used_ids.data(), id);
-                        }
-                    }
-
-                    state.prev_ids_tensor = ids_tensor;
-                }
-
-                bool have_used_expert = false;
-                for (int32_t id = 0; id < n_expert; ++id) {
-                    if (ggml_bitset_get(state.used_ids.data(), id)) {
-                        have_used_expert = true;
-                        break;
-                    }
-                }
-
-                if (!have_used_expert) {
-                    continue;
-                }
-
-                auto copy_experts = [&](int32_t first_id, int32_t last_id) {
-                    const size_t expert_offset = first_id * expert_size;
-                    const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
-                    const size_t padding = std::min<size_t>(expert_size, 512);
-                    const size_t padding_end = last_id < n_expert - 1 ? padding : 0;
-
-                    ggml_backend_tensor_set_async(split_backend,
-                        input_cpy,
-                        (const uint8_t *)input->data + expert_offset, expert_offset,
-                        expert_size_copy + padding_end);
-                };
-
-                int id = 0;
-                while (!ggml_bitset_get(state.used_ids.data(), id)) {
-                    id++;
-                }
-                int32_t first_id = id;
-                int32_t last_id = first_id;
-
-                for (++id; id < n_expert; ++id) {
-                    if (!ggml_bitset_get(state.used_ids.data(), id)) {
-                        continue;
-                    }
-
-                    if (id == last_id + 1) {
-                        last_id = id;
-                        continue;
-                    }
-
-                    copy_experts(first_id, last_id);
-
-                    first_id = id;
-                    last_id = id;
-                }
-                copy_experts(first_id, last_id);
-            } else {
-                if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                    ggml_backend_synchronize(input_backend);
-                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                        ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-                    } else {
-                        ggml_backend_synchronize(split_backend);
-                    }
-                    ggml_backend_tensor_copy(input, input_cpy);
-                }
-            }
-        }
-    }
-
-    if (allow_callback && sched->callback_eval) {
-        for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
-            struct ggml_tensor * t = split->graph.nodes[j0];
-
-            bool need = sched->callback_eval(t, true, sched->callback_eval_user_data);
-
-            int j1 = j0;
-            while (!need && j1 < split->graph.n_nodes - 1) {
-                t = split->graph.nodes[++j1];
-                need = sched->callback_eval(t, true, sched->callback_eval_user_data);
-            }
-
-            struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
-
-            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
-            if (ec != GGML_STATUS_SUCCESS) {
-                return ec;
-            }
-
-            ggml_backend_synchronize(split_backend);
-
-            if (need && !sched->callback_eval(t, false, sched->callback_eval_user_data)) {
-                break;
-            }
-
-            j0 = j1;
-        }
-    } else {
-        enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
-        if (ec != GGML_STATUS_SUCCESS) {
-            return ec;
-        }
-    }
-
-    if (split->n_inputs > 0) {
-        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-            ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
-        }
-    }
-
-    return GGML_STATUS_SUCCESS;
-}
-
-static enum ggml_status ggml_backend_sched_compute_split_range(
-        ggml_backend_sched_t sched,
-        int split_start,
-        int split_end,
-        bool allow_callback) {
-    if (split_start < 0 || split_end < split_start) {
-        return GGML_STATUS_SUCCESS;
-    }
-
-    ggml_backend_sched_exec_state state;
-
-    for (int split_id = split_start; split_id <= split_end; ++split_id) {
-        enum ggml_status ec = ggml_backend_sched_compute_split_internal(sched, split_id, allow_callback, state);
-        if (ec != GGML_STATUS_SUCCESS) {
-            return ec;
-        }
-    }
-
-    return GGML_STATUS_SUCCESS;
-}
-
-static bool ggml_backend_sched_resolve_split_range(
-        ggml_backend_sched_t sched,
-        struct ggml_cgraph * graph,
-        struct ggml_tensor * first,
-        struct ggml_tensor * last,
-        int * split_start,
-        int * split_end,
-        std::string * reason) {
-    if (split_start) {
-        *split_start = -1;
-    }
-    if (split_end) {
-        *split_end = -1;
-    }
-
-    if (first == nullptr || last == nullptr) {
-        return false;
-    }
-
-    const int node_first = ggml_backend_sched_find_node_index(graph, first);
-    const int node_last = ggml_backend_sched_find_node_index(graph, last);
-    if (node_first < 0 || node_last < 0) {
-        if (reason) {
-            *reason = "region tensors not found in graph";
-        }
-        return false;
-    }
-    if (node_last < node_first) {
-        if (reason) {
-            *reason = "region tensor order is invalid";
-        }
-        return false;
-    }
-
-    const int s0 = ggml_backend_sched_find_split_for_node(sched, node_first);
-    const int s1 = ggml_backend_sched_find_split_for_node(sched, node_last);
-    if (s0 < 0 || s1 < 0) {
-        if (reason) {
-            *reason = "region splits not found";
-        }
-        return false;
-    }
-
-    if (split_start) {
-        *split_start = s0;
-    }
-    if (split_end) {
-        *split_end = s1;
-    }
-    return true;
-}
-
-static bool ggml_backend_sched_resolve_lane(
-        ggml_backend_sched_t sched,
-        struct ggml_cgraph * graph,
-        const struct ggml_backend_sched_parallel_region & region_desc,
-        ggml_backend_sched_parallel_lane_state * lane,
-        bool hot,
-        std::string * reason) {
-    GGML_ASSERT(lane != nullptr);
-
-    struct ggml_tensor * first = hot ? region_desc.hot_first : region_desc.cold_first;
-    struct ggml_tensor * last  = hot ? region_desc.hot_last  : region_desc.cold_last;
-
-    lane->count = hot ? region_desc.hot_count : region_desc.cold_count;
-    lane->zero  = hot ? region_desc.hot_zero  : region_desc.cold_zero;
-
-    if (first == nullptr || last == nullptr) {
-        lane->present = false;
-        return true;
-    }
-
-    lane->present = true;
-
-    if (lane->count == nullptr || lane->zero == nullptr) {
-        if (reason) {
-            *reason = hot ? "hot lane count/zero tensor missing" : "cold lane count/zero tensor missing";
-        }
-        return false;
-    }
-
-    if (!ggml_backend_sched_resolve_split_range(sched, graph, first, last, &lane->split_start, &lane->split_end, reason)) {
-        return false;
-    }
-
-    lane->backend_id = sched->splits[lane->split_start].backend_id;
-    for (int split_id = lane->split_start; split_id <= lane->split_end; ++split_id) {
-        if (sched->splits[split_id].backend_id != lane->backend_id) {
-            if (reason) {
-                *reason = hot ? "hot lane spans multiple backends" : "cold lane spans multiple backends";
-            }
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static void ggml_backend_sched_resolve_parallel_regions(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
-    sched->parallel_regions_resolved.clear();
-    sched->parallel_regions_active = false;
-
-    if (sched->parallel_mode == GGML_BACKEND_SCHED_PARALLEL_MODE_OFF ||
-        sched->parallel_graph != graph ||
-        sched->parallel_regions.empty()) {
-        return;
-    }
-
-    sched->parallel_regions_resolved.reserve(sched->parallel_regions.size());
-
-    bool logged_enabled = false;
-    bool logged_fallback = false;
-
-    for (const auto & region_desc : sched->parallel_regions) {
-        ggml_backend_sched_parallel_region_state region = {};
-        region.layer = region_desc.layer;
-
-        if (!ggml_backend_sched_resolve_split_range(sched, graph, region_desc.routing_first, region_desc.routing_last,
-                &region.routing_split_start, &region.routing_split_end, &region.fallback_reason)) {
-            region.fallback = true;
-        }
-
-        if (!region.fallback &&
-            !ggml_backend_sched_resolve_split_range(sched, graph, region_desc.worklist_first, region_desc.worklist_last,
-                &region.worklist_split_start, &region.worklist_split_end, &region.fallback_reason)) {
-            region.fallback = true;
-        }
-
-        if (!region.fallback &&
-            !ggml_backend_sched_resolve_lane(sched, graph, region_desc, &region.hot, true, &region.fallback_reason)) {
-            region.fallback = true;
-        }
-
-        if (!region.fallback &&
-            !ggml_backend_sched_resolve_lane(sched, graph, region_desc, &region.cold, false, &region.fallback_reason)) {
-            region.fallback = true;
-        }
-
-        if (!region.fallback &&
-            !ggml_backend_sched_resolve_split_range(sched, graph, region_desc.merge_first, region_desc.merge_last,
-                &region.merge_split_start, &region.merge_split_end, &region.fallback_reason)) {
-            region.fallback = true;
-        }
-
-        if (!region.fallback) {
-            const int hot_start = region.hot.present ? region.hot.split_start : -1;
-            const int hot_end   = region.hot.present ? region.hot.split_end   : -1;
-            const int cold_start = region.cold.present ? region.cold.split_start : -1;
-            const int cold_end   = region.cold.present ? region.cold.split_end   : -1;
-            const int lanes_end = region.cold.present ? cold_end : hot_end;
-
-            if (region.routing_split_end >= region.worklist_split_start) {
-                region.fallback = true;
-                region.fallback_reason = "routing and worklist ranges share a split";
-            } else if (region.hot.present && region.worklist_split_end >= hot_start) {
-                region.fallback = true;
-                region.fallback_reason = "worklist and hot lane ranges share a split";
-            } else if (region.hot.present && region.cold.present && hot_end >= cold_start) {
-                region.fallback = true;
-                region.fallback_reason = "hot and cold lane ranges share a split";
-            } else if (lanes_end >= region.merge_split_start) {
-                region.fallback = true;
-                region.fallback_reason = "lane and merge ranges share a split";
-            }
-        }
-
-        if (!region.fallback) {
-            if (!region.hot.present) {
-                region.fallback = true;
-                region.fallback_reason = "hot lane missing";
-            } else if (!ggml_backend_sched_backend_is_cuda(sched, region.hot.backend_id)) {
-                region.fallback = true;
-                region.fallback_reason = "hot lane backend is not CUDA";
-            }
-        }
-
-        if (!region.fallback && region.cold.present && !ggml_backend_sched_backend_is_cpu(sched, region.cold.backend_id)) {
-            region.fallback = true;
-            region.fallback_reason = "cold lane backend is not CPU";
-        }
-
-        region.enabled = !region.fallback;
-        sched->parallel_regions_resolved.push_back(region);
-        sched->parallel_regions_active = sched->parallel_regions_active || region.enabled;
-
-        if (region.enabled && !logged_enabled) {
-            GGML_LOG_INFO("%s: MoE hot-cache parallel scheduler enabled\n", __func__);
-            logged_enabled = true;
-        }
-
-        if (region.fallback && !logged_fallback) {
-            GGML_LOG_INFO("%s: MoE hot-cache parallel fallback: %s\n", __func__, region.fallback_reason.c_str());
-            logged_fallback = true;
-        }
-
-        if (region.fallback && sched->parallel_mode == GGML_BACKEND_SCHED_PARALLEL_MODE_FORCE) {
-            GGML_ABORT("%s: force mode requires parallel execution, fallback reason: %s\n", __func__, region.fallback_reason.c_str());
-        }
     }
 }
 
@@ -1985,8 +1484,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     for (int i = 0; i < sched->n_splits; ++i) {
         sched->splits[i].graph.uid = ggml_graph_next_uid();
     }
-
-    ggml_backend_sched_resolve_parallel_regions(sched, graph);
 }
 
 static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
@@ -2043,151 +1540,203 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
-    sched->parallel_region_stats_last.clear();
-    sched->parallel_region_stats_last.resize(sched->parallel_regions_resolved.size());
+    struct ggml_backend_sched_split * splits = sched->splits;
 
-    bool need_serial_fallback = !sched->parallel_regions_active || sched->callback_eval != NULL;
-    for (size_t i = 0; i < sched->parallel_regions_resolved.size(); ++i) {
-        const auto & region = sched->parallel_regions_resolved[i];
-        auto & stats = sched->parallel_region_stats_last[i];
-        stats.layer = region.layer;
-        if (region.fallback) {
-            stats.parallel_fallbacks = 1;
-            need_serial_fallback = true;
+    ggml_tensor * prev_ids_tensor = nullptr;
+    std::vector<int32_t> ids;
+    std::vector<ggml_bitset_t> used_ids;
+
+    for (int split_id = 0; split_id < sched->n_splits; split_id++) {
+        struct ggml_backend_sched_split * split = &splits[split_id];
+        int split_backend_id = split->backend_id;
+        ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+        // copy the input tensors to the split backend
+        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+            ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
+            struct ggml_tensor * input = split->inputs[input_id];
+            struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+
+            if (input->flags & GGML_TENSOR_FLAG_INPUT) {
+                // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
+                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                } else {
+                    ggml_backend_synchronize(split_backend);
+                }
+                ggml_backend_tensor_copy(input, input_cpy);
+            } else {
+                // wait for the split backend to finish using the input before overwriting it
+                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
+                } else {
+                    ggml_backend_synchronize(split_backend);
+                }
+
+                // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
+                ggml_tensor * node = split->graph.nodes[0];
+                if (split->graph.n_nodes > 0 &&
+                    ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                    ggml_backend_buffer_is_host(input->buffer) && (
+                    (node->src[0] == input_cpy && node->op == GGML_OP_MUL_MAT_ID)
+                    //|| (node->src[1] == input_cpy && node->op == GGML_OP_ADD_ID) /* GGML_OP_ADD_ID weights are small and not worth splitting */
+                    )) {
+
+                    const int64_t n_expert   = node->op == GGML_OP_MUL_MAT_ID ? input->ne[2] : input->ne[1];
+                    const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
+                    int32_t flags = 0;
+                    memcpy(&flags, node->op_params, sizeof(flags));
+                    const bool allow_negative_ids = (flags & (1 << 1)) != 0;
+
+                    ggml_backend_synchronize(input_backend);
+
+                    // get the ids
+                    ggml_tensor * ids_tensor = node->src[2];
+                    ggml_backend_t ids_backend = split_backend;
+
+                    // if the ids tensor is also an input of the split, it may not have been copied yet to the split backend
+                    // in that case, we use the original ids tensor
+                    for (int i = input_id + 1; i < split->n_inputs; i++) {
+                        if (ids_tensor == tensor_copy(split->inputs[i], split_backend_id, sched->cur_copy)) {
+                            ids_tensor = split->inputs[i];
+                            ids_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[i]);
+                            break;
+                        }
+                    }
+
+                    if (ids_tensor != prev_ids_tensor) {
+                        ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
+                        ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
+                        ggml_backend_synchronize(ids_backend);
+
+                        // find the used experts
+                        used_ids.clear();
+                        used_ids.resize(ggml_bitset_size(n_expert));
+                        for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
+                            for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                                int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
+                                if (allow_negative_ids && id < 0) {
+                                    continue;
+                                }
+                                GGML_ASSERT(id >= 0 && id < n_expert);
+                                ggml_bitset_set(used_ids.data(), id);
+                            }
+                        }
+
+                        prev_ids_tensor = ids_tensor;
+                    }
+
+                    bool have_used_expert = false;
+                    for (int32_t id = 0; id < n_expert; ++id) {
+                        if (ggml_bitset_get(used_ids.data(), id)) {
+                            have_used_expert = true;
+                            break;
+                        }
+                    }
+
+                    if (!have_used_expert) {
+                        continue;
+                    }
+
+                    // group consecutive experts and copy them together
+                    auto copy_experts = [&](int32_t first_id, int32_t last_id) {
+                        const size_t expert_offset = first_id * expert_size;
+                        const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
+                        const size_t padding = std::min<size_t>(expert_size, 512);
+                        const size_t padding_end = last_id < n_expert - 1 ? padding : 0;
+
+                        ggml_backend_tensor_set_async(split_backend,
+                            input_cpy,
+                            (const uint8_t *)input->data + expert_offset, expert_offset,
+                            // copy a bit extra at the to ensure there are no NaNs in the padding of the last expert
+                            // this is necessary for MMQ in the CUDA backend
+                            expert_size_copy + padding_end);
+                    };
+
+                    int id = 0;
+                    while (!ggml_bitset_get(used_ids.data(), id)) {
+                        id++;
+                    }
+                    int32_t first_id = id;
+                    int32_t last_id = first_id;
+
+                    for (++id; id < n_expert; ++id) {
+                        if (!ggml_bitset_get(used_ids.data(), id)) {
+                            continue;
+                        }
+
+                        if (id == last_id + 1) {
+                            last_id = id;
+                            continue;
+                        }
+
+                        copy_experts(first_id, last_id);
+
+                        first_id = id;
+                        last_id = id;
+                    }
+                    copy_experts(first_id, last_id);
+                } else {
+                    // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
+                    // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
+                    if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                        ggml_backend_synchronize(input_backend);
+                        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                        } else {
+                            ggml_backend_synchronize(split_backend);
+                        }
+                        ggml_backend_tensor_copy(input, input_cpy);
+                    }
+                }
+            }
         }
-    }
 
-    if (need_serial_fallback) {
-        return ggml_backend_sched_compute_split_range(sched, 0, sched->n_splits - 1, true);
-    }
-
-    int split_cursor = 0;
-
-    for (size_t region_id = 0; region_id < sched->parallel_regions_resolved.size(); ++region_id) {
-        const auto & region = sched->parallel_regions_resolved[region_id];
-        auto & stats = sched->parallel_region_stats_last[region_id];
-
-        if (split_cursor < region.routing_split_start) {
-            enum ggml_status ec = ggml_backend_sched_compute_split_range(sched, split_cursor, region.routing_split_start - 1, false);
+        if (!sched->callback_eval) {
+            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
             }
-        }
+        } else {
+            // similar to ggml_backend_compare_graph_backend
+            for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
+                struct ggml_tensor * t = split->graph.nodes[j0];
 
-        int64_t t_phase_start = ggml_time_us();
-        enum ggml_status ec = ggml_backend_sched_compute_split_range(sched, region.routing_split_start, region.routing_split_end, false);
-        if (ec != GGML_STATUS_SUCCESS) {
-            return ec;
-        }
-        ggml_backend_sched_synchronize(sched);
-        stats.routing_time_us = ggml_time_us() - t_phase_start;
+                // check if the user needs data from this node
+                bool need = sched->callback_eval(t, true, sched->callback_eval_user_data);
 
-        t_phase_start = ggml_time_us();
-        ec = ggml_backend_sched_compute_split_range(sched, region.worklist_split_start, region.worklist_split_end, false);
-        if (ec != GGML_STATUS_SUCCESS) {
-            return ec;
-        }
-        ggml_backend_sched_synchronize(sched);
-        stats.worklist_time_us = ggml_time_us() - t_phase_start;
+                int j1 = j0;
 
-        int32_t hot_count = 0;
-        int32_t cold_count = 0;
-        if (!ggml_backend_sched_read_control_i32(sched, region.hot.count, &hot_count)) {
-            return GGML_STATUS_FAILED;
-        }
-        if (region.cold.present && !ggml_backend_sched_read_control_i32(sched, region.cold.count, &cold_count)) {
-            return GGML_STATUS_FAILED;
-        }
+                // determine the range [j0, j1] of nodes that can be computed together
+                while (!need && j1 < split->graph.n_nodes - 1) {
+                    t = split->graph.nodes[++j1];
+                    need = sched->callback_eval(t, true, sched->callback_eval_user_data);
+                }
 
-        stats.hot_count = hot_count > 0 ? (uint64_t) hot_count : 0;
-        stats.cold_count = cold_count > 0 ? (uint64_t) cold_count : 0;
+                struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
 
-        const bool launch_hot = region.hot.present && hot_count > 0;
-        const bool launch_cold = region.cold.present && cold_count > 0;
+                enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
+                if (ec != GGML_STATUS_SUCCESS) {
+                    return ec;
+                }
 
-        if (region.hot.present && !launch_hot) {
-            ggml_backend_tensor_memset(region.hot.zero, 0, 0, ggml_nbytes(region.hot.zero));
-            stats.parallel_hot_skips_zero = 1;
-        }
+                // TODO: pass backend to the callback, then the user can decide if they want to synchronize
+                ggml_backend_synchronize(split_backend);
 
-        if (region.cold.present && !launch_cold) {
-            ggml_backend_tensor_memset(region.cold.zero, 0, 0, ggml_nbytes(region.cold.zero));
-            stats.parallel_cold_skips_zero = 1;
-        }
+                if (need && !sched->callback_eval(t, false, sched->callback_eval_user_data)) {
+                    break;
+                }
 
-        enum ggml_status ec_hot = GGML_STATUS_SUCCESS;
-        enum ggml_status ec_cold = GGML_STATUS_SUCCESS;
-
-        int64_t hot_start_us = 0;
-        int64_t hot_end_us = 0;
-        int64_t cold_start_us = 0;
-        int64_t cold_end_us = 0;
-
-        const int64_t region_wall_start_us = ggml_time_us();
-
-        if (launch_hot) {
-            stats.parallel_hot_launches = 1;
-            hot_start_us = ggml_time_us();
-            ec_hot = ggml_backend_sched_compute_split_range(sched, region.hot.split_start, region.hot.split_end, false);
-            if (ec_hot != GGML_STATUS_SUCCESS) {
-                return ec_hot;
+                j0 = j1;
             }
         }
 
-        std::thread cold_thread;
-        if (launch_cold) {
-            stats.parallel_cold_launches = 1;
-            cold_thread = std::thread([&]() {
-                cold_start_us = ggml_time_us();
-                ec_cold = ggml_backend_sched_compute_split_range(sched, region.cold.split_start, region.cold.split_end, false);
-                cold_end_us = ggml_time_us();
-            });
+        // record the event of this copy
+        if (split->n_inputs > 0) {
+            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
+            }
         }
-
-        const int64_t join_start_us = ggml_time_us();
-        if (cold_thread.joinable()) {
-            cold_thread.join();
-        }
-        if (ec_cold != GGML_STATUS_SUCCESS) {
-            return ec_cold;
-        }
-        if (launch_hot) {
-            ggml_backend_synchronize(sched->backends[region.hot.backend_id]);
-            hot_end_us = ggml_time_us();
-        }
-        const int64_t join_end_us = ggml_time_us();
-
-        if (launch_hot) {
-            stats.parallel_hot_lane_wall_time_us = hot_end_us > hot_start_us ? (uint64_t) (hot_end_us - hot_start_us) : 0;
-        }
-        if (launch_cold) {
-            stats.parallel_cold_lane_wall_time_us = cold_end_us > cold_start_us ? (uint64_t) (cold_end_us - cold_start_us) : 0;
-        }
-
-        stats.parallel_join_wait_time_us = join_end_us > join_start_us ? (uint64_t) (join_end_us - join_start_us) : 0;
-
-        const int64_t region_wall_end_us = std::max({ join_end_us, hot_end_us, cold_end_us });
-        stats.parallel_region_wall_time_us =
-            region_wall_end_us > region_wall_start_us ? (uint64_t) (region_wall_end_us - region_wall_start_us) : 0;
-
-        const uint64_t lane_sum_us = stats.parallel_hot_lane_wall_time_us + stats.parallel_cold_lane_wall_time_us;
-        if (lane_sum_us > stats.parallel_region_wall_time_us) {
-            stats.parallel_overlap_estimate_us = lane_sum_us - stats.parallel_region_wall_time_us;
-        }
-
-        t_phase_start = ggml_time_us();
-        ec = ggml_backend_sched_compute_split_range(sched, region.merge_split_start, region.merge_split_end, false);
-        if (ec != GGML_STATUS_SUCCESS) {
-            return ec;
-        }
-        ggml_backend_sched_synchronize(sched);
-        stats.merge_time_us = ggml_time_us() - t_phase_start;
-
-        split_cursor = region.merge_split_end + 1;
-    }
-
-    if (split_cursor < sched->n_splits) {
-        return ggml_backend_sched_compute_split_range(sched, split_cursor, sched->n_splits - 1, false);
     }
 
     return GGML_STATUS_SUCCESS;
@@ -2204,7 +1753,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
     GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
 
-    struct ggml_backend_sched * sched = new ggml_backend_sched();
+    struct ggml_backend_sched * sched = (ggml_backend_sched *) calloc(1, sizeof(struct ggml_backend_sched));
 
     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
@@ -2284,7 +1833,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->context_buffer);
     free(sched->graph.nodes);
     free(sched->graph.leafs);
-    delete sched;
+    free(sched);
 }
 
 void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
@@ -2442,48 +1991,6 @@ ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched,
         return NULL;
     }
     return sched->backends[backend_index];
-}
-
-void ggml_backend_sched_set_parallel_mode(ggml_backend_sched_t sched, enum ggml_backend_sched_parallel_mode mode) {
-    GGML_ASSERT(sched);
-    sched->parallel_mode = mode;
-}
-
-void ggml_backend_sched_set_parallel_regions(
-        ggml_backend_sched_t sched,
-        struct ggml_cgraph * graph,
-        const struct ggml_backend_sched_parallel_region * regions,
-        int n_regions) {
-    GGML_ASSERT(sched);
-
-    sched->parallel_graph = graph;
-    sched->parallel_regions.clear();
-    sched->parallel_regions_resolved.clear();
-    sched->parallel_region_stats_last.clear();
-    sched->parallel_regions_active = false;
-
-    if (graph == nullptr || regions == nullptr || n_regions <= 0) {
-        return;
-    }
-
-    sched->parallel_regions.insert(sched->parallel_regions.end(), regions, regions + n_regions);
-}
-
-bool ggml_backend_sched_has_parallel_regions(ggml_backend_sched_t sched) {
-    GGML_ASSERT(sched);
-    return sched->parallel_regions_active;
-}
-
-int ggml_backend_sched_get_parallel_region_stats(
-        ggml_backend_sched_t sched,
-        const struct ggml_backend_sched_parallel_region_stats ** stats) {
-    GGML_ASSERT(sched);
-
-    if (stats) {
-        *stats = sched->parallel_region_stats_last.empty() ? nullptr : sched->parallel_region_stats_last.data();
-    }
-
-    return (int) sched->parallel_region_stats_last.size();
 }
 
 // utils

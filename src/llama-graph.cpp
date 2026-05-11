@@ -815,7 +815,6 @@ void llm_graph_result::reset() {
     t_sampled_probs.clear();
     t_sampled_logits.clear();
     t_candidates.clear();
-    parallel_regions.clear();
 
     params = {};
 
@@ -874,10 +873,6 @@ void llm_graph_result::set_outputs() {
             ggml_set_output(t);
         }
     }
-}
-
-void llm_graph_result::add_parallel_region(const ggml_backend_sched_parallel_region & region) {
-    parallel_regions.push_back(region);
 }
 
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
