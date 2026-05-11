@@ -43,12 +43,26 @@ struct llama_moe_hot_cache_layer {
     ggml_tensor * hot_mask   = nullptr;
     ggml_tensor * cold_mask  = nullptr;
 
+    std::vector<int32_t> hot_id_map_host;
+
     uint32_t n_hot = 0;
     uint32_t n_expert = 0;
 
     bool active() const {
         return n_hot > 0 && hot_id_map != nullptr && hot_mask != nullptr && cold_mask != nullptr;
     }
+};
+
+enum llama_moe_hot_cache_worklist_field : int32_t {
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID = 0,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT,
 };
 
 struct llama_moe_hot_cache {
@@ -74,3 +88,11 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
         size_t budget_bytes);
 
 void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params);
+
+void llama_moe_hot_cache_build_worklist(
+        ggml_tensor * dst,
+        const ggml_tensor * selected_experts,
+        const ggml_tensor * weights,
+        const llama_moe_hot_cache_layer & layer,
+        int ith,
+        int nth);

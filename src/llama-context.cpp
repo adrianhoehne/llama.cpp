@@ -2435,10 +2435,9 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
         uint32_t res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
         // Qwen35Moe hot path (MoE expert cache) adds extra graph nodes per layer
-        // for softmax, argsort, get_rows, reshape, clamp, div, mul operations.
+        // for worklist construction plus gather/scatter around the compact hot/cold branches.
         if (model.arch == LLM_ARCH_QWEN35MOE) {
-            // ~25 extra nodes per layer for the hot path
-            res += 25u * model.hparams.n_layer;
+            res += 40u * model.hparams.n_layer;
         }
         return res;
     }

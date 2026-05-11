@@ -354,6 +354,7 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
         std::vector<int32_t> hot_id_map(n_expert, int32_t(dummy_id));
         std::vector<float> hot_mask(n_expert, 0.0f);
         std::vector<float> cold_mask(n_expert, 1.0f);
+        dst.hot_id_map_host.assign(n_expert, -1);
 
         for (uint32_t cache_id = 0; cache_id < experts.size(); ++cache_id) {
             const uint32_t expert = experts[cache_id];
@@ -364,6 +365,7 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
             hot_id_map[expert] = int32_t(cache_id);
             hot_mask[expert] = 1.0f;
             cold_mask[expert] = 0.0f;
+            dst.hot_id_map_host[expert] = int32_t(cache_id);
 
             copy_expert_slice(src.ffn_gate_up_exps, dst.ffn_gate_up_exps, expert, cache_id);
             copy_expert_slice(src.ffn_gate_exps,    dst.ffn_gate_exps,    expert, cache_id);
@@ -385,4 +387,86 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
     cache->bufs.emplace_back(std::move(buf));
     cache->ctxs.emplace_back(std::move(ctx));
     model.moe_hot_cache = std::move(cache);
+}
+
+void llama_moe_hot_cache_build_worklist(
+        ggml_tensor * dst,
+        const ggml_tensor * selected_experts,
+        const ggml_tensor * weights,
+        const llama_moe_hot_cache_layer & layer,
+        int ith,
+        int nth) {
+    GGML_UNUSED(nth);
+
+    if (ith != 0) {
+        return;
+    }
+
+    GGML_ASSERT(dst != nullptr);
+    GGML_ASSERT(selected_experts != nullptr);
+    GGML_ASSERT(weights != nullptr);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(selected_experts->type == GGML_TYPE_I32);
+    GGML_ASSERT(weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->ne[1] == LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+    GGML_ASSERT(weights->ne[0] == 1);
+    GGML_ASSERT(selected_experts->ne[0] == weights->ne[1]);
+    GGML_ASSERT(selected_experts->ne[1] == weights->ne[2]);
+    GGML_ASSERT(int64_t(layer.hot_id_map_host.size()) == layer.n_expert);
+
+    const int32_t capacity = dst->ne[0];
+    const int32_t n_expert_used = selected_experts->ne[0];
+    const int32_t n_tokens = selected_experts->ne[1];
+    const int32_t total_slots = n_expert_used * n_tokens;
+    const int32_t dummy_src_slot = total_slots;
+
+    GGML_ASSERT(capacity == total_slots);
+
+    auto set_field = [&](int32_t field, int32_t slot, float value) {
+        char * row = (char *) dst->data + field*dst->nb[1];
+        *(float *)(row + slot*dst->nb[0]) = value;
+    };
+
+    for (int32_t slot = 0; slot < capacity; ++slot) {
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID,        slot, -1.0f);
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT,  slot, float(dummy_src_slot));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID,  slot, 0.0f);
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT,    slot, 0.0f);
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,       slot, -1.0f);
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, slot, float(dummy_src_slot));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, slot, 0.0f);
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   slot, 0.0f);
+    }
+
+    int32_t hot_slot = 0;
+    int32_t cold_slot = 0;
+
+    for (int32_t token = 0; token < n_tokens; ++token) {
+        for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+            const int32_t expert = *(const int32_t *) ((const char *) selected_experts->data + iex*selected_experts->nb[0] + token*selected_experts->nb[1]);
+            GGML_ASSERT(expert >= 0);
+            GGML_ASSERT(expert < int32_t(layer.hot_id_map_host.size()));
+
+            const float weight = *(const float *) ((const char *) weights->data + iex*weights->nb[1] + token*weights->nb[2]);
+            const int32_t src_slot = token*n_expert_used + iex;
+            const int32_t hot_id = layer.hot_id_map_host[expert];
+
+            if (hot_id >= 0) {
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID,        hot_slot, float(hot_id));
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT,  hot_slot, float(src_slot));
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID,  hot_slot, float(token));
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT,    hot_slot, weight);
+                ++hot_slot;
+            } else {
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,       cold_slot, float(expert));
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, cold_slot, float(src_slot));
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, cold_slot, float(token));
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   cold_slot, weight);
+                ++cold_slot;
+            }
+        }
+    }
+
+    GGML_ASSERT(hot_slot  <= capacity);
+    GGML_ASSERT(cold_slot <= capacity);
 }

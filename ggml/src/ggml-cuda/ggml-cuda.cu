@@ -2633,7 +2633,10 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int64_t n_expert_used = ids->ne[0];
 
-    const bool allow_duplicate_ids = dst->op_params[0] != 0;
+    int32_t flags = 0;
+    memcpy(&flags, dst->op_params, sizeof(flags));
+    const bool allow_duplicate_ids = (flags & (1 << 0)) != 0;
+    const bool allow_negative_ids  = (flags & (1 << 1)) != 0;
     cudaStream_t stream = ctx.stream();
     std::vector<char> ids_host;
 
@@ -2671,7 +2674,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     };
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
-    if (!has_duplicate_ids() && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (!allow_negative_ids && !has_duplicate_ids() && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
             if (ggml_is_quantized(src0->type)) {
@@ -2713,15 +2716,9 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int64_t ne_get_rows = ne12 * n_expert_used;
 
     std::vector<int32_t> ids_to_sorted_host;
-    ids_to_sorted_host.reserve(2*ne_get_rows);
     std::vector<int32_t> ids_from_sorted_host(ne_get_rows);
 
-    ggml_cuda_pool_alloc<int32_t> ids_buf_dev(ctx.pool(), 2*ne_get_rows);
-
     std::vector<int32_t> tokens_per_expert(ne02);
-
-    ggml_cuda_pool_alloc<char> src1_sorted(ctx.pool(), ne12*n_expert_used*ne10*ts_src1_sorted);
-    ggml_cuda_pool_alloc<char>  dst_sorted(ctx.pool(), ne2 *n_expert_used* ne0*ts_dst_sorted);
 
     const auto & ids_host_ref = ensure_ids_host();
 
@@ -2729,6 +2726,10 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         for (int64_t i12 = 0; i12 < ne12; ++i12) { // tokens
             for (int64_t iex = 0; iex < n_expert_used; ++iex) {
                 const int32_t expert_to_use = *(const int32_t *)(ids_host_ref.data() + i12*ids->nb[1] + iex*ids->nb[0]);
+                if (allow_negative_ids && expert_to_use < 0) {
+                    ids_from_sorted_host[i12*n_expert_used + iex] = -1;
+                    continue;
+                }
                 assert(expert_to_use >= 0 && expert_to_use < ne02);
                 if (expert_to_use == i02) {
                     ids_from_sorted_host[i12*n_expert_used + iex] = ids_to_sorted_host.size();
@@ -2738,21 +2739,45 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             }
         }
     }
-    GGML_ASSERT(ids_to_sorted_host.size() == size_t(ne_get_rows));
+
+    const int32_t dummy_row = ids_to_sorted_host.size();
+    if (allow_negative_ids) {
+        for (int32_t & row : ids_from_sorted_host) {
+            if (row < 0) {
+                row = dummy_row;
+            }
+        }
+    }
+
+    GGML_ASSERT(allow_negative_ids || ids_to_sorted_host.size() == size_t(ne_get_rows));
+
+    const int64_t n_valid_rows = ids_to_sorted_host.size();
+    const int64_t n_rows_sorted = std::max<int64_t>(1, n_valid_rows + (allow_negative_ids ? 1 : 0));
+    const int64_t ids_from_sorted_offset = n_valid_rows;
 
     ids_to_sorted_host.insert(ids_to_sorted_host.end(), ids_from_sorted_host.begin(), ids_from_sorted_host.end());
 
-    CUDA_CHECK(cudaMemcpyAsync(ids_buf_dev.ptr, ids_to_sorted_host.data(), 2*ne_get_rows*sizeof(int32_t), cudaMemcpyHostToDevice, stream));
+    ggml_cuda_pool_alloc<int32_t> ids_buf_dev(ctx.pool(), ids_to_sorted_host.size());
+    ggml_cuda_pool_alloc<char> src1_sorted(ctx.pool(), n_rows_sorted*ne10*ts_src1_sorted);
+    ggml_cuda_pool_alloc<char>  dst_sorted(ctx.pool(), n_rows_sorted*ne0*ts_dst_sorted);
+
+    CUDA_CHECK(cudaMemcpyAsync(ids_buf_dev.ptr, ids_to_sorted_host.data(), ids_to_sorted_host.size()*sizeof(int32_t), cudaMemcpyHostToDevice, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    const int32_t * ids_to_sorted   = ids_buf_dev.ptr + 0*ne_get_rows;
-    const int32_t * ids_from_sorted = ids_buf_dev.ptr + 1*ne_get_rows;
+    const int32_t * ids_to_sorted   = ids_buf_dev.ptr;
+    const int32_t * ids_from_sorted = ids_buf_dev.ptr + ids_from_sorted_offset;
 
-    get_rows_cuda(src1->data, src1->type, ids_to_sorted, src1_sorted.ptr, type_src1_sorted,
-        ne10, nb11, nb12, nb13,
-        ne_get_rows, 1, 1, sizeof(int32_t), ne_get_rows*sizeof(int32_t), ne_get_rows*sizeof(int32_t),
-        ne10*ts_src1_sorted, ne_get_rows*ne10*ts_src1_sorted, ne_get_rows*ne10*ts_src1_sorted, stream);
-    CUDA_CHECK(cudaGetLastError());
+    if (allow_negative_ids) {
+        CUDA_CHECK(cudaMemsetAsync(dst_sorted.ptr, 0, n_rows_sorted*ne0*ts_dst_sorted, stream));
+    }
+
+    if (n_valid_rows > 0) {
+        get_rows_cuda(src1->data, src1->type, ids_to_sorted, src1_sorted.ptr, type_src1_sorted,
+            ne10, nb11, nb12, nb13,
+            n_valid_rows, 1, 1, sizeof(int32_t), n_valid_rows*sizeof(int32_t), n_valid_rows*sizeof(int32_t),
+            ne10*ts_src1_sorted, n_valid_rows*ne10*ts_src1_sorted, n_valid_rows*ne10*ts_src1_sorted, stream);
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     char * src1_data_cur = (char *) src1_sorted.ptr;
     char *  dst_data_cur = (char *)  dst_sorted.ptr;
@@ -2804,7 +2829,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     }
 
     get_rows_cuda(dst_sorted.ptr, type_dst_sorted, ids_from_sorted, dst->data, dst->type,
-        ne0, ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted,
+        ne0, ne0*ts_dst_sorted, n_rows_sorted*ne0*ts_dst_sorted, n_rows_sorted*ne0*ts_dst_sorted,
         ne_get_rows, 1, 1, sizeof(int32_t), ne_get_rows*sizeof(int32_t), ne_get_rows*sizeof(int32_t),
         nb1, nb2, nb3, stream);
 }

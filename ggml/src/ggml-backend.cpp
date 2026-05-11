@@ -1584,6 +1584,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                     const int64_t n_expert   = node->op == GGML_OP_MUL_MAT_ID ? input->ne[2] : input->ne[1];
                     const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
+                    int32_t flags = 0;
+                    memcpy(&flags, node->op_params, sizeof(flags));
+                    const bool allow_negative_ids = (flags & (1 << 1)) != 0;
 
                     ggml_backend_synchronize(input_backend);
 
@@ -1612,12 +1615,27 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
                             for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
                                 int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
+                                if (allow_negative_ids && id < 0) {
+                                    continue;
+                                }
                                 GGML_ASSERT(id >= 0 && id < n_expert);
                                 ggml_bitset_set(used_ids.data(), id);
                             }
                         }
 
                         prev_ids_tensor = ids_tensor;
+                    }
+
+                    bool have_used_expert = false;
+                    for (int32_t id = 0; id < n_expert; ++id) {
+                        if (ggml_bitset_get(used_ids.data(), id)) {
+                            have_used_expert = true;
+                            break;
+                        }
+                    }
+
+                    if (!have_used_expert) {
+                        continue;
                     }
 
                     // group consecutive experts and copy them together

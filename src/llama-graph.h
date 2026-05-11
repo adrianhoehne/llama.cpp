@@ -56,6 +56,12 @@ enum llm_norm_type {
     LLM_NORM_GROUP,
 };
 
+enum llm_mul_mat_id_flags : uint32_t {
+    LLM_MUL_MAT_ID_FLAG_NONE                = 0,
+    LLM_MUL_MAT_ID_FLAG_ALLOW_DUPLICATE_IDS = 1u << 0,
+    LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS  = 1u << 1,
+};
+
 // TODO: tmp - need something better to pass the data from the encoder to the decoder
 struct llama_cross {
     // the output embeddings from the encoder as a ggml tensor
@@ -792,7 +798,7 @@ struct llm_graph_context {
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
-                     bool   allow_duplicate_ids = false) const;
+                 uint32_t   flags = LLM_MUL_MAT_ID_FLAG_NONE) const;
 
     ggml_tensor * build_norm(
              ggml_tensor * cur,
@@ -889,7 +895,7 @@ struct llm_graph_context {
              ggml_tensor * up_exps_s = nullptr,
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr,
-                    bool   allow_duplicate_ids = false) const;
+                uint32_t   flags = LLM_MUL_MAT_ID_FLAG_NONE) const;
 
     //
     // inputs
