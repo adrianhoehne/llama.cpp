@@ -791,7 +791,8 @@ struct llm_graph_context {
     ggml_tensor * build_lora_mm_id(
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
-              ggml_tensor * ids) const;
+              ggml_tensor * ids,
+                     bool   allow_duplicate_ids = false) const;
 
     ggml_tensor * build_norm(
              ggml_tensor * cur,
@@ -872,6 +873,23 @@ struct llm_graph_context {
              ggml_tensor * up_exps_s = nullptr,
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr) const;
+
+    ggml_tensor * build_moe_ffn_with_ids(
+             ggml_tensor * cur,
+             ggml_tensor * selected_experts,
+             ggml_tensor * weights,
+             ggml_tensor * up_exps,
+             ggml_tensor * gate_exps,
+             ggml_tensor * down_exps,
+                 int64_t   n_expert,
+                 int64_t   n_expert_used,
+         llm_ffn_op_type   type_op,
+                     int   il,
+             ggml_tensor * gate_up_exps = nullptr,
+             ggml_tensor * up_exps_s = nullptr,
+             ggml_tensor * gate_exps_s = nullptr,
+             ggml_tensor * down_exps_s = nullptr,
+                    bool   allow_duplicate_ids = false) const;
 
     //
     // inputs

@@ -819,7 +819,11 @@ void llm_graph_result::reset() {
 
     inputs.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    // Add safety margin for internal ggml bookkeeping beyond ggml_tensor_overhead()
+    // (hash map entries, linked-list pointers, tensor metadata padding, etc.)
+    static constexpr size_t EXTRA_OVERHEAD_PER_NODE = 128;
+    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + EXTRA_OVERHEAD_PER_NODE*max_nodes
+                          + ggml_graph_overhead_custom(max_nodes, false));
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
@@ -1005,8 +1009,14 @@ ggml_tensor * llm_graph_context::build_lora_mm(
 ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
-          ggml_tensor * ids) const {
+          ggml_tensor * ids,
+                 bool   allow_duplicate_ids) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
+    if (allow_duplicate_ids) {
+        // GGML_OP_MUL_MAT_ID does not currently use op_params, so reserve slot 0 as an
+        // internal hint for backends that need to avoid duplicate-ID fast paths.
+        res->op_params[0] = 1;
+    }
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
         if (lw == nullptr) {
@@ -1022,6 +1032,10 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
                 ggml_mul_mat_id(ctx0, lw->a, cur, ids),
                 ids
                 );
+        if (allow_duplicate_ids) {
+            ab_cur->src[1]->op_params[0] = 1;
+            ab_cur->op_params[0] = 1;
+        }
 
         ab_cur = ggml_scale(ctx0, ab_cur, scale);
         res = ggml_add(ctx0, res, ab_cur);
@@ -1702,6 +1716,161 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     cb(moe_out, "ffn_moe_out", il);
 
+    return moe_out;
+}
+
+ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
+         ggml_tensor * cur,
+         ggml_tensor * selected_experts,
+         ggml_tensor * weights,
+         ggml_tensor * up_exps,
+         ggml_tensor * gate_exps,
+         ggml_tensor * down_exps,
+             int64_t   n_expert,
+             int64_t   n_expert_used,
+     llm_ffn_op_type   type_op,
+                 int   il,
+         ggml_tensor * gate_up_exps,
+         ggml_tensor * up_exps_s,
+         ggml_tensor * gate_exps_s,
+         ggml_tensor * down_exps_s,
+                bool   allow_duplicate_ids) const {
+    const int64_t n_embd   = cur->ne[0];
+    const int64_t n_tokens = cur->ne[1];
+    const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4;
+
+    ggml_build_forward_expand(gf, weights);
+
+    cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
+
+    if (weight_before_ffn) {
+        ggml_tensor * repeated = ggml_repeat_4d(ctx0, cur, n_embd, n_expert_used, n_tokens, 1);
+        cur = ggml_mul(ctx0, repeated, weights);
+        cb(cur, "ffn_moe_weighted", il);
+    }
+
+    ggml_tensor * up = nullptr;
+    ggml_tensor * experts = nullptr;
+
+    if (gate_up_exps) {
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, allow_duplicate_ids);
+        cb(gate_up, "ffn_moe_gate_up", il);
+
+        if (up_exps_s) {
+            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
+            s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+            s = ggml_get_rows(ctx0, s, selected_experts);
+            gate_up = ggml_mul(ctx0, gate_up, s);
+            cb(gate_up, "ffn_moe_gate_up_scaled", il);
+        }
+
+        const int64_t n_ff = gate_up->ne[0] / 2;
+        cur = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
+        cb(cur, "ffn_moe_gate", il);
+        up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
+        cb(up, "ffn_moe_up", il);
+    } else {
+        up = build_lora_mm_id(up_exps, cur, selected_experts, allow_duplicate_ids);
+        cb(up, "ffn_moe_up", il);
+
+        if (up_exps_s) {
+            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
+            s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+            s = ggml_get_rows(ctx0, s, selected_experts);
+            up = ggml_mul(ctx0, up, s);
+            cb(up, "ffn_moe_up_scaled", il);
+        }
+
+        if (gate_exps) {
+            cur = build_lora_mm_id(gate_exps, cur, selected_experts, allow_duplicate_ids);
+            cb(cur, "ffn_moe_gate", il);
+        } else {
+            cur = up;
+        }
+
+        if (gate_exps_s) {
+            ggml_tensor * s = ggml_reshape_3d(ctx0, gate_exps_s, 1, n_expert, 1);
+            s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+            s = ggml_get_rows(ctx0, s, selected_experts);
+            cur = ggml_mul(ctx0, cur, s);
+            cb(cur, "ffn_moe_gate_scaled", il);
+        }
+    }
+
+    const bool has_gate = gate_exps || gate_up_exps;
+
+    switch (type_op) {
+        case LLM_FFN_SILU:
+            if (has_gate) {
+                cur = ggml_swiglu_split(ctx0, cur, up);
+                cb(cur, "ffn_moe_swiglu", il);
+            } else {
+                cur = ggml_silu(ctx0, cur);
+                cb(cur, "ffn_moe_silu", il);
+            } break;
+        case LLM_FFN_GELU:
+            if (has_gate) {
+                cur = ggml_geglu_split(ctx0, cur, up);
+                cb(cur, "ffn_moe_geglu", il);
+            } else {
+                cur = ggml_gelu(ctx0, cur);
+                cb(cur, "ffn_moe_gelu", il);
+            } break;
+        case LLM_FFN_RELU:
+            if (has_gate) {
+                cur = ggml_reglu_split(ctx0, cur, up);
+                cb(cur, "ffn_moe_reglu", il);
+            } else {
+                cur = ggml_relu(ctx0, cur);
+                cb(cur, "ffn_moe_relu", il);
+            } break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+
+    experts = build_lora_mm_id(down_exps, cur, selected_experts, allow_duplicate_ids);
+    cb(experts, "ffn_moe_down", il);
+
+    if (down_exps_s) {
+        ggml_tensor * s = ggml_reshape_3d(ctx0, down_exps_s, 1, n_expert, 1);
+        s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+        s = ggml_get_rows(ctx0, s, selected_experts);
+        experts = ggml_mul(ctx0, experts, s);
+        cb(experts, "ffn_moe_down_scaled", il);
+    }
+
+    if (!weight_before_ffn) {
+        experts = ggml_mul(ctx0, experts, weights);
+        cb(experts, "ffn_moe_weighted", il);
+    }
+
+    ggml_build_forward_expand(gf, experts);
+
+    ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
+    assert(n_expert_used > 0);
+
+    const uint32_t n_expert_used_graph = cparams.warmup ? hparams.n_expert_used : uint32_t(n_expert_used);
+    GGML_ASSERT(n_expert_used_graph > 0);
+    GGML_ASSERT(n_expert_used_graph <= uint32_t(n_expert_used));
+
+    // Warmup may materialize all experts to touch every expert tensor once,
+    // but the graph topology should still stay bounded by the normal top-k path.
+    for (uint32_t i = 0; i < n_expert_used_graph; ++i) {
+        cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
+        ggml_build_forward_expand(gf, cur_experts[i]);
+    }
+
+    ggml_tensor * moe_out = cur_experts[0];
+    for (uint32_t i = 1; i < n_expert_used_graph; ++i) {
+        moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
+        ggml_build_forward_expand(gf, moe_out);
+    }
+
+    if (n_expert_used_graph == 1) {
+        moe_out = ggml_cont(ctx0, moe_out);
+    }
+
+    cb(moe_out, "ffn_moe_out", il);
     return moe_out;
 }
 

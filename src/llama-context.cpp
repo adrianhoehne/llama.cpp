@@ -2433,7 +2433,14 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
-        return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        uint32_t res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        // Qwen35Moe hot path (MoE expert cache) adds extra graph nodes per layer
+        // for softmax, argsort, get_rows, reshape, clamp, div, mul operations.
+        if (model.arch == LLM_ARCH_QWEN35MOE) {
+            // ~25 extra nodes per layer for the hot path
+            res += 25u * model.hparams.n_layer;
+        }
+        return res;
     }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     for (const auto & lora : model.loras) {

@@ -1,5 +1,6 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
+#include "llama-moe-hot-cache.h"
 
 void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
@@ -474,21 +475,26 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
     // Check if this is an MoE layer
     GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
 
-    ggml_tensor * moe_out =
-        build_moe_ffn(cur,
-            model.layers[il].ffn_gate_inp,
-            model.layers[il].ffn_up_exps,
-            model.layers[il].ffn_gate_exps,
-            model.layers[il].ffn_down_exps,
-            nullptr,
-            n_expert, n_expert_used,
-            LLM_FFN_SILU, true,
-            hparams.expert_weights_scale,
-            LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
-            nullptr, model.layers[il].ffn_gate_up_exps,
-            model.layers[il].ffn_up_exps_s,
-            model.layers[il].ffn_gate_exps_s,
-            model.layers[il].ffn_down_exps_s);
+    ggml_tensor * moe_out = nullptr;
+    if (model.moe_hot_cache && il < int(model.moe_hot_cache->layers.size()) && model.moe_hot_cache->layers[il].active()) {
+        moe_out = build_layer_ffn_hot(cur, il);
+    } else {
+        moe_out =
+            build_moe_ffn(cur,
+                model.layers[il].ffn_gate_inp,
+                model.layers[il].ffn_up_exps,
+                model.layers[il].ffn_gate_exps,
+                model.layers[il].ffn_down_exps,
+                nullptr,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, true,
+                hparams.expert_weights_scale,
+                LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
+                nullptr, model.layers[il].ffn_gate_up_exps,
+                model.layers[il].ffn_up_exps_s,
+                model.layers[il].ffn_gate_exps_s,
+                model.layers[il].ffn_down_exps_s);
+    }
     cb(moe_out, "ffn_moe_out", il);
 
     // Add shared experts if present - following Qwen3Next reference implementation
@@ -524,4 +530,104 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
     }
 
     return cur;
+}
+
+ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cur, const int il) {
+    const int64_t n_tokens = cur->ne[1];
+    const auto & layer = model.layers[il];
+    const auto & cache = model.moe_hot_cache->layers[il];
+
+    ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
+    cb(logits, "ffn_moe_logits", il);
+
+    ggml_tensor * probs = ggml_soft_max(ctx0, logits);
+    cb(probs, "ffn_moe_probs", il);
+
+    ggml_tensor * selected_experts = ggml_argsort_top_k(ctx0, probs, n_expert_used);
+    cb(selected_experts->src[0], "ffn_moe_argsort", il);
+    cb(selected_experts, "ffn_moe_topk", il);
+
+    ggml_tensor * probs_rows = ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens);
+    ggml_tensor * weights = ggml_get_rows(ctx0, probs_rows, selected_experts);
+    cb(weights, "ffn_moe_weights", il);
+
+    weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
+
+    ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights);
+    cb(weights_sum, "ffn_moe_weights_sum", il);
+
+    weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
+    cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
+
+    weights = ggml_div(ctx0, weights, weights_sum);
+    cb(weights, "ffn_moe_weights_norm", il);
+
+    weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
+
+    if (hparams.expert_weights_scale != 0.0f && hparams.expert_weights_scale != 1.0f) {
+        weights = ggml_scale(ctx0, weights, hparams.expert_weights_scale);
+        cb(weights, "ffn_moe_weights_scaled", il);
+    }
+
+    ggml_tensor * selected_flat = ggml_reshape_1d(ctx0, ggml_cont(ctx0, selected_experts), n_expert_used*n_tokens);
+
+    ggml_tensor * hot_selected = ggml_get_rows(ctx0, cache.hot_id_map, selected_flat);
+    hot_selected = ggml_reshape_2d(ctx0, hot_selected, n_expert_used, n_tokens);
+    cb(hot_selected, "ffn_moe_hot_topk", il);
+
+    ggml_tensor * hot_mask = ggml_get_rows(ctx0, cache.hot_mask, selected_flat);
+    hot_mask = ggml_reshape_3d(ctx0, hot_mask, 1, n_expert_used, n_tokens);
+    cb(hot_mask, "ffn_moe_hot_mask", il);
+
+    ggml_tensor * cold_mask = ggml_get_rows(ctx0, cache.cold_mask, selected_flat);
+    cold_mask = ggml_reshape_3d(ctx0, cold_mask, 1, n_expert_used, n_tokens);
+    cb(cold_mask, "ffn_moe_cold_mask", il);
+
+    ggml_tensor * hot_weights = ggml_mul(ctx0, weights, hot_mask);
+    cb(hot_weights, "ffn_moe_hot_weights", il);
+
+    ggml_tensor * cold_weights = ggml_mul(ctx0, weights, cold_mask);
+    cb(cold_weights, "ffn_moe_cold_weights", il);
+
+    ggml_tensor * hot_out = build_moe_ffn_with_ids(cur,
+            hot_selected,
+            hot_weights,
+            cache.ffn_up_exps,
+            cache.ffn_gate_exps,
+            cache.ffn_down_exps,
+            cache.n_hot + 1,
+            n_expert_used,
+            LLM_FFN_SILU,
+            il,
+            cache.ffn_gate_up_exps,
+            cache.ffn_up_exps_s,
+            cache.ffn_gate_exps_s,
+            cache.ffn_down_exps_s,
+            true);
+    cb(hot_out, "ffn_moe_hot_out", il);
+
+    if (cache.n_hot == cache.n_expert) {
+        return hot_out;
+    }
+
+    ggml_tensor * cold_out = build_moe_ffn_with_ids(cur,
+            selected_experts,
+            cold_weights,
+            layer.ffn_up_exps,
+            layer.ffn_gate_exps,
+            layer.ffn_down_exps,
+            n_expert,
+            n_expert_used,
+            LLM_FFN_SILU,
+            il,
+            layer.ffn_gate_up_exps,
+            layer.ffn_up_exps_s,
+            layer.ffn_gate_exps_s,
+            layer.ffn_down_exps_s,
+            false);
+    cb(cold_out, "ffn_moe_cold_out", il);
+
+    ggml_tensor * out = ggml_add(ctx0, hot_out, cold_out);
+    cb(out, "ffn_moe_hot_cold_out", il);
+    return out;
 }
