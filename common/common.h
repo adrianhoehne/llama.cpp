@@ -545,6 +545,9 @@ struct common_params {
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
 
+    uint64_t moe_hot_cache_max_mib = 0;  // max MiB for experimental MoE hot expert cache, 0 = disabled
+    std::string moe_hot_cache;           // path to /moe-layer-perf JSON
+
     bool single_turn       = false; // single turn chat conversation
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
