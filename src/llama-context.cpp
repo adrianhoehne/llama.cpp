@@ -28,9 +28,24 @@
 struct llama_moe_layer_perf_layer {
     uint64_t calls = 0;
     uint64_t expert_hits_total = 0;
+    uint64_t hot_slots_total = 0;
+    uint64_t cold_slots_total = 0;
+    uint64_t hot_worklist_calls = 0;
+    uint64_t cold_worklist_calls = 0;
+    uint64_t hot_zero_calls = 0;
+    uint64_t cold_zero_calls = 0;
 
     uint64_t total_moe_time_us = 0;
     uint64_t expert_matmul_time_us = 0;
+    uint64_t hot_branch_time_us = 0;
+    uint64_t cold_branch_time_us = 0;
+    uint64_t hot_expert_matmul_time_us = 0;
+    uint64_t cold_expert_matmul_time_us = 0;
+    uint64_t worklist_time_us = 0;
+    uint64_t routing_time_us = 0;
+    uint64_t merge_time_us = 0;
+    uint64_t hot_gather_scatter_time_us = 0;
+    uint64_t cold_gather_scatter_time_us = 0;
 
     uint64_t gate_time_us = 0;
     uint64_t up_time_us = 0;
@@ -72,8 +87,23 @@ struct llama_moe_layer_perf_local {
         for (auto & layer : layers) {
             layer.calls = 0;
             layer.expert_hits_total = 0;
+            layer.hot_slots_total = 0;
+            layer.cold_slots_total = 0;
+            layer.hot_worklist_calls = 0;
+            layer.cold_worklist_calls = 0;
+            layer.hot_zero_calls = 0;
+            layer.cold_zero_calls = 0;
             layer.total_moe_time_us = 0;
             layer.expert_matmul_time_us = 0;
+            layer.hot_branch_time_us = 0;
+            layer.cold_branch_time_us = 0;
+            layer.hot_expert_matmul_time_us = 0;
+            layer.cold_expert_matmul_time_us = 0;
+            layer.worklist_time_us = 0;
+            layer.routing_time_us = 0;
+            layer.merge_time_us = 0;
+            layer.hot_gather_scatter_time_us = 0;
+            layer.cold_gather_scatter_time_us = 0;
             layer.gate_time_us = 0;
             layer.up_time_us = 0;
             layer.down_time_us = 0;
@@ -150,16 +180,123 @@ static bool llama_moe_is_topk_node(const char * name) {
     return llama_moe_name_contains(name, "ffn_moe_topk-");
 }
 
+static bool llama_moe_is_hot_ids_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_ids_compact-");
+}
+
+static bool llama_moe_is_cold_ids_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_ids_compact-");
+}
+
 static bool llama_moe_is_gate_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_gate-");
+    return llama_moe_name_contains(name, "ffn_moe_gate-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_gate-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_gate-");
 }
 
 static bool llama_moe_is_up_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_up-");
+    return llama_moe_name_contains(name, "ffn_moe_up-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_up-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_up-");
 }
 
 static bool llama_moe_is_down_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_down-");
+    return llama_moe_name_contains(name, "ffn_moe_down-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_down-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_down-");
+}
+
+static bool llama_moe_is_hot_gate_up_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_gate_up-");
+}
+
+static bool llama_moe_is_cold_gate_up_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_gate_up-");
+}
+
+static bool llama_moe_is_hot_gate_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_gate-");
+}
+
+static bool llama_moe_is_cold_gate_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_gate-");
+}
+
+static bool llama_moe_is_hot_up_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_up-");
+}
+
+static bool llama_moe_is_cold_up_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_up-");
+}
+
+static bool llama_moe_is_hot_down_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_down-");
+}
+
+static bool llama_moe_is_cold_down_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_down-");
+}
+
+static bool llama_moe_is_hot_branch_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_");
+}
+
+static bool llama_moe_is_cold_branch_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_");
+}
+
+static bool llama_moe_is_worklist_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_worklist-");
+}
+
+static bool llama_moe_is_routing_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_logits-") ||
+           llama_moe_name_contains(name, "ffn_moe_probs-") ||
+           llama_moe_name_contains(name, "ffn_moe_argsort-") ||
+           llama_moe_name_contains(name, "ffn_moe_topk-") ||
+           llama_moe_name_contains(name, "ffn_moe_weights-") ||
+           llama_moe_name_contains(name, "ffn_moe_weights_sum-") ||
+           llama_moe_name_contains(name, "ffn_moe_weights_sum_clamped-") ||
+           llama_moe_name_contains(name, "ffn_moe_weights_norm-") ||
+           llama_moe_name_contains(name, "ffn_moe_weights_scaled-");
+}
+
+static bool llama_moe_is_merge_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_cold_slots-") ||
+           llama_moe_name_contains(name, "ffn_moe_out-");
+}
+
+static bool llama_moe_is_hot_gather_scatter_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_ids_compact-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_src_slots-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_token_ids-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_weights_compact-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_inputs-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_slots-");
+}
+
+static bool llama_moe_is_cold_gather_scatter_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_ids_compact-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_src_slots-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_token_ids-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_weights_compact-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_inputs-") ||
+           llama_moe_name_contains(name, "ffn_moe_cold_slots-");
+}
+
+static bool llama_moe_is_hot_expert_matmul_node(const char * name) {
+    return llama_moe_is_hot_gate_up_node(name) ||
+           llama_moe_is_hot_gate_node(name)    ||
+           llama_moe_is_hot_up_node(name)      ||
+           llama_moe_is_hot_down_node(name);
+}
+
+static bool llama_moe_is_cold_expert_matmul_node(const char * name) {
+    return llama_moe_is_cold_gate_up_node(name) ||
+           llama_moe_is_cold_gate_node(name)    ||
+           llama_moe_is_cold_up_node(name)      ||
+           llama_moe_is_cold_down_node(name);
 }
 
 static bool llama_moe_is_expert_matmul_node(const char * name) {
@@ -227,6 +364,46 @@ static void llama_moe_layer_perf_count_topk_locked(uint32_t layer, ggml_tensor *
     }
 }
 
+static void llama_moe_layer_perf_count_compact_ids_locked(uint32_t layer, ggml_tensor * t, bool hot) {
+    if (t == nullptr || layer >= g_llama_moe_layer_perf.layers.size()) {
+        return;
+    }
+
+    const int64_t n_ids = ggml_nelements(t);
+    if (n_ids <= 0) {
+        return;
+    }
+
+    std::vector<int32_t> ids(n_ids);
+    ggml_backend_tensor_get(
+        t,
+        ids.data(),
+        0,
+        ids.size() * sizeof(int32_t));
+
+    uint64_t valid = 0;
+    for (int32_t id : ids) {
+        if (id >= 0) {
+            valid++;
+        }
+    }
+
+    auto & dst = g_llama_moe_layer_perf.layers[layer];
+    if (hot) {
+        g_llama_moe_layer_perf.add_locked(dst.hot_worklist_calls, 1);
+        g_llama_moe_layer_perf.add_locked(dst.hot_slots_total, valid);
+        if (valid == 0) {
+            g_llama_moe_layer_perf.add_locked(dst.hot_zero_calls, 1);
+        }
+    } else {
+        g_llama_moe_layer_perf.add_locked(dst.cold_worklist_calls, 1);
+        g_llama_moe_layer_perf.add_locked(dst.cold_slots_total, valid);
+        if (valid == 0) {
+            g_llama_moe_layer_perf.add_locked(dst.cold_zero_calls, 1);
+        }
+    }
+}
+
 static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
@@ -282,6 +459,32 @@ static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_
             g_llama_moe_layer_perf.add_locked(dst.expert_matmul_time_us, elapsed_us);
         }
 
+        if (llama_moe_is_hot_branch_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.hot_branch_time_us, elapsed_us);
+        } else if (llama_moe_is_cold_branch_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.cold_branch_time_us, elapsed_us);
+        }
+
+        if (llama_moe_is_hot_expert_matmul_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.hot_expert_matmul_time_us, elapsed_us);
+        } else if (llama_moe_is_cold_expert_matmul_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.cold_expert_matmul_time_us, elapsed_us);
+        }
+
+        if (llama_moe_is_worklist_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.worklist_time_us, elapsed_us);
+        } else if (llama_moe_is_routing_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.routing_time_us, elapsed_us);
+        } else if (llama_moe_is_merge_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.merge_time_us, elapsed_us);
+        }
+
+        if (llama_moe_is_hot_gather_scatter_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.hot_gather_scatter_time_us, elapsed_us);
+        } else if (llama_moe_is_cold_gather_scatter_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.cold_gather_scatter_time_us, elapsed_us);
+        }
+
         if (llama_moe_is_gate_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.gate_time_us, elapsed_us);
         } else if (llama_moe_is_up_node(name)) {
@@ -293,6 +496,10 @@ static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_
 
     if (llama_moe_is_topk_node(name)) {
         llama_moe_layer_perf_count_topk_locked((uint32_t) layer, t);
+    } else if (llama_moe_is_hot_ids_node(name)) {
+        llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, true);
+    } else if (llama_moe_is_cold_ids_node(name)) {
+        llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, false);
     }
 
     return true;
@@ -987,15 +1194,82 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         const double total_moe_per_call =
             layer.calls > 0 ? (double) layer.total_moe_time_us / (double) layer.calls : 0.0;
 
+        const double hot_branch_per_call =
+            layer.calls > 0 ? (double) layer.hot_branch_time_us / (double) layer.calls : 0.0;
+
+        const double cold_branch_per_call =
+            layer.calls > 0 ? (double) layer.cold_branch_time_us / (double) layer.calls : 0.0;
+
+        const double hot_expert_matmul_per_call =
+            layer.calls > 0 ? (double) layer.hot_expert_matmul_time_us / (double) layer.calls : 0.0;
+
+        const double cold_expert_matmul_per_call =
+            layer.calls > 0 ? (double) layer.cold_expert_matmul_time_us / (double) layer.calls : 0.0;
+
+        const double worklist_per_call =
+            layer.calls > 0 ? (double) layer.worklist_time_us / (double) layer.calls : 0.0;
+
+        const double routing_per_call =
+            layer.calls > 0 ? (double) layer.routing_time_us / (double) layer.calls : 0.0;
+
+        const double merge_per_call =
+            layer.calls > 0 ? (double) layer.merge_time_us / (double) layer.calls : 0.0;
+
+        const double hot_gather_scatter_per_call =
+            layer.calls > 0 ? (double) layer.hot_gather_scatter_time_us / (double) layer.calls : 0.0;
+
+        const double cold_gather_scatter_per_call =
+            layer.calls > 0 ? (double) layer.cold_gather_scatter_time_us / (double) layer.calls : 0.0;
+
+        const double hot_slots_per_call =
+            layer.hot_worklist_calls > 0 ? (double) layer.hot_slots_total / (double) layer.hot_worklist_calls : 0.0;
+
+        const double cold_slots_per_call =
+            layer.cold_worklist_calls > 0 ? (double) layer.cold_slots_total / (double) layer.cold_worklist_calls : 0.0;
+
+        const double hot_slot_ratio =
+            layer.expert_hits_total > 0 ? (double) layer.hot_slots_total / (double) layer.expert_hits_total : 0.0;
+
+        const double cold_slot_ratio =
+            layer.expert_hits_total > 0 ? (double) layer.cold_slots_total / (double) layer.expert_hits_total : 0.0;
+
         out << "{";
         out << "\"layer\":" << il << ",";
         out << "\"calls\":" << layer.calls << ",";
         out << "\"expert_hits_total\":" << layer.expert_hits_total << ",";
+        out << "\"hot_slots_total\":" << layer.hot_slots_total << ",";
+        out << "\"cold_slots_total\":" << layer.cold_slots_total << ",";
+        out << "\"hot_worklist_calls\":" << layer.hot_worklist_calls << ",";
+        out << "\"cold_worklist_calls\":" << layer.cold_worklist_calls << ",";
+        out << "\"hot_zero_calls\":" << layer.hot_zero_calls << ",";
+        out << "\"cold_zero_calls\":" << layer.cold_zero_calls << ",";
         out << "\"total_moe_time_us\":" << layer.total_moe_time_us << ",";
         out << "\"expert_matmul_time_us\":" << layer.expert_matmul_time_us << ",";
+        out << "\"hot_branch_time_us\":" << layer.hot_branch_time_us << ",";
+        out << "\"cold_branch_time_us\":" << layer.cold_branch_time_us << ",";
+        out << "\"hot_expert_matmul_time_us\":" << layer.hot_expert_matmul_time_us << ",";
+        out << "\"cold_expert_matmul_time_us\":" << layer.cold_expert_matmul_time_us << ",";
+        out << "\"worklist_time_us\":" << layer.worklist_time_us << ",";
+        out << "\"routing_time_us\":" << layer.routing_time_us << ",";
+        out << "\"merge_time_us\":" << layer.merge_time_us << ",";
+        out << "\"hot_gather_scatter_time_us\":" << layer.hot_gather_scatter_time_us << ",";
+        out << "\"cold_gather_scatter_time_us\":" << layer.cold_gather_scatter_time_us << ",";
         out << "\"gate_time_us\":" << layer.gate_time_us << ",";
         out << "\"up_time_us\":" << layer.up_time_us << ",";
         out << "\"down_time_us\":" << layer.down_time_us << ",";
+        out << "\"hot_slots_per_call\":" << hot_slots_per_call << ",";
+        out << "\"cold_slots_per_call\":" << cold_slots_per_call << ",";
+        out << "\"hot_slot_ratio\":" << hot_slot_ratio << ",";
+        out << "\"cold_slot_ratio\":" << cold_slot_ratio << ",";
+        out << "\"hot_branch_time_per_call_us\":" << hot_branch_per_call << ",";
+        out << "\"cold_branch_time_per_call_us\":" << cold_branch_per_call << ",";
+        out << "\"hot_expert_matmul_time_per_call_us\":" << hot_expert_matmul_per_call << ",";
+        out << "\"cold_expert_matmul_time_per_call_us\":" << cold_expert_matmul_per_call << ",";
+        out << "\"worklist_time_per_call_us\":" << worklist_per_call << ",";
+        out << "\"routing_time_per_call_us\":" << routing_per_call << ",";
+        out << "\"merge_time_per_call_us\":" << merge_per_call << ",";
+        out << "\"hot_gather_scatter_time_per_call_us\":" << hot_gather_scatter_per_call << ",";
+        out << "\"cold_gather_scatter_time_per_call_us\":" << cold_gather_scatter_per_call << ",";
         out << "\"expert_matmul_time_per_call_us\":" << expert_matmul_per_call << ",";
         out << "\"total_moe_time_per_call_us\":" << total_moe_per_call << ",";
         out << "\"experts\":[";

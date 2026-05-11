@@ -641,7 +641,8 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
             cache.ffn_up_exps_s,
             cache.ffn_gate_exps_s,
             cache.ffn_down_exps_s,
-            LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS);
+            LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS,
+            "hot");
     cb(hot_out, "ffn_moe_hot_out", il);
 
     ggml_tensor * hot_slots = ggml_scale(ctx0, hot_inputs, 0.0f);
@@ -684,7 +685,8 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
                 layer.ffn_up_exps_s,
                 layer.ffn_gate_exps_s,
                 layer.ffn_down_exps_s,
-                LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS);
+                LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS,
+                "cold");
         cb(cold_out, "ffn_moe_cold_out", il);
 
         ggml_tensor * cold_slots = ggml_scale(ctx0, cold_inputs, 0.0f);

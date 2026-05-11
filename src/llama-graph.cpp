@@ -13,6 +13,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -1732,11 +1733,30 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
              ggml_tensor * up_exps_s,
              ggml_tensor * gate_exps_s,
              ggml_tensor * down_exps_s,
-            uint32_t   flags) const {
+            uint32_t   flags,
+         const char * branch_name) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4;
     ggml_tensor * selected_experts_scale_ids = selected_experts;
+    const auto cb_moe = [&](ggml_tensor * t, const char * name) {
+        if (branch_name == nullptr || branch_name[0] == '\0') {
+            cb(t, name, il);
+            return;
+        }
+
+        GGML_ASSERT(std::strncmp(name, "ffn_moe_", 8) == 0);
+
+        char branch_node_name[96];
+        const int nwritten = std::snprintf(
+                branch_node_name,
+                sizeof(branch_node_name),
+                "ffn_moe_%s_%s",
+                branch_name,
+                name + 8);
+        GGML_ASSERT(nwritten > 0 && nwritten < int(sizeof(branch_node_name)));
+        cb(t, branch_node_name, il);
+    };
 
     ggml_build_forward_expand(gf, weights);
 
@@ -1745,7 +1765,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         ggml_tensor * scale_ids_f32 = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
         scale_ids_f32 = ggml_clamp(ctx0, scale_ids_f32, 0.0f, float(n_expert - 1));
         selected_experts_scale_ids = ggml_cast(ctx0, scale_ids_f32, GGML_TYPE_I32);
-        cb(selected_experts_scale_ids, "ffn_moe_scale_ids", il);
+        cb_moe(selected_experts_scale_ids, "ffn_moe_scale_ids");
     }
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
@@ -1753,7 +1773,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
     if (weight_before_ffn) {
         ggml_tensor * repeated = ggml_repeat_4d(ctx0, cur, n_embd, n_expert_used, n_tokens, 1);
         cur = ggml_mul(ctx0, repeated, weights);
-        cb(cur, "ffn_moe_weighted", il);
+        cb_moe(cur, "ffn_moe_weighted");
     }
 
     ggml_tensor * up = nullptr;
@@ -1761,36 +1781,36 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
 
     if (gate_up_exps) {
         ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, flags);
-        cb(gate_up, "ffn_moe_gate_up", il);
+        cb_moe(gate_up, "ffn_moe_gate_up");
 
         if (up_exps_s) {
             ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
             s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
             s = ggml_get_rows(ctx0, s, selected_experts_scale_ids);
             gate_up = ggml_mul(ctx0, gate_up, s);
-            cb(gate_up, "ffn_moe_gate_up_scaled", il);
+            cb_moe(gate_up, "ffn_moe_gate_up_scaled");
         }
 
         const int64_t n_ff = gate_up->ne[0] / 2;
         cur = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
-        cb(cur, "ffn_moe_gate", il);
+        cb_moe(cur, "ffn_moe_gate");
         up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
-        cb(up, "ffn_moe_up", il);
+        cb_moe(up, "ffn_moe_up");
     } else {
         up = build_lora_mm_id(up_exps, cur, selected_experts, flags);
-        cb(up, "ffn_moe_up", il);
+        cb_moe(up, "ffn_moe_up");
 
         if (up_exps_s) {
             ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
             s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
             s = ggml_get_rows(ctx0, s, selected_experts_scale_ids);
             up = ggml_mul(ctx0, up, s);
-            cb(up, "ffn_moe_up_scaled", il);
+            cb_moe(up, "ffn_moe_up_scaled");
         }
 
         if (gate_exps) {
             cur = build_lora_mm_id(gate_exps, cur, selected_experts, flags);
-            cb(cur, "ffn_moe_gate", il);
+            cb_moe(cur, "ffn_moe_gate");
         } else {
             cur = up;
         }
@@ -1800,7 +1820,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
             s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
             s = ggml_get_rows(ctx0, s, selected_experts_scale_ids);
             cur = ggml_mul(ctx0, cur, s);
-            cb(cur, "ffn_moe_gate_scaled", il);
+            cb_moe(cur, "ffn_moe_gate_scaled");
         }
     }
 
@@ -1810,45 +1830,45 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         case LLM_FFN_SILU:
             if (has_gate) {
                 cur = ggml_swiglu_split(ctx0, cur, up);
-                cb(cur, "ffn_moe_swiglu", il);
+                cb_moe(cur, "ffn_moe_swiglu");
             } else {
                 cur = ggml_silu(ctx0, cur);
-                cb(cur, "ffn_moe_silu", il);
+                cb_moe(cur, "ffn_moe_silu");
             } break;
         case LLM_FFN_GELU:
             if (has_gate) {
                 cur = ggml_geglu_split(ctx0, cur, up);
-                cb(cur, "ffn_moe_geglu", il);
+                cb_moe(cur, "ffn_moe_geglu");
             } else {
                 cur = ggml_gelu(ctx0, cur);
-                cb(cur, "ffn_moe_gelu", il);
+                cb_moe(cur, "ffn_moe_gelu");
             } break;
         case LLM_FFN_RELU:
             if (has_gate) {
                 cur = ggml_reglu_split(ctx0, cur, up);
-                cb(cur, "ffn_moe_reglu", il);
+                cb_moe(cur, "ffn_moe_reglu");
             } else {
                 cur = ggml_relu(ctx0, cur);
-                cb(cur, "ffn_moe_relu", il);
+                cb_moe(cur, "ffn_moe_relu");
             } break;
         default:
             GGML_ABORT("fatal error");
     }
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts, flags);
-    cb(experts, "ffn_moe_down", il);
+    cb_moe(experts, "ffn_moe_down");
 
     if (down_exps_s) {
         ggml_tensor * s = ggml_reshape_3d(ctx0, down_exps_s, 1, n_expert, 1);
         s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
         s = ggml_get_rows(ctx0, s, selected_experts_scale_ids);
         experts = ggml_mul(ctx0, experts, s);
-        cb(experts, "ffn_moe_down_scaled", il);
+        cb_moe(experts, "ffn_moe_down_scaled");
     }
 
     if (!weight_before_ffn) {
         experts = ggml_mul(ctx0, experts, weights);
-        cb(experts, "ffn_moe_weighted", il);
+        cb_moe(experts, "ffn_moe_weighted");
     }
 
     ggml_build_forward_expand(gf, experts);
@@ -1879,7 +1899,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         moe_out = ggml_cont(ctx0, moe_out);
     }
 
-    cb(moe_out, "ffn_moe_out", il);
+    cb_moe(moe_out, "ffn_moe_out");
     return moe_out;
 }
 
