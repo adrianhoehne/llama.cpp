@@ -1327,24 +1327,127 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
 
     std::ostringstream out;
 
+    const auto non_empty_layer = [](const llama_moe_layer_perf_layer & layer) {
+        return layer.calls != 0 ||
+               layer.expert_hits_total != 0 ||
+               layer.total_moe_time_us != 0 ||
+               layer.parallel_fallbacks != 0;
+    };
+
+    const auto per_call = [](uint64_t value, uint64_t calls) {
+        return calls > 0 ? (double) value / (double) calls : 0.0;
+    };
+
+    const auto ratio = [](uint64_t value, uint64_t total) {
+        return total > 0 ? (double) value / (double) total : 0.0;
+    };
+
+    uint64_t summary_calls = 0;
+    uint64_t summary_hot_slots = 0;
+    uint64_t summary_cold_slots = 0;
+    uint64_t summary_total_moe_time_us = 0;
+    uint64_t summary_routing_time_us = 0;
+    uint64_t summary_worklist_time_us = 0;
+    uint64_t summary_merge_time_us = 0;
+    uint64_t summary_parallel_region_wall_time_us = 0;
+    uint64_t summary_parallel_hot_lane_wall_time_us = 0;
+    uint64_t summary_parallel_cold_lane_wall_time_us = 0;
+    uint64_t summary_parallel_join_wait_time_us = 0;
+    uint64_t summary_parallel_overlap_estimate_us = 0;
+    uint64_t summary_parallel_hot_launches = 0;
+    uint64_t summary_parallel_cold_launches = 0;
+    uint64_t summary_parallel_fallbacks = 0;
+
+    for (const auto & layer : g_llama_moe_layer_perf.layers) {
+        if (!non_empty_layer(layer)) {
+            continue;
+        }
+
+        summary_calls += layer.calls;
+        summary_hot_slots += layer.hot_slots_total;
+        summary_cold_slots += layer.cold_slots_total;
+        summary_total_moe_time_us += layer.total_moe_time_us;
+        summary_routing_time_us += layer.routing_time_us;
+        summary_worklist_time_us += layer.worklist_time_us;
+        summary_merge_time_us += layer.merge_time_us;
+        summary_parallel_region_wall_time_us += layer.parallel_region_wall_time_us;
+        summary_parallel_hot_lane_wall_time_us += layer.parallel_hot_lane_wall_time_us;
+        summary_parallel_cold_lane_wall_time_us += layer.parallel_cold_lane_wall_time_us;
+        summary_parallel_join_wait_time_us += layer.parallel_join_wait_time_us;
+        summary_parallel_overlap_estimate_us += layer.parallel_overlap_estimate_us;
+        summary_parallel_hot_launches += layer.parallel_hot_launches;
+        summary_parallel_cold_launches += layer.parallel_cold_launches;
+        summary_parallel_fallbacks += layer.parallel_fallbacks;
+    }
+
+    const uint64_t summary_slots = summary_hot_slots + summary_cold_slots;
+
     out << "{";
     out << "\"enabled\":true,";
-    out << "\"schema\":\"llama.cpp.moe_layer_perf.v1\",";
+    out << "\"schema\":\"llama.cpp.moe_layer_opt_perf.v1\",";
     out << "\"n_expert\":" << g_llama_moe_layer_perf.n_expert << ",";
     out << "\"n_expert_used\":" << g_llama_moe_layer_perf.n_expert_used << ",";
     out << "\"updates\":" << g_llama_moe_layer_perf.updates << ",";
     out << "\"overflow_resets\":" << g_llama_moe_layer_perf.overflow_resets << ",";
+    out << "\"summary\":{";
+    out << "\"layer_calls\":" << summary_calls << ",";
+    out << "\"hot_slot_ratio\":" << ratio(summary_hot_slots, summary_slots) << ",";
+    out << "\"total_moe_time_per_call_us\":" << per_call(summary_total_moe_time_us, summary_calls) << ",";
+    out << "\"routing_time_per_call_us\":" << per_call(summary_routing_time_us, summary_calls) << ",";
+    out << "\"worklist_time_per_call_us\":" << per_call(summary_worklist_time_us, summary_calls) << ",";
+    out << "\"merge_time_per_call_us\":" << per_call(summary_merge_time_us, summary_calls) << ",";
+    out << "\"parallel_region_wall_time_per_call_us\":" << per_call(summary_parallel_region_wall_time_us, summary_calls) << ",";
+    out << "\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(summary_parallel_hot_lane_wall_time_us, summary_calls) << ",";
+    out << "\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(summary_parallel_cold_lane_wall_time_us, summary_calls) << ",";
+    out << "\"parallel_join_wait_time_per_call_us\":" << per_call(summary_parallel_join_wait_time_us, summary_calls) << ",";
+    out << "\"parallel_overlap_estimate_per_call_us\":" << per_call(summary_parallel_overlap_estimate_us, summary_calls) << ",";
+    out << "\"parallel_hot_launches\":" << summary_parallel_hot_launches << ",";
+    out << "\"parallel_cold_launches\":" << summary_parallel_cold_launches << ",";
+    out << "\"parallel_fallbacks\":" << summary_parallel_fallbacks;
+    out << "},";
     out << "\"layers\":[";
+
+    const auto write_expert_counts = [&](const std::vector<uint64_t> & counts) {
+        out << "[";
+
+        bool first_expert = true;
+
+        for (size_t ex = 0; ex < counts.size(); ++ex) {
+            if (counts[ex] == 0) {
+                continue;
+            }
+
+            if (!first_expert) {
+                out << ",";
+            }
+
+            first_expert = false;
+
+            out << "[" << ex << "," << counts[ex] << "]";
+        }
+
+        out << "]";
+    };
+
+    const auto write_fallback_reason = [&](bool & first, const char * name, uint64_t value) {
+        if (value == 0) {
+            return;
+        }
+
+        if (!first) {
+            out << ",";
+        }
+
+        first = false;
+        out << "\"" << name << "\":" << value;
+    };
 
     bool first_layer = true;
 
     for (size_t il = 0; il < g_llama_moe_layer_perf.layers.size(); ++il) {
         const auto & layer = g_llama_moe_layer_perf.layers[il];
 
-        if (layer.calls == 0 &&
-            layer.expert_hits_total == 0 &&
-            layer.total_moe_time_us == 0 &&
-            layer.expert_matmul_time_us == 0) {
+        if (!non_empty_layer(layer)) {
             continue;
         }
 
@@ -1354,158 +1457,56 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
 
         first_layer = false;
 
-        const double expert_matmul_per_call =
-            layer.calls > 0 ? (double) layer.expert_matmul_time_us / (double) layer.calls : 0.0;
-
-        const double total_moe_per_call =
-            layer.calls > 0 ? (double) layer.total_moe_time_us / (double) layer.calls : 0.0;
-
-        const double hot_branch_per_call =
-            layer.calls > 0 ? (double) layer.hot_branch_time_us / (double) layer.calls : 0.0;
-
-        const double cold_branch_per_call =
-            layer.calls > 0 ? (double) layer.cold_branch_time_us / (double) layer.calls : 0.0;
-
-        const double hot_expert_matmul_per_call =
-            layer.calls > 0 ? (double) layer.hot_expert_matmul_time_us / (double) layer.calls : 0.0;
-
-        const double cold_expert_matmul_per_call =
-            layer.calls > 0 ? (double) layer.cold_expert_matmul_time_us / (double) layer.calls : 0.0;
-
-        const double worklist_per_call =
-            layer.calls > 0 ? (double) layer.worklist_time_us / (double) layer.calls : 0.0;
-
-        const double routing_per_call =
-            layer.calls > 0 ? (double) layer.routing_time_us / (double) layer.calls : 0.0;
-
-        const double merge_per_call =
-            layer.calls > 0 ? (double) layer.merge_time_us / (double) layer.calls : 0.0;
-
-        const double hot_gather_scatter_per_call =
-            layer.calls > 0 ? (double) layer.hot_gather_scatter_time_us / (double) layer.calls : 0.0;
-
-        const double cold_gather_scatter_per_call =
-            layer.calls > 0 ? (double) layer.cold_gather_scatter_time_us / (double) layer.calls : 0.0;
-
-        const double parallel_region_wall_per_call =
-            layer.calls > 0 ? (double) layer.parallel_region_wall_time_us / (double) layer.calls : 0.0;
-
-        const double parallel_hot_lane_wall_per_call =
-            layer.calls > 0 ? (double) layer.parallel_hot_lane_wall_time_us / (double) layer.calls : 0.0;
-
-        const double parallel_cold_lane_wall_per_call =
-            layer.calls > 0 ? (double) layer.parallel_cold_lane_wall_time_us / (double) layer.calls : 0.0;
-
-        const double parallel_join_wait_per_call =
-            layer.calls > 0 ? (double) layer.parallel_join_wait_time_us / (double) layer.calls : 0.0;
-
-        const double parallel_overlap_estimate_per_call =
-            layer.calls > 0 ? (double) layer.parallel_overlap_estimate_us / (double) layer.calls : 0.0;
-
         const double hot_slots_per_call =
-            layer.hot_worklist_calls > 0 ? (double) layer.hot_slots_total / (double) layer.hot_worklist_calls : 0.0;
+            layer.hot_worklist_calls > 0 ? (double) layer.hot_slots_total / (double) layer.hot_worklist_calls : per_call(layer.hot_slots_total, layer.calls);
 
         const double cold_slots_per_call =
-            layer.cold_worklist_calls > 0 ? (double) layer.cold_slots_total / (double) layer.cold_worklist_calls : 0.0;
+            layer.cold_worklist_calls > 0 ? (double) layer.cold_slots_total / (double) layer.cold_worklist_calls : per_call(layer.cold_slots_total, layer.calls);
 
-        const double hot_slot_ratio =
-            layer.expert_hits_total > 0 ? (double) layer.hot_slots_total / (double) layer.expert_hits_total : 0.0;
-
-        const double cold_slot_ratio =
-            layer.expert_hits_total > 0 ? (double) layer.cold_slots_total / (double) layer.expert_hits_total : 0.0;
+        const uint64_t slots_total = layer.hot_slots_total + layer.cold_slots_total;
 
         out << "{";
         out << "\"layer\":" << il << ",";
         out << "\"calls\":" << layer.calls << ",";
-        out << "\"expert_hits_total\":" << layer.expert_hits_total << ",";
         out << "\"hot_slots_total\":" << layer.hot_slots_total << ",";
         out << "\"cold_slots_total\":" << layer.cold_slots_total << ",";
-        out << "\"hot_worklist_calls\":" << layer.hot_worklist_calls << ",";
-        out << "\"cold_worklist_calls\":" << layer.cold_worklist_calls << ",";
-        out << "\"hot_zero_calls\":" << layer.hot_zero_calls << ",";
-        out << "\"cold_zero_calls\":" << layer.cold_zero_calls << ",";
-        out << "\"total_moe_time_us\":" << layer.total_moe_time_us << ",";
-        out << "\"expert_matmul_time_us\":" << layer.expert_matmul_time_us << ",";
-        out << "\"hot_branch_time_us\":" << layer.hot_branch_time_us << ",";
-        out << "\"cold_branch_time_us\":" << layer.cold_branch_time_us << ",";
-        out << "\"hot_expert_matmul_time_us\":" << layer.hot_expert_matmul_time_us << ",";
-        out << "\"cold_expert_matmul_time_us\":" << layer.cold_expert_matmul_time_us << ",";
-        out << "\"worklist_time_us\":" << layer.worklist_time_us << ",";
-        out << "\"routing_time_us\":" << layer.routing_time_us << ",";
-        out << "\"merge_time_us\":" << layer.merge_time_us << ",";
-        out << "\"hot_gather_scatter_time_us\":" << layer.hot_gather_scatter_time_us << ",";
-        out << "\"cold_gather_scatter_time_us\":" << layer.cold_gather_scatter_time_us << ",";
-        out << "\"parallel_region_wall_time_us\":" << layer.parallel_region_wall_time_us << ",";
-        out << "\"parallel_hot_lane_wall_time_us\":" << layer.parallel_hot_lane_wall_time_us << ",";
-        out << "\"parallel_cold_lane_wall_time_us\":" << layer.parallel_cold_lane_wall_time_us << ",";
-        out << "\"parallel_join_wait_time_us\":" << layer.parallel_join_wait_time_us << ",";
-        out << "\"parallel_overlap_estimate_us\":" << layer.parallel_overlap_estimate_us << ",";
+        out << "\"hot_slots_per_call\":" << hot_slots_per_call << ",";
+        out << "\"cold_slots_per_call\":" << cold_slots_per_call << ",";
+        out << "\"hot_slot_ratio\":" << ratio(layer.hot_slots_total, slots_total) << ",";
+        out << "\"total_moe_time_per_call_us\":" << per_call(layer.total_moe_time_us, layer.calls) << ",";
+        out << "\"routing_time_per_call_us\":" << per_call(layer.routing_time_us, layer.calls) << ",";
+        out << "\"worklist_time_per_call_us\":" << per_call(layer.worklist_time_us, layer.calls) << ",";
+        out << "\"merge_time_per_call_us\":" << per_call(layer.merge_time_us, layer.calls) << ",";
+        out << "\"parallel_region_wall_time_per_call_us\":" << per_call(layer.parallel_region_wall_time_us, layer.calls) << ",";
+        out << "\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls) << ",";
+        out << "\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls) << ",";
+        out << "\"parallel_join_wait_time_per_call_us\":" << per_call(layer.parallel_join_wait_time_us, layer.calls) << ",";
+        out << "\"parallel_overlap_estimate_per_call_us\":" << per_call(layer.parallel_overlap_estimate_us, layer.calls) << ",";
         out << "\"parallel_hot_launches\":" << layer.parallel_hot_launches << ",";
         out << "\"parallel_cold_launches\":" << layer.parallel_cold_launches << ",";
         out << "\"parallel_hot_skips_zero\":" << layer.parallel_hot_skips_zero << ",";
         out << "\"parallel_cold_skips_zero\":" << layer.parallel_cold_skips_zero << ",";
         out << "\"parallel_fallbacks\":" << layer.parallel_fallbacks << ",";
-        out << "\"parallel_fallback_incomplete\":" << layer.parallel_fallback_incomplete << ",";
-        out << "\"parallel_fallback_count_not_prefix\":" << layer.parallel_fallback_count_not_prefix << ",";
-        out << "\"parallel_fallback_bad_split_order\":" << layer.parallel_fallback_bad_split_order << ",";
-        out << "\"parallel_fallback_same_backend\":" << layer.parallel_fallback_same_backend << ",";
-        out << "\"parallel_fallback_hot_spans_backends\":" << layer.parallel_fallback_hot_spans_backends << ",";
-        out << "\"parallel_fallback_cold_spans_backends\":" << layer.parallel_fallback_cold_spans_backends << ",";
-        out << "\"parallel_fallback_hot_not_cuda\":" << layer.parallel_fallback_hot_not_cuda << ",";
-        out << "\"parallel_fallback_cold_not_cpu\":" << layer.parallel_fallback_cold_not_cpu << ",";
-        out << "\"parallel_fallback_count_readback\":" << layer.parallel_fallback_count_readback << ",";
-        out << "\"parallel_fallback_threshold\":" << layer.parallel_fallback_threshold << ",";
-        out << "\"parallel_fallback_zero_output\":" << layer.parallel_fallback_zero_output << ",";
-        out << "\"parallel_fallback_other\":" << layer.parallel_fallback_other << ",";
-        out << "\"gate_time_us\":" << layer.gate_time_us << ",";
-        out << "\"up_time_us\":" << layer.up_time_us << ",";
-        out << "\"down_time_us\":" << layer.down_time_us << ",";
-        out << "\"hot_slots_per_call\":" << hot_slots_per_call << ",";
-        out << "\"cold_slots_per_call\":" << cold_slots_per_call << ",";
-        out << "\"hot_slot_ratio\":" << hot_slot_ratio << ",";
-        out << "\"cold_slot_ratio\":" << cold_slot_ratio << ",";
-        out << "\"hot_branch_time_per_call_us\":" << hot_branch_per_call << ",";
-        out << "\"cold_branch_time_per_call_us\":" << cold_branch_per_call << ",";
-        out << "\"hot_expert_matmul_time_per_call_us\":" << hot_expert_matmul_per_call << ",";
-        out << "\"cold_expert_matmul_time_per_call_us\":" << cold_expert_matmul_per_call << ",";
-        out << "\"worklist_time_per_call_us\":" << worklist_per_call << ",";
-        out << "\"routing_time_per_call_us\":" << routing_per_call << ",";
-        out << "\"merge_time_per_call_us\":" << merge_per_call << ",";
-        out << "\"hot_gather_scatter_time_per_call_us\":" << hot_gather_scatter_per_call << ",";
-        out << "\"cold_gather_scatter_time_per_call_us\":" << cold_gather_scatter_per_call << ",";
-        out << "\"parallel_region_wall_time_per_call_us\":" << parallel_region_wall_per_call << ",";
-        out << "\"parallel_hot_lane_wall_time_per_call_us\":" << parallel_hot_lane_wall_per_call << ",";
-        out << "\"parallel_cold_lane_wall_time_per_call_us\":" << parallel_cold_lane_wall_per_call << ",";
-        out << "\"parallel_join_wait_time_per_call_us\":" << parallel_join_wait_per_call << ",";
-        out << "\"parallel_overlap_estimate_per_call_us\":" << parallel_overlap_estimate_per_call << ",";
-        out << "\"expert_matmul_time_per_call_us\":" << expert_matmul_per_call << ",";
-        out << "\"total_moe_time_per_call_us\":" << total_moe_per_call << ",";
 
-        const auto write_expert_counts = [&](const std::vector<uint64_t> & counts) {
-            out << "[";
+        if (layer.parallel_fallbacks > 0) {
+            bool first_reason = true;
+            out << "\"parallel_fallback_reasons\":{";
+            write_fallback_reason(first_reason, "incomplete", layer.parallel_fallback_incomplete);
+            write_fallback_reason(first_reason, "count_not_prefix", layer.parallel_fallback_count_not_prefix);
+            write_fallback_reason(first_reason, "bad_split_order", layer.parallel_fallback_bad_split_order);
+            write_fallback_reason(first_reason, "same_backend", layer.parallel_fallback_same_backend);
+            write_fallback_reason(first_reason, "hot_spans_backends", layer.parallel_fallback_hot_spans_backends);
+            write_fallback_reason(first_reason, "cold_spans_backends", layer.parallel_fallback_cold_spans_backends);
+            write_fallback_reason(first_reason, "hot_not_cuda", layer.parallel_fallback_hot_not_cuda);
+            write_fallback_reason(first_reason, "cold_not_cpu", layer.parallel_fallback_cold_not_cpu);
+            write_fallback_reason(first_reason, "count_readback", layer.parallel_fallback_count_readback);
+            write_fallback_reason(first_reason, "threshold", layer.parallel_fallback_threshold);
+            write_fallback_reason(first_reason, "zero_output", layer.parallel_fallback_zero_output);
+            write_fallback_reason(first_reason, "other", layer.parallel_fallback_other);
+            out << "},";
+        }
 
-            bool first_expert = true;
-
-            for (size_t ex = 0; ex < counts.size(); ++ex) {
-                if (counts[ex] == 0) {
-                    continue;
-                }
-
-                if (!first_expert) {
-                    out << ",";
-                }
-
-                first_expert = false;
-
-                out << "[" << ex << "," << counts[ex] << "]";
-            }
-
-            out << "]";
-        };
-
-        out << "\"experts\":";
-        write_expert_counts(layer.experts);
-        out << ",\"hot_experts\":";
+        out << "\"hot_experts\":";
         write_expert_counts(layer.hot_experts);
         out << ",\"cold_experts\":";
         write_expert_counts(layer.cold_experts);

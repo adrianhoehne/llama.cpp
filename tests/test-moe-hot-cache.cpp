@@ -43,13 +43,15 @@ static void test_parse_branch_counts_and_layer_weight() {
                 "experts": [[0, 100]],
                 "hot_experts": [[1, 10]],
                 "cold_experts": [[2, 10]],
-                "cold_slots_per_call": 1.0,
+                "calls": 10,
+                "cold_slots_total": 10,
                 "parallel_join_wait_time_per_call_us": 20.0
             },
             {
                 "layer": 1,
                 "hot_experts": [[3, 12]],
-                "cold_slots_per_call": 1.0,
+                "calls": 10,
+                "cold_slots_total": 10,
                 "parallel_join_wait_time_per_call_us": 10.0
             }
         ]

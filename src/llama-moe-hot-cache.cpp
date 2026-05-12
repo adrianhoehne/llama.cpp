@@ -176,8 +176,14 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
         throw std::runtime_error(std::string("failed to parse --moe-hot-cache JSON: ") + e.what());
     }
 
-    if (!root.is_object() || root.value("schema", "") != "llama.cpp.moe_layer_perf.v1") {
-        throw std::runtime_error("--moe-hot-cache JSON must use schema llama.cpp.moe_layer_perf.v1");
+    if (!root.is_object()) {
+        throw std::runtime_error("--moe-hot-cache JSON must use schema llama.cpp.moe_layer_perf.v1 or llama.cpp.moe_layer_opt_perf.v1");
+    }
+
+    const std::string schema = root.value("schema", "");
+    if (schema != "llama.cpp.moe_layer_perf.v1" &&
+        schema != "llama.cpp.moe_layer_opt_perf.v1") {
+        throw std::runtime_error("--moe-hot-cache JSON must use schema llama.cpp.moe_layer_perf.v1 or llama.cpp.moe_layer_opt_perf.v1");
     }
 
     if (!root.contains("layers") || !root["layers"].is_array()) {
@@ -228,7 +234,15 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
             continue;
         }
 
-        const double cold_slots_per_call = layer.value("cold_slots_per_call", 0.0);
+        double cold_slots_per_call = layer.value("cold_slots_per_call", 0.0);
+        if (cold_slots_per_call <= 0.0) {
+            const uint64_t calls = layer.value("calls", uint64_t(0));
+            const uint64_t cold_slots_total = layer.value("cold_slots_total", uint64_t(0));
+            if (calls > 0 && cold_slots_total > 0) {
+                cold_slots_per_call = (double) cold_slots_total / (double) calls;
+            }
+        }
+
         if (cold_slots_per_call > 0.0) {
             double wait_per_call = layer.value("parallel_join_wait_time_per_call_us", 0.0);
             if (wait_per_call <= 0.0) {
