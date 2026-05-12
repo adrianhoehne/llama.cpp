@@ -682,6 +682,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     ggml_tensor * hot_weights = ggml_reshape_3d(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT), 1, 1, capacity);
     cb(hot_weights, "ffn_moe_hot_weights_compact", il);
 
+    ggml_tensor * hot_expert_ids = view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID);
+    cb(hot_expert_ids, "ffn_moe_hot_expert_ids_compact", il);
+
     ggml_tensor * cold_ids = nullptr;
     ggml_tensor * cold_src_slots = nullptr;
     ggml_tensor * cold_token_ids = nullptr;
@@ -712,6 +715,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     ggml_build_forward_expand(gf, hot_src_slots);
     ggml_build_forward_expand(gf, hot_token_ids);
     ggml_build_forward_expand(gf, hot_weights);
+    ggml_build_forward_expand(gf, hot_expert_ids);
     if (cold_ids != nullptr) {
         ggml_build_forward_expand(gf, cold_ids);
         ggml_build_forward_expand(gf, cold_src_slots);

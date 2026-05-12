@@ -31,6 +31,32 @@ static void test_parse_and_sort() {
     require(entries[3].layer == 1 && entries[3].expert == 0 && entries[3].hit_count == 1);
 }
 
+static void test_parse_branch_counts_and_layer_weight() {
+    const std::string json = R"({
+        "enabled": true,
+        "schema": "llama.cpp.moe_layer_perf.v1",
+        "n_expert": 4,
+        "n_expert_used": 2,
+        "layers": [
+            {
+                "layer": 0,
+                "experts": [[0, 100]],
+                "hot_experts": [[1, 2]],
+                "cold_experts": [[2, 3]],
+                "cold_slots_per_call": 2.0,
+                "parallel_join_wait_time_per_call_us": 10.0
+            },
+            {"layer": 1, "experts": [[3, 12]]}
+        ]
+    })";
+
+    const auto entries = llama_moe_hot_cache_parse_perf_json(json);
+    require(entries.size() == 3);
+    require(entries[0].layer == 0 && entries[0].expert == 2 && entries[0].hit_count == 15);
+    require(entries[1].layer == 1 && entries[1].expert == 3 && entries[1].hit_count == 12);
+    require(entries[2].layer == 0 && entries[2].expert == 1 && entries[2].hit_count == 10);
+}
+
 static void test_select_budget() {
     const std::vector<llama_moe_hot_cache_entry> observed = {
         { 0, 0, 10 },
@@ -124,14 +150,17 @@ static void test_build_worklist_mixed() {
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT, 0) == 0.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID, 0) == 0.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT, 0) == 0.11f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, 0) == 1.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, 1) == 1.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT, 1) == 1.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID, 1) == 0.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT, 1) == 0.12f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, 1) == 3.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, 2) == 0.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT, 2) == 3.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID, 2) == 1.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT, 2) == 0.22f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, 2) == 1.0f);
 
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID, 0) == 2.0f);
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, 0) == 2.0f);
@@ -149,6 +178,7 @@ static void test_build_worklist_mixed() {
     for (int32_t i = 3; i < capacity; ++i) {
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, i) == -1.0f);
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT, i) == float(capacity));
+        require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, i) == -1.0f);
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID, i) == -1.0f);
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, i) == float(capacity));
     }
@@ -180,6 +210,7 @@ static void test_build_worklist_all_hot_or_cold() {
     llama_moe_hot_cache_build_worklist(packed, selected, weights, all_hot, 0, 1);
     for (int32_t i = 0; i < capacity; ++i) {
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, i) >= 0.0f);
+        require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, i) >= 0.0f);
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID, i) == -1.0f);
     }
 
@@ -190,12 +221,14 @@ static void test_build_worklist_all_hot_or_cold() {
     llama_moe_hot_cache_build_worklist(packed, selected, weights, all_cold, 0, 1);
     for (int32_t i = 0; i < capacity; ++i) {
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, i) == -1.0f);
+        require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, i) == -1.0f);
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID, i) >= 0.0f);
     }
 }
 
 int main() {
     test_parse_and_sort();
+    test_parse_branch_counts_and_layer_weight();
     test_select_budget();
     test_bad_schema();
     test_build_worklist_mixed();

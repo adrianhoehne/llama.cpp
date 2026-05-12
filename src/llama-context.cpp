@@ -75,6 +75,8 @@ struct llama_moe_layer_perf_layer {
     uint64_t down_time_us = 0;
 
     std::vector<uint64_t> experts;
+    std::vector<uint64_t> hot_experts;
+    std::vector<uint64_t> cold_experts;
 };
 
 struct llama_moe_layer_perf_local {
@@ -102,6 +104,12 @@ struct llama_moe_layer_perf_local {
         for (auto & layer : layers) {
             if (layer.experts.size() < experts) {
                 layer.experts.resize(experts, 0);
+            }
+            if (layer.hot_experts.size() < experts) {
+                layer.hot_experts.resize(experts, 0);
+            }
+            if (layer.cold_experts.size() < experts) {
+                layer.cold_experts.resize(experts, 0);
             }
         }
     }
@@ -153,6 +161,8 @@ struct llama_moe_layer_perf_local {
             layer.up_time_us = 0;
             layer.down_time_us = 0;
             std::fill(layer.experts.begin(), layer.experts.end(), 0);
+            std::fill(layer.hot_experts.begin(), layer.hot_experts.end(), 0);
+            std::fill(layer.cold_experts.begin(), layer.cold_experts.end(), 0);
         }
 
         updates = 0;
@@ -179,6 +189,19 @@ struct llama_moe_layer_perf_local {
 
         add_locked(layers[layer].experts[expert], 1);
         add_locked(layers[layer].expert_hits_total, 1);
+    }
+
+    void add_branch_expert_locked(uint32_t layer, uint32_t expert, bool hot) {
+        if (layer >= layers.size()) {
+            return;
+        }
+
+        auto & counts = hot ? layers[layer].hot_experts : layers[layer].cold_experts;
+        if (expert >= counts.size()) {
+            return;
+        }
+
+        add_locked(counts[expert], 1);
     }
 };
 
@@ -227,6 +250,10 @@ static bool llama_moe_is_topk_node(const char * name) {
 
 static bool llama_moe_is_hot_ids_node(const char * name) {
     return llama_moe_name_contains(name, "ffn_moe_hot_ids_compact-");
+}
+
+static bool llama_moe_is_hot_expert_ids_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_expert_ids_compact-");
 }
 
 static bool llama_moe_is_cold_ids_node(const char * name) {
@@ -314,6 +341,7 @@ static bool llama_moe_is_merge_node(const char * name) {
 
 static bool llama_moe_is_hot_gather_scatter_node(const char * name) {
     return llama_moe_name_contains(name, "ffn_moe_hot_ids_compact-") ||
+           llama_moe_name_contains(name, "ffn_moe_hot_expert_ids_compact-") ||
            llama_moe_name_contains(name, "ffn_moe_hot_src_slots-") ||
            llama_moe_name_contains(name, "ffn_moe_hot_token_ids-") ||
            llama_moe_name_contains(name, "ffn_moe_hot_weights_compact-") ||
@@ -449,6 +477,46 @@ static void llama_moe_layer_perf_count_compact_ids_locked(uint32_t layer, ggml_t
     }
 }
 
+static void llama_moe_layer_perf_count_branch_experts_locked(uint32_t layer, ggml_tensor * t, bool hot) {
+    if (t == nullptr || layer >= g_llama_moe_layer_perf.layers.size()) {
+        return;
+    }
+
+    const int64_t n_ids = ggml_nelements(t);
+    if (n_ids <= 0) {
+        return;
+    }
+
+    if (t->type == GGML_TYPE_I32) {
+        std::vector<int32_t> ids(n_ids);
+        ggml_backend_tensor_get(
+            t,
+            ids.data(),
+            0,
+            ids.size() * sizeof(int32_t));
+
+        for (int32_t id : ids) {
+            if (id >= 0 && (uint32_t) id < g_llama_moe_layer_perf.n_expert) {
+                g_llama_moe_layer_perf.add_branch_expert_locked(layer, (uint32_t) id, hot);
+            }
+        }
+    } else if (t->type == GGML_TYPE_F32) {
+        std::vector<float> ids(n_ids);
+        ggml_backend_tensor_get(
+            t,
+            ids.data(),
+            0,
+            ids.size() * sizeof(float));
+
+        for (float idf : ids) {
+            const int32_t id = (int32_t) (idf + 0.5f);
+            if (idf >= 0.0f && id >= 0 && (uint32_t) id < g_llama_moe_layer_perf.n_expert) {
+                g_llama_moe_layer_perf.add_branch_expert_locked(layer, (uint32_t) id, hot);
+            }
+        }
+    }
+}
+
 static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
@@ -543,8 +611,11 @@ static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_
         llama_moe_layer_perf_count_topk_locked((uint32_t) layer, t);
     } else if (llama_moe_is_hot_ids_node(name)) {
         llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, true);
+    } else if (llama_moe_is_hot_expert_ids_node(name)) {
+        llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, true);
     } else if (llama_moe_is_cold_ids_node(name)) {
         llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, false);
+        llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, false);
     }
 
     return true;
@@ -1409,25 +1480,37 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         out << "\"parallel_overlap_estimate_per_call_us\":" << parallel_overlap_estimate_per_call << ",";
         out << "\"expert_matmul_time_per_call_us\":" << expert_matmul_per_call << ",";
         out << "\"total_moe_time_per_call_us\":" << total_moe_per_call << ",";
-        out << "\"experts\":[";
 
-        bool first_expert = true;
+        const auto write_expert_counts = [&](const std::vector<uint64_t> & counts) {
+            out << "[";
 
-        for (size_t ex = 0; ex < layer.experts.size(); ++ex) {
-            if (layer.experts[ex] == 0) {
-                continue;
+            bool first_expert = true;
+
+            for (size_t ex = 0; ex < counts.size(); ++ex) {
+                if (counts[ex] == 0) {
+                    continue;
+                }
+
+                if (!first_expert) {
+                    out << ",";
+                }
+
+                first_expert = false;
+
+                out << "[" << ex << "," << counts[ex] << "]";
             }
 
-            if (!first_expert) {
-                out << ",";
-            }
+            out << "]";
+        };
 
-            first_expert = false;
+        out << "\"experts\":";
+        write_expert_counts(layer.experts);
+        out << ",\"hot_experts\":";
+        write_expert_counts(layer.hot_experts);
+        out << ",\"cold_experts\":";
+        write_expert_counts(layer.cold_experts);
 
-            out << "[" << ex << "," << layer.experts[ex] << "]";
-        }
-
-        out << "]}";
+        out << "}";
     }
 
     out << "]}";

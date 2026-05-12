@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -153,21 +154,75 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
         if (!layer.is_object() || !layer.contains("layer") || !layer["layer"].is_number_unsigned()) {
             throw std::runtime_error("--moe-hot-cache layer entries must contain an unsigned layer id");
         }
-        if (!layer.contains("experts") || !layer["experts"].is_array()) {
+
+        const uint32_t il = layer["layer"].get<uint32_t>();
+        std::unordered_map<uint32_t, uint64_t> counts_by_expert;
+
+        const auto add_expert_counts = [&](const char * field_name) {
+            const auto it = layer.find(field_name);
+            if (it == layer.end()) {
+                return false;
+            }
+            if (!it->is_array()) {
+                throw std::runtime_error(std::string("--moe-hot-cache ") + field_name + " must be an array");
+            }
+
+            for (const auto & expert : *it) {
+                if (!expert.is_array() || expert.size() != 2 ||
+                    !expert[0].is_number_unsigned() || !expert[1].is_number_unsigned()) {
+                    throw std::runtime_error(std::string("--moe-hot-cache ") + field_name + " must be [expert_id, hit_count] arrays");
+                }
+
+                const uint64_t hit_count = expert[1].get<uint64_t>();
+                if (hit_count == 0) {
+                    continue;
+                }
+
+                const uint32_t expert_id = expert[0].get<uint32_t>();
+                auto & count = counts_by_expert[expert_id];
+                if (count > std::numeric_limits<uint64_t>::max() - hit_count) {
+                    count = std::numeric_limits<uint64_t>::max();
+                } else {
+                    count += hit_count;
+                }
+            }
+
+            return true;
+        };
+
+        const bool has_branch_counts =
+            add_expert_counts("hot_experts") |
+            add_expert_counts("cold_experts");
+
+        if (!has_branch_counts && !add_expert_counts("experts")) {
             continue;
         }
 
-        const uint32_t il = layer["layer"].get<uint32_t>();
-        for (const auto & expert : layer["experts"]) {
-            if (!expert.is_array() || expert.size() != 2 ||
-                !expert[0].is_number_unsigned() || !expert[1].is_number_unsigned()) {
-                throw std::runtime_error("--moe-hot-cache experts must be [expert_id, hit_count] arrays");
+        double layer_weight = 1.0;
+        const double cold_slots_per_call = layer.value("cold_slots_per_call", 0.0);
+        if (cold_slots_per_call > 0.0) {
+            double wait_per_call = layer.value("parallel_join_wait_time_per_call_us", 0.0);
+            if (wait_per_call <= 0.0) {
+                const double cold_lane_per_call = layer.value("parallel_cold_lane_wall_time_per_call_us", 0.0);
+                const double hot_lane_per_call  = layer.value("parallel_hot_lane_wall_time_per_call_us", 0.0);
+                wait_per_call = std::max(0.0, cold_lane_per_call - hot_lane_per_call);
             }
-            const uint64_t hit_count = expert[1].get<uint64_t>();
+
+            if (wait_per_call > 0.0) {
+                layer_weight = std::max(1.0, wait_per_call / cold_slots_per_call);
+            }
+        }
+
+        for (const auto & [expert, hit_count] : counts_by_expert) {
             if (hit_count == 0) {
                 continue;
             }
-            result.push_back({ il, expert[0].get<uint32_t>(), hit_count });
+
+            const long double weighted = (long double) hit_count * (long double) layer_weight;
+            const uint64_t score = weighted >= (long double) std::numeric_limits<uint64_t>::max()
+                ? std::numeric_limits<uint64_t>::max()
+                : std::max<uint64_t>(1, (uint64_t) (weighted + 0.5L));
+            result.push_back({ il, expert, score });
         }
     }
 
@@ -436,6 +491,7 @@ void llama_moe_hot_cache_build_worklist(
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, slot, float(dummy_src_slot));
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, slot, 0.0f);
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   slot, 0.0f);
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, slot, -1.0f);
     }
 
     int32_t hot_slot = 0;
@@ -456,6 +512,7 @@ void llama_moe_hot_cache_build_worklist(
                 set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT,  hot_slot, float(src_slot));
                 set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID,  hot_slot, float(token));
                 set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT,    hot_slot, weight);
+                set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, hot_slot, float(expert));
                 ++hot_slot;
             } else {
                 set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,       cold_slot, float(expert));
