@@ -777,6 +777,7 @@ struct ggml_backend_sched_split {
 struct ggml_backend_sched_moe_hot_cache_parallel_region_info {
     int32_t layer;
     int mode;
+    int64_t max_slots;
 
     struct ggml_tensor * hot_count;
     struct ggml_tensor * cold_count;
@@ -2010,6 +2011,25 @@ static int64_t ggml_backend_sched_read_f32_count(
     return (int64_t) (value + 0.5f);
 }
 
+static int64_t ggml_backend_sched_moe_parallel_auto_min_slots() {
+    static const int64_t value = []() {
+        const char * env = getenv("LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS");
+        if (env == nullptr || env[0] == '\0') {
+            return int64_t(64);
+        }
+
+        char * end = nullptr;
+        const long long parsed = strtoll(env, &end, 10);
+        if (end == env || parsed < 0) {
+            return int64_t(64);
+        }
+
+        return (int64_t) parsed;
+    }();
+
+    return value;
+}
+
 static bool ggml_backend_sched_zero_tensor(struct ggml_tensor * tensor) {
     if (tensor == nullptr || tensor->buffer == nullptr || !ggml_is_contiguous(tensor)) {
         return false;
@@ -2025,6 +2045,17 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
         bool & serial_fallback) {
     serial_fallback = false;
 
+    if (region.mode != 2) {
+        const int64_t min_slots = ggml_backend_sched_moe_parallel_auto_min_slots();
+        if (min_slots > 0 && region.max_slots >= 0 && region.max_slots < min_slots) {
+            if (!ggml_backend_sched_moe_parallel_fail_or_fallback(sched, region, "parallel region below auto slot threshold")) {
+                return GGML_STATUS_FAILED;
+            }
+            serial_fallback = true;
+            return GGML_STATUS_SUCCESS;
+        }
+    }
+
     const int64_t hot_count = ggml_backend_sched_read_f32_count(sched, region.hot_count);
     const int64_t cold_count = ggml_backend_sched_read_f32_count(sched, region.cold_count);
 
@@ -2034,6 +2065,17 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
         }
         serial_fallback = true;
         return GGML_STATUS_SUCCESS;
+    }
+
+    if (region.mode != 2 && hot_count > 0 && cold_count > 0) {
+        const int64_t min_slots = ggml_backend_sched_moe_parallel_auto_min_slots();
+        if (hot_count + cold_count < min_slots) {
+            if (!ggml_backend_sched_moe_parallel_fail_or_fallback(sched, region, "parallel region below auto slot threshold")) {
+                return GGML_STATUS_FAILED;
+            }
+            serial_fallback = true;
+            return GGML_STATUS_SUCCESS;
+        }
     }
 
     ggml_backend_sched_moe_hot_cache_parallel_perf perf = {};
@@ -2053,7 +2095,6 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
     std::atomic<int64_t> cold_lane_end_us(0);
 
     std::thread cold_thread;
-    bool cold_inputs_prepared = false;
 
     if (cold_count > 0) {
         perf.parallel_cold_launches = 1;
@@ -2064,7 +2105,18 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
         if (ec != GGML_STATUS_SUCCESS) {
             return ec;
         }
-        cold_inputs_prepared = true;
+
+        cold_thread = std::thread([sched, &region, &cold_state, &cold_status, &cold_lane_end_us]() {
+            enum ggml_status ec = ggml_backend_sched_compute_split_range(
+                    sched,
+                    region.cold_split_begin,
+                    region.cold_split_end,
+                    cold_state,
+                    /* use_callback = */ false,
+                    /* first_inputs_prepared = */ true);
+            cold_lane_end_us.store(ggml_time_us(), std::memory_order_relaxed);
+            cold_status.store((int) ec, std::memory_order_relaxed);
+        });
     } else {
         perf.parallel_cold_skips_zero = 1;
     }
@@ -2083,20 +2135,6 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
         }
     } else {
         perf.parallel_hot_skips_zero = 1;
-    }
-
-    if (cold_inputs_prepared) {
-        cold_thread = std::thread([sched, &region, &cold_state, &cold_status, &cold_lane_end_us]() {
-            enum ggml_status ec = ggml_backend_sched_compute_split_range(
-                    sched,
-                    region.cold_split_begin,
-                    region.cold_split_end,
-                    cold_state,
-                    /* use_callback = */ false,
-                    /* first_inputs_prepared = */ true);
-            cold_lane_end_us.store(ggml_time_us(), std::memory_order_relaxed);
-            cold_status.store((int) ec, std::memory_order_relaxed);
-        });
     }
 
     if (hot_count > 0) {
@@ -2440,6 +2478,7 @@ void ggml_backend_sched_moe_hot_cache_parallel_region(
         ggml_backend_sched_t sched,
         int32_t layer,
         int mode,
+        int64_t max_slots,
         struct ggml_tensor * hot_count,
         struct ggml_tensor * cold_count,
         struct ggml_tensor * hot_start,
@@ -2458,6 +2497,7 @@ void ggml_backend_sched_moe_hot_cache_parallel_region(
     ggml_backend_sched_moe_hot_cache_parallel_region_info region = {};
     region.layer = layer;
     region.mode = mode;
+    region.max_slots = max_slots;
     region.hot_count = hot_count;
     region.cold_count = cold_count;
     region.hot_start = hot_start;

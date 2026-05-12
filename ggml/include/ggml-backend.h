@@ -371,6 +371,7 @@ extern "C" {
                                       ggml_backend_sched_t sched,
                                       int32_t layer,
                                       int mode,
+                                      int64_t max_slots,
                                       struct ggml_tensor * hot_count,
                                       struct ggml_tensor * cold_count,
                                       struct ggml_tensor * hot_start,

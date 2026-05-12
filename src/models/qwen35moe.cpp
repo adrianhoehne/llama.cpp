@@ -18,6 +18,25 @@ static int llama_qwen35moe_hot_cache_parallel_mode() {
     return 1;
 }
 
+static int64_t llama_qwen35moe_hot_cache_parallel_min_slots() {
+    static const int64_t value = []() {
+        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS");
+        if (env == nullptr || env[0] == '\0') {
+            return int64_t(64);
+        }
+
+        char * end = nullptr;
+        const long long parsed = std::strtoll(env, &end, 10);
+        if (end == env || parsed < 0) {
+            return int64_t(64);
+        }
+
+        return (int64_t) parsed;
+    }();
+
+    return value;
+}
+
 static void llama_qwen35moe_hot_cache_build_worklist_op(
         ggml_tensor * dst,
         const ggml_tensor * src0,
@@ -751,11 +770,15 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         cb(out_slots, "ffn_moe_hot_cold_slots", il);
 
         const int parallel_mode = llama_qwen35moe_hot_cache_parallel_mode();
-        if (parallel_mode != 0 && !cparams.warmup) {
+        const int64_t parallel_min_slots = llama_qwen35moe_hot_cache_parallel_min_slots();
+        const bool annotate_parallel_region =
+            parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
+        if (parallel_mode != 0 && !cparams.warmup && annotate_parallel_region) {
             ggml_backend_sched_moe_hot_cache_parallel_region(
                     sched,
                     il,
                     parallel_mode,
+                    capacity,
                     hot_count,
                     cold_count,
                     hot_inputs,
