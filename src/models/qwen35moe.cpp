@@ -598,26 +598,18 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
     cb(logits, "ffn_moe_logits", il);
 
-    ggml_tensor * probs = ggml_soft_max(ctx0, logits);
-    cb(probs, "ffn_moe_probs", il);
-
-    ggml_tensor * selected_experts = ggml_argsort_top_k(ctx0, probs, n_moe_slots);
+    ggml_tensor * selected_experts = ggml_argsort_top_k(ctx0, logits, n_moe_slots);
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
-    ggml_tensor * probs_rows = ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens);
-    ggml_tensor * weights = ggml_get_rows(ctx0, probs_rows, selected_experts);
+    ggml_tensor * logits_rows = ggml_reshape_3d(ctx0, logits, 1, n_expert, n_tokens);
+    ggml_tensor * weights = ggml_get_rows(ctx0, logits_rows, selected_experts);
     cb(weights, "ffn_moe_weights", il);
 
     weights = ggml_reshape_2d(ctx0, weights, n_moe_slots, n_tokens);
-
-    ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights);
-    cb(weights_sum, "ffn_moe_weights_sum", il);
-
-    weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
-    cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
-
-    weights = ggml_div(ctx0, weights, weights_sum);
+    // Top-k after softmax is equivalent to top-k on logits. After the selection,
+    // the original full-softmax denominator cancels during top-k renormalization.
+    weights = ggml_soft_max(ctx0, weights);
     cb(weights, "ffn_moe_weights_norm", il);
 
     weights = ggml_reshape_3d(ctx0, weights, 1, n_moe_slots, n_tokens);
