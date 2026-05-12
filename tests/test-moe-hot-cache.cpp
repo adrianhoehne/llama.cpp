@@ -41,20 +41,25 @@ static void test_parse_branch_counts_and_layer_weight() {
             {
                 "layer": 0,
                 "experts": [[0, 100]],
-                "hot_experts": [[1, 2]],
-                "cold_experts": [[2, 3]],
-                "cold_slots_per_call": 2.0,
-                "parallel_join_wait_time_per_call_us": 10.0
+                "hot_experts": [[1, 10]],
+                "cold_experts": [[2, 10]],
+                "cold_slots_per_call": 1.0,
+                "parallel_join_wait_time_per_call_us": 20.0
             },
-            {"layer": 1, "experts": [[3, 12]]}
+            {
+                "layer": 1,
+                "hot_experts": [[3, 12]],
+                "cold_slots_per_call": 1.0,
+                "parallel_join_wait_time_per_call_us": 10.0
+            }
         ]
     })";
 
     const auto entries = llama_moe_hot_cache_parse_perf_json(json);
     require(entries.size() == 3);
-    require(entries[0].layer == 0 && entries[0].expert == 2 && entries[0].hit_count == 15);
-    require(entries[1].layer == 1 && entries[1].expert == 3 && entries[1].hit_count == 12);
-    require(entries[2].layer == 0 && entries[2].expert == 1 && entries[2].hit_count == 10);
+    require(entries[0].layer == 0 && entries[0].expert == 1 && entries[0].hit_count == 13);
+    require(entries[1].layer == 0 && entries[1].expert == 2 && entries[1].hit_count == 13);
+    require(entries[2].layer == 1 && entries[2].expert == 3 && entries[2].hit_count == 10);
 }
 
 static void test_select_budget() {
