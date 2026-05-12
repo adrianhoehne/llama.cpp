@@ -207,9 +207,17 @@ struct llama_moe_layer_perf_local {
 
 static llama_moe_layer_perf_local g_llama_moe_layer_perf;
 
-static bool llama_moe_layer_perf_is_enabled() {
+static bool llama_moe_layer_perf_env_enabled() {
     const char * env = std::getenv("LLAMA_MOE_LAYER_PERF");
     return env == nullptr || std::strcmp(env, "0") != 0;
+}
+
+static bool llama_moe_layer_perf_is_enabled(const llama_context * ctx) {
+    if (ctx != nullptr && ctx->get_cparams().no_perf) {
+        return false;
+    }
+
+    return llama_moe_layer_perf_env_enabled();
 }
 
 static int llama_moe_parse_layer_from_name(const char * name) {
@@ -518,9 +526,7 @@ static void llama_moe_layer_perf_count_branch_experts_locked(uint32_t layer, ggm
 }
 
 static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_data) {
-    GGML_UNUSED(user_data);
-
-    if (!llama_moe_layer_perf_is_enabled()) {
+    if (!llama_moe_layer_perf_is_enabled(static_cast<const llama_context *>(user_data))) {
         return true;
     }
 
@@ -1319,9 +1325,12 @@ void llama_context::synchronize() {
 
 
 const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
-    GGML_UNUSED(ctx);
-
     static thread_local std::string result;
+
+    if (!llama_moe_layer_perf_is_enabled(ctx)) {
+        result = "{\"enabled\":false,\"schema\":\"llama.cpp.moe_layer_opt_perf.v1\",\"layers\":[]}";
+        return result.c_str();
+    }
 
     std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
 
@@ -3053,7 +3062,7 @@ ggml_status llama_context::graph_compute(
 
     ggml_status status;
 
-    if (llama_moe_layer_perf_is_enabled() && model.hparams.n_expert > 0) {
+    if (llama_moe_layer_perf_is_enabled(this) && model.hparams.n_expert > 0) {
         ggml_backend_sched_set_eval_callback(sched.get(), llama_moe_layer_perf_eval_cb, this);
 
         llama_moe_layer_perf_begin(

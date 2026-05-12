@@ -37,6 +37,16 @@ static int64_t llama_qwen35moe_hot_cache_parallel_min_slots() {
     return value;
 }
 
+static bool llama_qwen35moe_hot_cache_merge_sum_rows() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_MERGE_SUM_ROWS");
+        return env == nullptr || env[0] == '\0' ||
+               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
+    }();
+
+    return enabled;
+}
+
 static void llama_qwen35moe_hot_cache_build_worklist_op(
         ggml_tensor * dst,
         const ggml_tensor * src0,
@@ -820,20 +830,29 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         }
     }
 
-    ggml_tensor * slot_outputs[LLAMA_MAX_EXPERTS] = { nullptr };
-    for (int64_t i = 0; i < n_moe_slots; ++i) {
-        slot_outputs[i] = ggml_view_2d(ctx0, out_slots, n_embd, n_tokens, out_slots->nb[2], i*out_slots->nb[1]);
-        ggml_build_forward_expand(gf, slot_outputs[i]);
-    }
-
-    ggml_tensor * out = slot_outputs[0];
-    for (int64_t i = 1; i < n_moe_slots; ++i) {
-        out = ggml_add(ctx0, out, slot_outputs[i]);
-        ggml_build_forward_expand(gf, out);
-    }
-
-    if (n_moe_slots == 1) {
+    ggml_tensor * out = nullptr;
+    if (n_moe_slots > 1 && llama_qwen35moe_hot_cache_merge_sum_rows()) {
+        out = ggml_permute(ctx0, out_slots, 1, 0, 2, 3);
         out = ggml_cont(ctx0, out);
+        out = ggml_sum_rows(ctx0, out);
+        out = ggml_reshape_2d(ctx0, out, n_embd, n_tokens);
+        ggml_build_forward_expand(gf, out);
+    } else {
+        ggml_tensor * slot_outputs[LLAMA_MAX_EXPERTS] = { nullptr };
+        for (int64_t i = 0; i < n_moe_slots; ++i) {
+            slot_outputs[i] = ggml_view_2d(ctx0, out_slots, n_embd, n_tokens, out_slots->nb[2], i*out_slots->nb[1]);
+            ggml_build_forward_expand(gf, slot_outputs[i]);
+        }
+
+        out = slot_outputs[0];
+        for (int64_t i = 1; i < n_moe_slots; ++i) {
+            out = ggml_add(ctx0, out, slot_outputs[i]);
+            ggml_build_forward_expand(gf, out);
+        }
+
+        if (n_moe_slots == 1) {
+            out = ggml_cont(ctx0, out);
+        }
     }
 
     cb(out, "ffn_moe_out", il);
