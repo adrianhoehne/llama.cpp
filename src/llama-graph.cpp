@@ -1734,12 +1734,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
              ggml_tensor * gate_exps_s,
              ggml_tensor * down_exps_s,
             uint32_t   flags,
-         const char * branch_name) const {
+         const char * branch_name,
+         ggml_backend_t branch_backend) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4;
     ggml_tensor * selected_experts_scale_ids = selected_experts;
     const auto cb_moe = [&](ggml_tensor * t, const char * name) {
+        if (branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, t, branch_backend);
+        }
+
         if (branch_name == nullptr || branch_name[0] == '\0') {
             cb(t, name, il);
             return;

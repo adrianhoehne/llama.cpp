@@ -325,6 +325,18 @@ extern "C" {
         uint64_t parallel_hot_skips_zero;
         uint64_t parallel_cold_skips_zero;
         uint64_t parallel_fallbacks;
+        uint64_t parallel_fallback_incomplete;
+        uint64_t parallel_fallback_count_not_prefix;
+        uint64_t parallel_fallback_bad_split_order;
+        uint64_t parallel_fallback_same_backend;
+        uint64_t parallel_fallback_hot_spans_backends;
+        uint64_t parallel_fallback_cold_spans_backends;
+        uint64_t parallel_fallback_hot_not_cuda;
+        uint64_t parallel_fallback_cold_not_cpu;
+        uint64_t parallel_fallback_count_readback;
+        uint64_t parallel_fallback_threshold;
+        uint64_t parallel_fallback_zero_output;
+        uint64_t parallel_fallback_other;
     };
 
     // Initialize a backend scheduler, backends with low index are given priority over backends with high index

@@ -649,15 +649,25 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         return ggml_view_1d(ctx0, worklist, capacity, field*worklist->nb[1]);
     };
 
-    const auto view_worklist_count = [&](int32_t field) {
-        return ggml_view_1d(ctx0, worklist, 1, field*worklist->nb[1]);
-    };
+    const int parallel_mode = llama_qwen35moe_hot_cache_parallel_mode();
+    const int64_t parallel_min_slots = llama_qwen35moe_hot_cache_parallel_min_slots();
+    const bool annotate_parallel_region =
+        parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
 
-    ggml_tensor * hot_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT);
-    cb(hot_count, "ffn_moe_hot_count", il);
+    ggml_tensor * hot_count = nullptr;
+    ggml_tensor * cold_count = nullptr;
 
-    ggml_tensor * cold_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT);
-    cb(cold_count, "ffn_moe_cold_count", il);
+    if (parallel_mode != 0 && !cparams.warmup && annotate_parallel_region) {
+        const auto view_worklist_count = [&](int32_t field) {
+            return ggml_view_1d(ctx0, worklist, 1, field*worklist->nb[1]);
+        };
+
+        hot_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT);
+        cb(hot_count, "ffn_moe_hot_count", il);
+
+        cold_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT);
+        cb(cold_count, "ffn_moe_cold_count", il);
+    }
 
     ggml_tensor * hot_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID), GGML_TYPE_I32);
     hot_ids = ggml_reshape_2d(ctx0, hot_ids, 1, capacity);
@@ -692,8 +702,12 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         cb(cold_weights, "ffn_moe_cold_weights_compact", il);
     }
 
-    ggml_build_forward_expand(gf, hot_count);
-    ggml_build_forward_expand(gf, cold_count);
+    if (hot_count != nullptr) {
+        ggml_build_forward_expand(gf, hot_count);
+    }
+    if (cold_count != nullptr) {
+        ggml_build_forward_expand(gf, cold_count);
+    }
     ggml_build_forward_expand(gf, hot_ids);
     ggml_build_forward_expand(gf, hot_src_slots);
     ggml_build_forward_expand(gf, hot_token_ids);
@@ -737,8 +751,15 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     ggml_tensor * out_slots = hot_slots;
 
     if (cache.n_hot != cache.n_expert) {
+        ggml_backend_t cold_branch_backend = cparams.warmup ? nullptr : backend_cpu;
+
         ggml_tensor * cold_inputs = ggml_get_rows(ctx0, cur, cold_token_ids);
         cb(cold_inputs, "ffn_moe_cold_inputs", il);
+        // Keep the cold lane on CPU. Otherwise this gather inherits the CUDA activation
+        // backend and the hot/cold parallel region resolves both lanes to CUDA.
+        if (cold_branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, cold_inputs, cold_branch_backend);
+        }
 
         ggml_tensor * cold_out = build_moe_ffn_with_ids(cold_inputs,
                 cold_ids,
@@ -755,25 +776,37 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
                 layer.ffn_gate_exps_s,
                 layer.ffn_down_exps_s,
                 LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS,
-                "cold");
+                "cold",
+                cold_branch_backend);
         cb(cold_out, "ffn_moe_cold_out", il);
 
         ggml_tensor * cold_slots = ggml_scale(ctx0, cold_inputs, 0.0f);
+        if (cold_branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, cold_slots, cold_branch_backend);
+        }
         cold_slots = ggml_pad(ctx0, cold_slots, 0, 1, 0, 0);
+        if (cold_branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, cold_slots, cold_branch_backend);
+        }
         cold_slots = ggml_set_rows(ctx0, cold_slots, cold_out, cold_src_slots);
+        if (cold_branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, cold_slots, cold_branch_backend);
+        }
         cold_slots = ggml_view_2d(ctx0, cold_slots, n_embd, capacity, cold_slots->nb[1], 0);
+        if (cold_branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, cold_slots, cold_branch_backend);
+        }
         cold_slots = ggml_reshape_3d(ctx0, cold_slots, n_embd, n_moe_slots, n_tokens);
         cb(cold_slots, "ffn_moe_cold_slots", il);
+        if (cold_branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, cold_slots, cold_branch_backend);
+        }
         ggml_build_forward_expand(gf, cold_slots);
 
         out_slots = ggml_add(ctx0, hot_slots, cold_slots);
         cb(out_slots, "ffn_moe_hot_cold_slots", il);
 
-        const int parallel_mode = llama_qwen35moe_hot_cache_parallel_mode();
-        const int64_t parallel_min_slots = llama_qwen35moe_hot_cache_parallel_min_slots();
-        const bool annotate_parallel_region =
-            parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
-        if (parallel_mode != 0 && !cparams.warmup && annotate_parallel_region) {
+        if (hot_count != nullptr && cold_count != nullptr) {
             ggml_backend_sched_moe_hot_cache_parallel_region(
                     sched,
                     il,

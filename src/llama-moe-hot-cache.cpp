@@ -436,8 +436,6 @@ void llama_moe_hot_cache_build_worklist(
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, slot, float(dummy_src_slot));
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, slot, 0.0f);
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   slot, 0.0f);
-        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT,     slot, 0.0f);
-        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT,    slot, 0.0f);
     }
 
     int32_t hot_slot = 0;

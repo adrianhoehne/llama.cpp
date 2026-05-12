@@ -57,6 +57,18 @@ struct llama_moe_layer_perf_layer {
     uint64_t parallel_hot_skips_zero = 0;
     uint64_t parallel_cold_skips_zero = 0;
     uint64_t parallel_fallbacks = 0;
+    uint64_t parallel_fallback_incomplete = 0;
+    uint64_t parallel_fallback_count_not_prefix = 0;
+    uint64_t parallel_fallback_bad_split_order = 0;
+    uint64_t parallel_fallback_same_backend = 0;
+    uint64_t parallel_fallback_hot_spans_backends = 0;
+    uint64_t parallel_fallback_cold_spans_backends = 0;
+    uint64_t parallel_fallback_hot_not_cuda = 0;
+    uint64_t parallel_fallback_cold_not_cpu = 0;
+    uint64_t parallel_fallback_count_readback = 0;
+    uint64_t parallel_fallback_threshold = 0;
+    uint64_t parallel_fallback_zero_output = 0;
+    uint64_t parallel_fallback_other = 0;
 
     uint64_t gate_time_us = 0;
     uint64_t up_time_us = 0;
@@ -125,6 +137,18 @@ struct llama_moe_layer_perf_local {
             layer.parallel_hot_skips_zero = 0;
             layer.parallel_cold_skips_zero = 0;
             layer.parallel_fallbacks = 0;
+            layer.parallel_fallback_incomplete = 0;
+            layer.parallel_fallback_count_not_prefix = 0;
+            layer.parallel_fallback_bad_split_order = 0;
+            layer.parallel_fallback_same_backend = 0;
+            layer.parallel_fallback_hot_spans_backends = 0;
+            layer.parallel_fallback_cold_spans_backends = 0;
+            layer.parallel_fallback_hot_not_cuda = 0;
+            layer.parallel_fallback_cold_not_cpu = 0;
+            layer.parallel_fallback_count_readback = 0;
+            layer.parallel_fallback_threshold = 0;
+            layer.parallel_fallback_zero_output = 0;
+            layer.parallel_fallback_other = 0;
             layer.gate_time_us = 0;
             layer.up_time_us = 0;
             layer.down_time_us = 0;
@@ -561,6 +585,18 @@ static void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t s
         g_llama_moe_layer_perf.add_locked(dst.parallel_hot_skips_zero, metric.parallel_hot_skips_zero);
         g_llama_moe_layer_perf.add_locked(dst.parallel_cold_skips_zero, metric.parallel_cold_skips_zero);
         g_llama_moe_layer_perf.add_locked(dst.parallel_fallbacks, metric.parallel_fallbacks);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_incomplete, metric.parallel_fallback_incomplete);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_count_not_prefix, metric.parallel_fallback_count_not_prefix);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_bad_split_order, metric.parallel_fallback_bad_split_order);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_same_backend, metric.parallel_fallback_same_backend);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_hot_spans_backends, metric.parallel_fallback_hot_spans_backends);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_cold_spans_backends, metric.parallel_fallback_cold_spans_backends);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_hot_not_cuda, metric.parallel_fallback_hot_not_cuda);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_cold_not_cpu, metric.parallel_fallback_cold_not_cpu);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_count_readback, metric.parallel_fallback_count_readback);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_threshold, metric.parallel_fallback_threshold);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_zero_output, metric.parallel_fallback_zero_output);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_other, metric.parallel_fallback_other);
     }
 }
 
@@ -1338,6 +1374,18 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         out << "\"parallel_hot_skips_zero\":" << layer.parallel_hot_skips_zero << ",";
         out << "\"parallel_cold_skips_zero\":" << layer.parallel_cold_skips_zero << ",";
         out << "\"parallel_fallbacks\":" << layer.parallel_fallbacks << ",";
+        out << "\"parallel_fallback_incomplete\":" << layer.parallel_fallback_incomplete << ",";
+        out << "\"parallel_fallback_count_not_prefix\":" << layer.parallel_fallback_count_not_prefix << ",";
+        out << "\"parallel_fallback_bad_split_order\":" << layer.parallel_fallback_bad_split_order << ",";
+        out << "\"parallel_fallback_same_backend\":" << layer.parallel_fallback_same_backend << ",";
+        out << "\"parallel_fallback_hot_spans_backends\":" << layer.parallel_fallback_hot_spans_backends << ",";
+        out << "\"parallel_fallback_cold_spans_backends\":" << layer.parallel_fallback_cold_spans_backends << ",";
+        out << "\"parallel_fallback_hot_not_cuda\":" << layer.parallel_fallback_hot_not_cuda << ",";
+        out << "\"parallel_fallback_cold_not_cpu\":" << layer.parallel_fallback_cold_not_cpu << ",";
+        out << "\"parallel_fallback_count_readback\":" << layer.parallel_fallback_count_readback << ",";
+        out << "\"parallel_fallback_threshold\":" << layer.parallel_fallback_threshold << ",";
+        out << "\"parallel_fallback_zero_output\":" << layer.parallel_fallback_zero_output << ",";
+        out << "\"parallel_fallback_other\":" << layer.parallel_fallback_other << ",";
         out << "\"gate_time_us\":" << layer.gate_time_us << ",";
         out << "\"up_time_us\":" << layer.up_time_us << ",";
         out << "\"down_time_us\":" << layer.down_time_us << ",";
