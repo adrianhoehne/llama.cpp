@@ -2,7 +2,21 @@
 #include "llama-memory-recurrent.h"
 #include "llama-moe-hot-cache.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace {
+
+static int llama_qwen35moe_hot_cache_parallel_mode() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL");
+    if (env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0) {
+        return 0;
+    }
+    if (std::strcmp(env, "force") == 0) {
+        return 2;
+    }
+    return 1;
+}
 
 static void llama_qwen35moe_hot_cache_build_worklist_op(
         ggml_tensor * dst,
@@ -607,9 +621,24 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
             const_cast<llama_moe_hot_cache_layer *>(&cache));
     cb(worklist, "ffn_moe_worklist", il);
 
+    if (capacity == 0) {
+        cb(cur, "ffn_moe_out", il);
+        return cur;
+    }
+
     const auto view_worklist_field = [&](int32_t field) {
         return ggml_view_1d(ctx0, worklist, capacity, field*worklist->nb[1]);
     };
+
+    const auto view_worklist_count = [&](int32_t field) {
+        return ggml_view_1d(ctx0, worklist, 1, field*worklist->nb[1]);
+    };
+
+    ggml_tensor * hot_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT);
+    cb(hot_count, "ffn_moe_hot_count", il);
+
+    ggml_tensor * cold_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT);
+    cb(cold_count, "ffn_moe_cold_count", il);
 
     ggml_tensor * hot_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID), GGML_TYPE_I32);
     hot_ids = ggml_reshape_2d(ctx0, hot_ids, 1, capacity);
@@ -623,6 +652,39 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
 
     ggml_tensor * hot_weights = ggml_reshape_3d(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT), 1, 1, capacity);
     cb(hot_weights, "ffn_moe_hot_weights_compact", il);
+
+    ggml_tensor * cold_ids = nullptr;
+    ggml_tensor * cold_src_slots = nullptr;
+    ggml_tensor * cold_token_ids = nullptr;
+    ggml_tensor * cold_weights = nullptr;
+
+    if (cache.n_hot != cache.n_expert) {
+        cold_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID), GGML_TYPE_I32);
+        cold_ids = ggml_reshape_2d(ctx0, cold_ids, 1, capacity);
+        cb(cold_ids, "ffn_moe_cold_ids_compact", il);
+
+        cold_src_slots = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT), GGML_TYPE_I32);
+        cb(cold_src_slots, "ffn_moe_cold_src_slots", il);
+
+        cold_token_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID), GGML_TYPE_I32);
+        cb(cold_token_ids, "ffn_moe_cold_token_ids", il);
+
+        cold_weights = ggml_reshape_3d(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT), 1, 1, capacity);
+        cb(cold_weights, "ffn_moe_cold_weights_compact", il);
+    }
+
+    ggml_build_forward_expand(gf, hot_count);
+    ggml_build_forward_expand(gf, cold_count);
+    ggml_build_forward_expand(gf, hot_ids);
+    ggml_build_forward_expand(gf, hot_src_slots);
+    ggml_build_forward_expand(gf, hot_token_ids);
+    ggml_build_forward_expand(gf, hot_weights);
+    if (cold_ids != nullptr) {
+        ggml_build_forward_expand(gf, cold_ids);
+        ggml_build_forward_expand(gf, cold_src_slots);
+        ggml_build_forward_expand(gf, cold_token_ids);
+        ggml_build_forward_expand(gf, cold_weights);
+    }
 
     ggml_tensor * hot_inputs = ggml_get_rows(ctx0, cur, hot_token_ids);
     cb(hot_inputs, "ffn_moe_hot_inputs", il);
@@ -651,23 +713,11 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     hot_slots = ggml_view_2d(ctx0, hot_slots, n_embd, capacity, hot_slots->nb[1], 0);
     hot_slots = ggml_reshape_3d(ctx0, hot_slots, n_embd, n_moe_slots, n_tokens);
     cb(hot_slots, "ffn_moe_hot_slots", il);
+    ggml_build_forward_expand(gf, hot_slots);
 
     ggml_tensor * out_slots = hot_slots;
 
     if (cache.n_hot != cache.n_expert) {
-        ggml_tensor * cold_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID), GGML_TYPE_I32);
-        cold_ids = ggml_reshape_2d(ctx0, cold_ids, 1, capacity);
-        cb(cold_ids, "ffn_moe_cold_ids_compact", il);
-
-        ggml_tensor * cold_src_slots = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT), GGML_TYPE_I32);
-        cb(cold_src_slots, "ffn_moe_cold_src_slots", il);
-
-        ggml_tensor * cold_token_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID), GGML_TYPE_I32);
-        cb(cold_token_ids, "ffn_moe_cold_token_ids", il);
-
-        ggml_tensor * cold_weights = ggml_reshape_3d(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT), 1, 1, capacity);
-        cb(cold_weights, "ffn_moe_cold_weights_compact", il);
-
         ggml_tensor * cold_inputs = ggml_get_rows(ctx0, cur, cold_token_ids);
         cb(cold_inputs, "ffn_moe_cold_inputs", il);
 
@@ -695,9 +745,27 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         cold_slots = ggml_view_2d(ctx0, cold_slots, n_embd, capacity, cold_slots->nb[1], 0);
         cold_slots = ggml_reshape_3d(ctx0, cold_slots, n_embd, n_moe_slots, n_tokens);
         cb(cold_slots, "ffn_moe_cold_slots", il);
+        ggml_build_forward_expand(gf, cold_slots);
 
         out_slots = ggml_add(ctx0, hot_slots, cold_slots);
         cb(out_slots, "ffn_moe_hot_cold_slots", il);
+
+        const int parallel_mode = llama_qwen35moe_hot_cache_parallel_mode();
+        if (parallel_mode != 0 && !cparams.warmup) {
+            ggml_backend_sched_moe_hot_cache_parallel_region(
+                    sched,
+                    il,
+                    parallel_mode,
+                    hot_count,
+                    cold_count,
+                    hot_inputs,
+                    hot_slots,
+                    hot_slots,
+                    cold_inputs,
+                    cold_slots,
+                    cold_slots,
+                    out_slots);
+        }
     }
 
     ggml_tensor * slot_outputs[LLAMA_MAX_EXPERTS] = { nullptr };

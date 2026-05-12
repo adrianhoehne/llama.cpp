@@ -313,6 +313,20 @@ extern "C" {
     //
     typedef bool (*ggml_backend_sched_eval_callback)(struct ggml_tensor * t, bool ask, void * user_data);
 
+    struct ggml_backend_sched_moe_hot_cache_parallel_perf {
+        int32_t  layer;
+        uint64_t parallel_region_wall_time_us;
+        uint64_t parallel_hot_lane_wall_time_us;
+        uint64_t parallel_cold_lane_wall_time_us;
+        uint64_t parallel_join_wait_time_us;
+        uint64_t parallel_overlap_estimate_us;
+        uint64_t parallel_hot_launches;
+        uint64_t parallel_cold_launches;
+        uint64_t parallel_hot_skips_zero;
+        uint64_t parallel_cold_skips_zero;
+        uint64_t parallel_fallbacks;
+    };
+
     // Initialize a backend scheduler, backends with low index are given priority over backends with high index
     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel, bool op_offload);
     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
@@ -350,6 +364,26 @@ extern "C" {
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
+
+    // Experimental: annotate one Qwen3.5 MoE hot-cache fork/join region.
+    // mode: 0 = off, 1 = auto, 2 = force.
+    GGML_API void                 ggml_backend_sched_moe_hot_cache_parallel_region(
+                                      ggml_backend_sched_t sched,
+                                      int32_t layer,
+                                      int mode,
+                                      struct ggml_tensor * hot_count,
+                                      struct ggml_tensor * cold_count,
+                                      struct ggml_tensor * hot_start,
+                                      struct ggml_tensor * hot_end,
+                                      struct ggml_tensor * hot_output,
+                                      struct ggml_tensor * cold_start,
+                                      struct ggml_tensor * cold_end,
+                                      struct ggml_tensor * cold_output,
+                                      struct ggml_tensor * join);
+    GGML_API int                  ggml_backend_sched_get_moe_hot_cache_parallel_perf(
+                                      ggml_backend_sched_t sched,
+                                      struct ggml_backend_sched_moe_hot_cache_parallel_perf * out,
+                                      int max_entries);
 
     //
     // Meta backend

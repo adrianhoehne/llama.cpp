@@ -47,6 +47,17 @@ struct llama_moe_layer_perf_layer {
     uint64_t hot_gather_scatter_time_us = 0;
     uint64_t cold_gather_scatter_time_us = 0;
 
+    uint64_t parallel_region_wall_time_us = 0;
+    uint64_t parallel_hot_lane_wall_time_us = 0;
+    uint64_t parallel_cold_lane_wall_time_us = 0;
+    uint64_t parallel_join_wait_time_us = 0;
+    uint64_t parallel_overlap_estimate_us = 0;
+    uint64_t parallel_hot_launches = 0;
+    uint64_t parallel_cold_launches = 0;
+    uint64_t parallel_hot_skips_zero = 0;
+    uint64_t parallel_cold_skips_zero = 0;
+    uint64_t parallel_fallbacks = 0;
+
     uint64_t gate_time_us = 0;
     uint64_t up_time_us = 0;
     uint64_t down_time_us = 0;
@@ -104,6 +115,16 @@ struct llama_moe_layer_perf_local {
             layer.merge_time_us = 0;
             layer.hot_gather_scatter_time_us = 0;
             layer.cold_gather_scatter_time_us = 0;
+            layer.parallel_region_wall_time_us = 0;
+            layer.parallel_hot_lane_wall_time_us = 0;
+            layer.parallel_cold_lane_wall_time_us = 0;
+            layer.parallel_join_wait_time_us = 0;
+            layer.parallel_overlap_estimate_us = 0;
+            layer.parallel_hot_launches = 0;
+            layer.parallel_cold_launches = 0;
+            layer.parallel_hot_skips_zero = 0;
+            layer.parallel_cold_skips_zero = 0;
+            layer.parallel_fallbacks = 0;
             layer.gate_time_us = 0;
             layer.up_time_us = 0;
             layer.down_time_us = 0;
@@ -503,6 +524,44 @@ static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_
     }
 
     return true;
+}
+
+static void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t sched) {
+    if (sched == nullptr) {
+        return;
+    }
+
+    const int n_metrics = ggml_backend_sched_get_moe_hot_cache_parallel_perf(sched, nullptr, 0);
+    if (n_metrics <= 0) {
+        return;
+    }
+
+    std::vector<ggml_backend_sched_moe_hot_cache_parallel_perf> metrics(n_metrics);
+    ggml_backend_sched_get_moe_hot_cache_parallel_perf(sched, metrics.data(), n_metrics);
+
+    std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
+
+    if (!g_llama_moe_layer_perf.active) {
+        return;
+    }
+
+    for (const auto & metric : metrics) {
+        if (metric.layer < 0 || (uint32_t) metric.layer >= g_llama_moe_layer_perf.layers.size()) {
+            continue;
+        }
+
+        auto & dst = g_llama_moe_layer_perf.layers[metric.layer];
+        g_llama_moe_layer_perf.add_locked(dst.parallel_region_wall_time_us, metric.parallel_region_wall_time_us);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_hot_lane_wall_time_us, metric.parallel_hot_lane_wall_time_us);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_cold_lane_wall_time_us, metric.parallel_cold_lane_wall_time_us);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_join_wait_time_us, metric.parallel_join_wait_time_us);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_overlap_estimate_us, metric.parallel_overlap_estimate_us);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_hot_launches, metric.parallel_hot_launches);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_cold_launches, metric.parallel_cold_launches);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_hot_skips_zero, metric.parallel_hot_skips_zero);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_cold_skips_zero, metric.parallel_cold_skips_zero);
+        g_llama_moe_layer_perf.add_locked(dst.parallel_fallbacks, metric.parallel_fallbacks);
+    }
 }
 
 //
@@ -1221,6 +1280,21 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         const double cold_gather_scatter_per_call =
             layer.calls > 0 ? (double) layer.cold_gather_scatter_time_us / (double) layer.calls : 0.0;
 
+        const double parallel_region_wall_per_call =
+            layer.calls > 0 ? (double) layer.parallel_region_wall_time_us / (double) layer.calls : 0.0;
+
+        const double parallel_hot_lane_wall_per_call =
+            layer.calls > 0 ? (double) layer.parallel_hot_lane_wall_time_us / (double) layer.calls : 0.0;
+
+        const double parallel_cold_lane_wall_per_call =
+            layer.calls > 0 ? (double) layer.parallel_cold_lane_wall_time_us / (double) layer.calls : 0.0;
+
+        const double parallel_join_wait_per_call =
+            layer.calls > 0 ? (double) layer.parallel_join_wait_time_us / (double) layer.calls : 0.0;
+
+        const double parallel_overlap_estimate_per_call =
+            layer.calls > 0 ? (double) layer.parallel_overlap_estimate_us / (double) layer.calls : 0.0;
+
         const double hot_slots_per_call =
             layer.hot_worklist_calls > 0 ? (double) layer.hot_slots_total / (double) layer.hot_worklist_calls : 0.0;
 
@@ -1254,6 +1328,16 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         out << "\"merge_time_us\":" << layer.merge_time_us << ",";
         out << "\"hot_gather_scatter_time_us\":" << layer.hot_gather_scatter_time_us << ",";
         out << "\"cold_gather_scatter_time_us\":" << layer.cold_gather_scatter_time_us << ",";
+        out << "\"parallel_region_wall_time_us\":" << layer.parallel_region_wall_time_us << ",";
+        out << "\"parallel_hot_lane_wall_time_us\":" << layer.parallel_hot_lane_wall_time_us << ",";
+        out << "\"parallel_cold_lane_wall_time_us\":" << layer.parallel_cold_lane_wall_time_us << ",";
+        out << "\"parallel_join_wait_time_us\":" << layer.parallel_join_wait_time_us << ",";
+        out << "\"parallel_overlap_estimate_us\":" << layer.parallel_overlap_estimate_us << ",";
+        out << "\"parallel_hot_launches\":" << layer.parallel_hot_launches << ",";
+        out << "\"parallel_cold_launches\":" << layer.parallel_cold_launches << ",";
+        out << "\"parallel_hot_skips_zero\":" << layer.parallel_hot_skips_zero << ",";
+        out << "\"parallel_cold_skips_zero\":" << layer.parallel_cold_skips_zero << ",";
+        out << "\"parallel_fallbacks\":" << layer.parallel_fallbacks << ",";
         out << "\"gate_time_us\":" << layer.gate_time_us << ",";
         out << "\"up_time_us\":" << layer.up_time_us << ",";
         out << "\"down_time_us\":" << layer.down_time_us << ",";
@@ -1270,6 +1354,11 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         out << "\"merge_time_per_call_us\":" << merge_per_call << ",";
         out << "\"hot_gather_scatter_time_per_call_us\":" << hot_gather_scatter_per_call << ",";
         out << "\"cold_gather_scatter_time_per_call_us\":" << cold_gather_scatter_per_call << ",";
+        out << "\"parallel_region_wall_time_per_call_us\":" << parallel_region_wall_per_call << ",";
+        out << "\"parallel_hot_lane_wall_time_per_call_us\":" << parallel_hot_lane_wall_per_call << ",";
+        out << "\"parallel_cold_lane_wall_time_per_call_us\":" << parallel_cold_lane_wall_per_call << ",";
+        out << "\"parallel_join_wait_time_per_call_us\":" << parallel_join_wait_per_call << ",";
+        out << "\"parallel_overlap_estimate_per_call_us\":" << parallel_overlap_estimate_per_call << ",";
         out << "\"expert_matmul_time_per_call_us\":" << expert_matmul_per_call << ",";
         out << "\"total_moe_time_per_call_us\":" << total_moe_per_call << ",";
         out << "\"experts\":[";
@@ -2843,6 +2932,7 @@ ggml_status llama_context::graph_compute(
         status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
         ggml_backend_sched_synchronize(sched.get());
 
+        llama_moe_layer_perf_collect_parallel_metrics(sched.get());
         llama_moe_layer_perf_end();
 
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
