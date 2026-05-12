@@ -57,9 +57,11 @@ enum llm_norm_type {
 };
 
 enum llm_mul_mat_id_flags : uint32_t {
-    LLM_MUL_MAT_ID_FLAG_NONE                = 0,
-    LLM_MUL_MAT_ID_FLAG_ALLOW_DUPLICATE_IDS = 1u << 0,
-    LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS  = 1u << 1,
+    LLM_MUL_MAT_ID_FLAG_NONE                         = 0,
+    LLM_MUL_MAT_ID_FLAG_ALLOW_DUPLICATE_IDS          = 1u << 0,
+    LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS           = 1u << 1,
+    // Only valid when rows produced for negative IDs are guaranteed to be ignored later.
+    LLM_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO = 1u << 2,
 };
 
 // TODO: tmp - need something better to pass the data from the encoder to the decoder

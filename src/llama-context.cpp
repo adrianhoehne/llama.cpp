@@ -472,6 +472,9 @@ static void llama_moe_layer_perf_count_compact_ids_locked(uint32_t layer, ggml_t
     auto & dst = g_llama_moe_layer_perf.layers[layer];
     if (hot) {
         g_llama_moe_layer_perf.add_locked(dst.hot_worklist_calls, 1);
+        if (dst.calls < dst.hot_worklist_calls) {
+            g_llama_moe_layer_perf.add_locked(dst.calls, 1);
+        }
         g_llama_moe_layer_perf.add_locked(dst.hot_slots_total, valid);
         if (valid == 0) {
             g_llama_moe_layer_perf.add_locked(dst.hot_zero_calls, 1);
@@ -3061,8 +3064,10 @@ ggml_status llama_context::graph_compute(
     }
 
     ggml_status status;
+    const bool moe_layer_perf_enabled = llama_moe_layer_perf_is_enabled(this) && model.hparams.n_expert > 0;
+    ggml_backend_sched_set_moe_hot_cache_parallel_perf_enabled(sched.get(), moe_layer_perf_enabled);
 
-    if (llama_moe_layer_perf_is_enabled(this) && model.hparams.n_expert > 0) {
+    if (moe_layer_perf_enabled) {
         ggml_backend_sched_set_eval_callback(sched.get(), llama_moe_layer_perf_eval_cb, this);
 
         llama_moe_layer_perf_begin(

@@ -2635,8 +2635,9 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     int32_t flags = 0;
     memcpy(&flags, dst->op_params, sizeof(flags));
-    const bool allow_duplicate_ids = (flags & (1 << 0)) != 0;
-    const bool allow_negative_ids  = (flags & (1 << 1)) != 0;
+    const bool allow_duplicate_ids              = (flags & (1 << 0)) != 0;
+    const bool allow_negative_ids               = (flags & (1 << 1)) != 0;
+    const bool skip_negative_id_output_zeroing  = (flags & (1 << 2)) != 0;
     cudaStream_t stream = ctx.stream();
     std::vector<char> ids_host;
 
@@ -2767,7 +2768,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int32_t * ids_to_sorted   = ids_buf_dev.ptr;
     const int32_t * ids_from_sorted = ids_buf_dev.ptr + ids_from_sorted_offset;
 
-    if (allow_negative_ids) {
+    if (allow_negative_ids && !skip_negative_id_output_zeroing) {
         CUDA_CHECK(cudaMemsetAsync(dst_sorted.ptr, 0, n_rows_sorted*ne0*ts_dst_sorted, stream));
     }
 
@@ -5436,6 +5437,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
 #endif
         case GGML_OP_SUM_ROWS:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[0]->nb[0] % sizeof(float) == 0 &&
+                op->src[0]->nb[1] % sizeof(float) == 0 &&
+                op->src[0]->nb[2] % sizeof(float) == 0 &&
+                op->src[0]->nb[3] % sizeof(float) == 0;
         case GGML_OP_MEAN:
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);

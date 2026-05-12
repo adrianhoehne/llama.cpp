@@ -376,6 +376,7 @@ extern "C" {
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
+    GGML_API void                 ggml_backend_sched_set_moe_hot_cache_parallel_perf_enabled(ggml_backend_sched_t sched, bool enabled);
 
     // Experimental: annotate one Qwen3.5 MoE hot-cache fork/join region.
     // mode: 0 = off, 1 = auto, 2 = force.

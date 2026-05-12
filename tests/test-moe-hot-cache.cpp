@@ -1,5 +1,7 @@
 #include "../src/llama-moe-hot-cache.h"
 
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -9,6 +11,12 @@ static void require(bool condition) {
     if (!condition) {
         throw std::runtime_error("test assertion failed");
     }
+}
+
+static bool hot_dummy_padding_enabled() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_HOT_DUMMY_PADDING");
+    return env == nullptr || env[0] == '\0' ||
+           (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
 }
 
 static void test_parse_and_sort() {
@@ -120,6 +128,14 @@ static void set_weight(ggml_tensor * weights, int32_t iex, int32_t token, float 
     *(float *) ((char *) weights->data + iex*weights->nb[1] + token*weights->nb[2]) = value;
 }
 
+static void set_logit(ggml_tensor * logits, int32_t expert, int32_t token, float value) {
+    *(float *) ((char *) logits->data + expert*logits->nb[0] + token*logits->nb[1]) = value;
+}
+
+static void require_close(float actual, float expected) {
+    require(std::fabs(actual - expected) < 1e-5f);
+}
+
 static void test_build_worklist_mixed() {
     auto ctx = make_ctx();
     require(ctx != nullptr);
@@ -183,7 +199,8 @@ static void test_build_worklist_mixed() {
     require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT, 2) == 0.32f);
 
     for (int32_t i = 3; i < capacity; ++i) {
-        require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, i) == -1.0f);
+        const float expected_hot_padding = hot_dummy_padding_enabled() ? float(layer.n_hot) : -1.0f;
+        require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, i) == expected_hot_padding);
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT, i) == float(capacity));
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, i) == -1.0f);
         require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID, i) == -1.0f);
@@ -233,6 +250,45 @@ static void test_build_worklist_all_hot_or_cold() {
     }
 }
 
+static void test_build_worklist_from_logits() {
+    auto ctx = make_ctx();
+    require(ctx != nullptr);
+
+    const int32_t n_expert_used = 2;
+    const int32_t n_tokens = 1;
+    const int32_t capacity = n_expert_used*n_tokens;
+
+    ggml_tensor * logits = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 4, n_tokens);
+    ggml_tensor * packed = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+
+    set_logit(logits, 0, 0, 0.0f);
+    set_logit(logits, 1, 0, 2.0f);
+    set_logit(logits, 2, 0, 1.0f);
+    set_logit(logits, 3, 0, 3.0f);
+
+    llama_moe_hot_cache_layer layer;
+    layer.n_expert = 4;
+    layer.n_hot = 1;
+    layer.expert_weights_scale = 2.0f;
+    layer.hot_id_map_host = { -1, -1, -1, 0 };
+
+    llama_moe_hot_cache_build_worklist_from_logits(packed, logits, layer, 0, 1);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, 0) == 0.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT, 0) == 0.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_TOKEN_ID, 0) == 0.0f);
+    require_close(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT, 0), 1.4621172f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, 0) == 3.0f);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID, 0) == 1.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, 0) == 1.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, 0) == 0.0f);
+    require_close(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT, 0), 0.5378828f);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT, 0) == 1.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT, 0) == 1.0f);
+}
+
 int main() {
     test_parse_and_sort();
     test_parse_branch_counts_and_layer_weight();
@@ -240,5 +296,6 @@ int main() {
     test_bad_schema();
     test_build_worklist_mixed();
     test_build_worklist_all_hot_or_cold();
+    test_build_worklist_from_logits();
     return 0;
 }

@@ -1557,7 +1557,8 @@ static void ggml_compute_forward_mul_mat_id(
     const int n_as  = ne02;       // n_expert
     int32_t flags = 0;
     memcpy(&flags, dst->op_params, sizeof(flags));
-    const bool allow_negative_ids = (flags & (1 << 1)) != 0;
+    const bool allow_negative_ids              = (flags & (1 << 1)) != 0;
+    const bool skip_negative_id_output_zeroing = (flags & (1 << 2)) != 0;
 
     void * wdata_cur = params->wdata;
 
@@ -1614,7 +1615,7 @@ static void ggml_compute_forward_mul_mat_id(
     }
 
     if (ith == 0) {
-        if (allow_negative_ids) {
+        if (allow_negative_ids && !skip_negative_id_output_zeroing) {
             memset(dst->data, 0, ggml_nbytes(dst));
         }
 

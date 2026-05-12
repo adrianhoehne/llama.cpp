@@ -830,6 +830,7 @@ struct ggml_backend_sched {
     std::vector<ggml_backend_sched_moe_hot_cache_parallel_region_info> * moe_hot_cache_parallel_regions;
     std::vector<ggml_backend_sched_moe_hot_cache_parallel_perf> * moe_hot_cache_parallel_perf;
     ggml_backend_sched_moe_parallel_worker * moe_hot_cache_parallel_worker;
+    bool moe_hot_cache_parallel_perf_enabled;
 
     // pipeline parallelism support
     int n_copies;
@@ -1893,7 +1894,7 @@ static void ggml_backend_sched_moe_parallel_worker_loop(ggml_backend_sched_moe_p
                 *state,
                 /* use_callback = */ false,
                 /* first_inputs_prepared = */ true);
-        const int64_t end_us = ggml_time_us();
+        const int64_t end_us = sched->moe_hot_cache_parallel_perf_enabled ? ggml_time_us() : 0;
 
         {
             std::lock_guard<std::mutex> lock(worker->mutex);
@@ -2007,6 +2008,10 @@ static void ggml_backend_sched_moe_parallel_record_fallback(
         ggml_backend_sched_t sched,
         int32_t layer,
         const char * reason) {
+    if (!sched->moe_hot_cache_parallel_perf_enabled) {
+        return;
+    }
+
     ggml_backend_sched_moe_hot_cache_parallel_perf perf = {};
     perf.layer = layer;
     perf.parallel_fallbacks = 1;
@@ -2165,8 +2170,15 @@ static int64_t ggml_backend_sched_read_f32_count(
     }
 
     float value = 0.0f;
-    ggml_backend_synchronize(backend);
-    ggml_backend_tensor_get(tensor, &value, 0, sizeof(value));
+    if (ggml_backend_sched_backend_is_cpu(backend)) {
+        if (tensor->data == nullptr) {
+            return -1;
+        }
+        value = *(const float *) tensor->data;
+    } else {
+        ggml_backend_synchronize(backend);
+        ggml_backend_tensor_get(tensor, &value, 0, sizeof(value));
+    }
 
     if (value <= 0.0f) {
         return 0;
@@ -2242,10 +2254,11 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
         }
     }
 
+    const bool collect_perf = sched->moe_hot_cache_parallel_perf_enabled;
     ggml_backend_sched_moe_hot_cache_parallel_perf perf = {};
     perf.layer = region.layer;
 
-    const int64_t region_start_us = ggml_time_us();
+    const int64_t region_start_us = collect_perf ? ggml_time_us() : 0;
 
     ggml_backend_sched_compute_state hot_state;
     ggml_backend_sched_compute_state cold_state;
@@ -2259,8 +2272,10 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
     int64_t cold_lane_end_us = 0;
 
     if (cold_count > 0) {
-        perf.parallel_cold_launches = 1;
-        cold_lane_start_us = ggml_time_us();
+        if (collect_perf) {
+            perf.parallel_cold_launches = 1;
+            cold_lane_start_us = ggml_time_us();
+        }
 
         enum ggml_status ec = ggml_backend_sched_compute_split_inputs(
                 sched, &sched->splits[region.cold_split_begin], cold_state);
@@ -2274,13 +2289,15 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
                 region.cold_split_end,
                 cold_state);
         cold_worker_started = true;
-    } else {
+    } else if (collect_perf) {
         perf.parallel_cold_skips_zero = 1;
     }
 
     if (hot_count > 0) {
-        perf.parallel_hot_launches = 1;
-        hot_lane_start_us = ggml_time_us();
+        if (collect_perf) {
+            perf.parallel_hot_launches = 1;
+            hot_lane_start_us = ggml_time_us();
+        }
 
         enum ggml_status ec = ggml_backend_sched_compute_split_inputs(
                 sched, &sched->splits[region.hot_split_begin], hot_state);
@@ -2291,7 +2308,7 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
             }
             return ec;
         }
-    } else {
+    } else if (collect_perf) {
         perf.parallel_hot_skips_zero = 1;
     }
 
@@ -2312,17 +2329,21 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
         }
     }
 
-    const int64_t join_wait_start_us = ggml_time_us();
+    const int64_t join_wait_start_us = collect_perf ? ggml_time_us() : 0;
 
     if (hot_count > 0) {
         ggml_backend_synchronize(sched->backends[sched->splits[region.hot_split_begin].backend_id]);
-        hot_lane_end_us = ggml_time_us();
+        if (collect_perf) {
+            hot_lane_end_us = ggml_time_us();
+        }
     }
 
     if (cold_worker_started) {
         int64_t worker_end_us = 0;
         const enum ggml_status ec = ggml_backend_sched_moe_parallel_worker_wait(sched, worker_end_us);
-        cold_lane_end_us = worker_end_us;
+        if (collect_perf) {
+            cold_lane_end_us = worker_end_us;
+        }
         if (ec != GGML_STATUS_SUCCESS) {
             return ec;
         }
@@ -2330,12 +2351,12 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
 
     if (cold_count > 0) {
         ggml_backend_synchronize(sched->backends[sched->splits[region.cold_split_begin].backend_id]);
-        if (cold_lane_end_us == 0) {
+        if (collect_perf && cold_lane_end_us == 0) {
             cold_lane_end_us = ggml_time_us();
         }
     }
 
-    const int64_t join_wait_end_us = ggml_time_us();
+    const int64_t join_wait_end_us = collect_perf ? ggml_time_us() : 0;
 
     if (hot_count == 0 && !ggml_backend_sched_zero_tensor(region.hot_output)) {
         if (!ggml_backend_sched_moe_parallel_fail_or_fallback(sched, region, "failed to zero skipped hot lane")) {
@@ -2353,20 +2374,22 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
         return GGML_STATUS_SUCCESS;
     }
 
-    const int64_t region_end_us = ggml_time_us();
+    if (collect_perf) {
+        const int64_t region_end_us = ggml_time_us();
 
-    perf.parallel_region_wall_time_us = region_end_us > region_start_us ? (uint64_t) (region_end_us - region_start_us) : 0;
-    perf.parallel_hot_lane_wall_time_us =
-        hot_lane_start_us > 0 && hot_lane_end_us > hot_lane_start_us ? (uint64_t) (hot_lane_end_us - hot_lane_start_us) : 0;
-    perf.parallel_cold_lane_wall_time_us =
-        cold_lane_start_us > 0 && cold_lane_end_us > cold_lane_start_us ?
-            (uint64_t) (cold_lane_end_us - cold_lane_start_us) : 0;
-    perf.parallel_join_wait_time_us = join_wait_end_us > join_wait_start_us ? (uint64_t) (join_wait_end_us - join_wait_start_us) : 0;
+        perf.parallel_region_wall_time_us = region_end_us > region_start_us ? (uint64_t) (region_end_us - region_start_us) : 0;
+        perf.parallel_hot_lane_wall_time_us =
+            hot_lane_start_us > 0 && hot_lane_end_us > hot_lane_start_us ? (uint64_t) (hot_lane_end_us - hot_lane_start_us) : 0;
+        perf.parallel_cold_lane_wall_time_us =
+            cold_lane_start_us > 0 && cold_lane_end_us > cold_lane_start_us ?
+                (uint64_t) (cold_lane_end_us - cold_lane_start_us) : 0;
+        perf.parallel_join_wait_time_us = join_wait_end_us > join_wait_start_us ? (uint64_t) (join_wait_end_us - join_wait_start_us) : 0;
 
-    const uint64_t lane_sum = perf.parallel_hot_lane_wall_time_us + perf.parallel_cold_lane_wall_time_us;
-    perf.parallel_overlap_estimate_us = lane_sum > perf.parallel_region_wall_time_us ? lane_sum - perf.parallel_region_wall_time_us : 0;
+        const uint64_t lane_sum = perf.parallel_hot_lane_wall_time_us + perf.parallel_cold_lane_wall_time_us;
+        perf.parallel_overlap_estimate_us = lane_sum > perf.parallel_region_wall_time_us ? lane_sum - perf.parallel_region_wall_time_us : 0;
 
-    sched->moe_hot_cache_parallel_perf->push_back(perf);
+        sched->moe_hot_cache_parallel_perf->push_back(perf);
+    }
 
     return GGML_STATUS_SUCCESS;
 }
@@ -2447,6 +2470,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     struct ggml_backend_sched * sched = (ggml_backend_sched *) calloc(1, sizeof(struct ggml_backend_sched));
     sched->moe_hot_cache_parallel_regions = new std::vector<ggml_backend_sched_moe_hot_cache_parallel_region_info>();
     sched->moe_hot_cache_parallel_perf = new std::vector<ggml_backend_sched_moe_hot_cache_parallel_perf>();
+    sched->moe_hot_cache_parallel_perf_enabled = true;
 
     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
@@ -2633,6 +2657,11 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     GGML_ASSERT(sched);
     sched->callback_eval = callback;
     sched->callback_eval_user_data = user_data;
+}
+
+void ggml_backend_sched_set_moe_hot_cache_parallel_perf_enabled(ggml_backend_sched_t sched, bool enabled) {
+    GGML_ASSERT(sched);
+    sched->moe_hot_cache_parallel_perf_enabled = enabled;
 }
 
 void ggml_backend_sched_moe_hot_cache_parallel_region(

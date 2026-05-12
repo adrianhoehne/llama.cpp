@@ -1773,6 +1773,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         cb_moe(selected_experts_scale_ids, "ffn_moe_scale_ids");
     }
 
+    // Negative-ID rows in gate/up are ignored by the final down projection, so avoid
+    // clearing those intermediate outputs. The final down output still keeps zeroing.
+    const uint32_t intermediate_flags = (flags & LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS)
+        ? (flags | LLM_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO)
+        : flags;
+
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
     if (weight_before_ffn) {
@@ -1785,7 +1791,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
     ggml_tensor * experts = nullptr;
 
     if (gate_up_exps) {
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, flags);
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, intermediate_flags);
         cb_moe(gate_up, "ffn_moe_gate_up");
 
         if (up_exps_s) {
@@ -1802,7 +1808,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
         cb_moe(up, "ffn_moe_up");
     } else {
-        up = build_lora_mm_id(up_exps, cur, selected_experts, flags);
+        up = build_lora_mm_id(up_exps, cur, selected_experts, intermediate_flags);
         cb_moe(up, "ffn_moe_up");
 
         if (up_exps_s) {
@@ -1814,7 +1820,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         }
 
         if (gate_exps) {
-            cur = build_lora_mm_id(gate_exps, cur, selected_experts, flags);
+            cur = build_lora_mm_id(gate_exps, cur, selected_experts, intermediate_flags);
             cb_moe(cur, "ffn_moe_gate");
         } else {
             cur = up;
