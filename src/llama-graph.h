@@ -901,7 +901,8 @@ struct llm_graph_context {
              ggml_tensor * down_exps_s = nullptr,
                 uint32_t   flags = LLM_MUL_MAT_ID_FLAG_NONE,
              const char * branch_name = nullptr,
-            ggml_backend_t branch_backend = nullptr) const;
+            ggml_backend_t branch_backend = nullptr,
+                    bool   apply_weights = true) const;
 
     //
     // inputs

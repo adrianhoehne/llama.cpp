@@ -1736,9 +1736,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
              ggml_tensor * up_exps_s,
              ggml_tensor * gate_exps_s,
              ggml_tensor * down_exps_s,
-            uint32_t   flags,
-         const char * branch_name,
-         ggml_backend_t branch_backend) const {
+                uint32_t   flags,
+             const char * branch_name,
+            ggml_backend_t branch_backend,
+                    bool   apply_weights) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4;
@@ -1766,7 +1767,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         cb(t, branch_node_name, il);
     };
 
-    ggml_build_forward_expand(gf, weights);
+    if (weight_before_ffn || apply_weights) {
+        ggml_build_forward_expand(gf, weights);
+    }
 
     if ((flags & LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS) &&
         (up_exps_s != nullptr || gate_exps_s != nullptr || down_exps_s != nullptr)) {
@@ -1777,7 +1780,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
     }
 
     // Negative-ID rows in gate/up are ignored by the final down projection, so avoid
-    // clearing those intermediate outputs. The final down output still keeps zeroing.
+    // clearing those intermediate outputs. The final down output keeps zeroing unless
+    // the caller knows that invalid rows are ignored by the following merge.
     const uint32_t input_flags = weight_before_ffn
         ? (flags & ~LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW)
         : flags;
@@ -1884,7 +1888,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
         cb_moe(experts, "ffn_moe_down_scaled");
     }
 
-    if (!weight_before_ffn) {
+    if (!weight_before_ffn && apply_weights) {
         experts = ggml_mul(ctx0, experts, weights);
         cb_moe(experts, "ffn_moe_weighted");
     }
