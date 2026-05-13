@@ -93,6 +93,8 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
 
 void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params);
 
+bool llama_moe_hot_cache_layer_active(const llama_model & model, int il);
+
 void llama_moe_hot_cache_build_worklist(
         ggml_tensor * dst,
         const ggml_tensor * selected_experts,

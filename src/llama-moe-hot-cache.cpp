@@ -537,6 +537,13 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
     model.moe_hot_cache = std::move(cache);
 }
 
+bool llama_moe_hot_cache_layer_active(const llama_model & model, int il) {
+    return model.moe_hot_cache &&
+           il >= 0 &&
+           il < int(model.moe_hot_cache->layers.size()) &&
+           model.moe_hot_cache->layers[il].active();
+}
+
 void llama_moe_hot_cache_build_worklist(
         ggml_tensor * dst,
         const ggml_tensor * selected_experts,
