@@ -2257,6 +2257,10 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
     const bool collect_perf = sched->moe_hot_cache_parallel_perf_enabled;
     ggml_backend_sched_moe_hot_cache_parallel_perf perf = {};
     perf.layer = region.layer;
+    if (collect_perf) {
+        perf.parallel_hot_count = hot_count > 0 ? (uint64_t) hot_count : 0;
+        perf.parallel_cold_count = cold_count > 0 ? (uint64_t) cold_count : 0;
+    }
 
     const int64_t region_start_us = collect_perf ? ggml_time_us() : 0;
 

@@ -315,6 +315,8 @@ extern "C" {
 
     struct ggml_backend_sched_moe_hot_cache_parallel_perf {
         int32_t  layer;
+        uint64_t parallel_hot_count;
+        uint64_t parallel_cold_count;
         uint64_t parallel_region_wall_time_us;
         uint64_t parallel_hot_lane_wall_time_us;
         uint64_t parallel_cold_lane_wall_time_us;

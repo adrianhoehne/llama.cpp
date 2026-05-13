@@ -1032,8 +1032,11 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
                 ids
                 );
         if (flags != LLM_MUL_MAT_ID_FLAG_NONE) {
+            const uint32_t lora_output_flags = flags & ~LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW;
             memcpy(ab_cur->src[1]->op_params, &flags, sizeof(flags));
-            memcpy(ab_cur->op_params, &flags, sizeof(flags));
+            if (lora_output_flags != LLM_MUL_MAT_ID_FLAG_NONE) {
+                memcpy(ab_cur->op_params, &lora_output_flags, sizeof(lora_output_flags));
+            }
         }
 
         ab_cur = ggml_scale(ctx0, ab_cur, scale);
@@ -1775,9 +1778,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
 
     // Negative-ID rows in gate/up are ignored by the final down projection, so avoid
     // clearing those intermediate outputs. The final down output still keeps zeroing.
-    const uint32_t intermediate_flags = (flags & LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS)
-        ? (flags | LLM_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO)
+    const uint32_t input_flags = weight_before_ffn
+        ? (flags & ~LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW)
         : flags;
+    const uint32_t intermediate_flags = (input_flags & LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS)
+        ? (input_flags | LLM_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO)
+        : input_flags;
+    const uint32_t output_flags = flags & ~LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW;
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
@@ -1866,7 +1873,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn_with_ids(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, flags);
+    experts = build_lora_mm_id(down_exps, cur, selected_experts, output_flags);
     cb_moe(experts, "ffn_moe_down");
 
     if (down_exps_s) {

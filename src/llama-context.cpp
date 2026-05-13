@@ -220,6 +220,14 @@ static bool llama_moe_layer_perf_is_enabled(const llama_context * ctx) {
     return llama_moe_layer_perf_env_enabled();
 }
 
+static bool llama_moe_layer_perf_expert_counts_enabled() {
+    const char * env = std::getenv("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS");
+    return env != nullptr && env[0] != '\0' &&
+           std::strcmp(env, "0") != 0 &&
+           std::strcmp(env, "off") != 0 &&
+           std::strcmp(env, "false") != 0;
+}
+
 static int llama_moe_parse_layer_from_name(const char * name) {
     if (name == nullptr) {
         return -1;
@@ -616,13 +624,14 @@ static bool llama_moe_layer_perf_eval_cb(ggml_tensor * t, bool ask, void * user_
         }
     }
 
-    if (llama_moe_is_topk_node(name)) {
+    const bool expert_counts_enabled = llama_moe_layer_perf_expert_counts_enabled();
+    if (expert_counts_enabled && llama_moe_is_topk_node(name)) {
         llama_moe_layer_perf_count_topk_locked((uint32_t) layer, t);
-    } else if (llama_moe_is_hot_ids_node(name)) {
+    } else if (expert_counts_enabled && llama_moe_is_hot_ids_node(name)) {
         llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, true);
-    } else if (llama_moe_is_hot_expert_ids_node(name)) {
+    } else if (expert_counts_enabled && llama_moe_is_hot_expert_ids_node(name)) {
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, true);
-    } else if (llama_moe_is_cold_ids_node(name)) {
+    } else if (expert_counts_enabled && llama_moe_is_cold_ids_node(name)) {
         llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, false);
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, false);
     }
@@ -649,12 +658,27 @@ static void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t s
         return;
     }
 
+    const bool count_slots_from_parallel = !llama_moe_layer_perf_expert_counts_enabled();
+
     for (const auto & metric : metrics) {
         if (metric.layer < 0 || (uint32_t) metric.layer >= g_llama_moe_layer_perf.layers.size()) {
             continue;
         }
 
         auto & dst = g_llama_moe_layer_perf.layers[metric.layer];
+        if (count_slots_from_parallel) {
+            g_llama_moe_layer_perf.add_locked(dst.calls, 1);
+            g_llama_moe_layer_perf.add_locked(dst.hot_worklist_calls, 1);
+            g_llama_moe_layer_perf.add_locked(dst.cold_worklist_calls, 1);
+            g_llama_moe_layer_perf.add_locked(dst.hot_slots_total, metric.parallel_hot_count);
+            g_llama_moe_layer_perf.add_locked(dst.cold_slots_total, metric.parallel_cold_count);
+            if (metric.parallel_hot_count == 0) {
+                g_llama_moe_layer_perf.add_locked(dst.hot_zero_calls, 1);
+            }
+            if (metric.parallel_cold_count == 0) {
+                g_llama_moe_layer_perf.add_locked(dst.cold_zero_calls, 1);
+            }
+        }
         g_llama_moe_layer_perf.add_locked(dst.parallel_region_wall_time_us, metric.parallel_region_wall_time_us);
         g_llama_moe_layer_perf.add_locked(dst.parallel_hot_lane_wall_time_us, metric.parallel_hot_lane_wall_time_us);
         g_llama_moe_layer_perf.add_locked(dst.parallel_cold_lane_wall_time_us, metric.parallel_cold_lane_wall_time_us);
@@ -1361,6 +1385,12 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
     uint64_t summary_routing_time_us = 0;
     uint64_t summary_worklist_time_us = 0;
     uint64_t summary_merge_time_us = 0;
+    uint64_t summary_hot_branch_time_us = 0;
+    uint64_t summary_cold_branch_time_us = 0;
+    uint64_t summary_hot_expert_matmul_time_us = 0;
+    uint64_t summary_cold_expert_matmul_time_us = 0;
+    uint64_t summary_hot_gather_scatter_time_us = 0;
+    uint64_t summary_cold_gather_scatter_time_us = 0;
     uint64_t summary_parallel_region_wall_time_us = 0;
     uint64_t summary_parallel_hot_lane_wall_time_us = 0;
     uint64_t summary_parallel_cold_lane_wall_time_us = 0;
@@ -1382,6 +1412,12 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         summary_routing_time_us += layer.routing_time_us;
         summary_worklist_time_us += layer.worklist_time_us;
         summary_merge_time_us += layer.merge_time_us;
+        summary_hot_branch_time_us += layer.hot_branch_time_us;
+        summary_cold_branch_time_us += layer.cold_branch_time_us;
+        summary_hot_expert_matmul_time_us += layer.hot_expert_matmul_time_us;
+        summary_cold_expert_matmul_time_us += layer.cold_expert_matmul_time_us;
+        summary_hot_gather_scatter_time_us += layer.hot_gather_scatter_time_us;
+        summary_cold_gather_scatter_time_us += layer.cold_gather_scatter_time_us;
         summary_parallel_region_wall_time_us += layer.parallel_region_wall_time_us;
         summary_parallel_hot_lane_wall_time_us += layer.parallel_hot_lane_wall_time_us;
         summary_parallel_cold_lane_wall_time_us += layer.parallel_cold_lane_wall_time_us;
@@ -1408,6 +1444,12 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
     out << "\"routing_time_per_call_us\":" << per_call(summary_routing_time_us, summary_calls) << ",";
     out << "\"worklist_time_per_call_us\":" << per_call(summary_worklist_time_us, summary_calls) << ",";
     out << "\"merge_time_per_call_us\":" << per_call(summary_merge_time_us, summary_calls) << ",";
+    out << "\"hot_branch_time_per_call_us\":" << per_call(summary_hot_branch_time_us, summary_calls) << ",";
+    out << "\"cold_branch_time_per_call_us\":" << per_call(summary_cold_branch_time_us, summary_calls) << ",";
+    out << "\"hot_expert_matmul_time_per_call_us\":" << per_call(summary_hot_expert_matmul_time_us, summary_calls) << ",";
+    out << "\"cold_expert_matmul_time_per_call_us\":" << per_call(summary_cold_expert_matmul_time_us, summary_calls) << ",";
+    out << "\"hot_gather_scatter_time_per_call_us\":" << per_call(summary_hot_gather_scatter_time_us, summary_calls) << ",";
+    out << "\"cold_gather_scatter_time_per_call_us\":" << per_call(summary_cold_gather_scatter_time_us, summary_calls) << ",";
     out << "\"parallel_region_wall_time_per_call_us\":" << per_call(summary_parallel_region_wall_time_us, summary_calls) << ",";
     out << "\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(summary_parallel_hot_lane_wall_time_us, summary_calls) << ",";
     out << "\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(summary_parallel_cold_lane_wall_time_us, summary_calls) << ",";
@@ -1489,6 +1531,12 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         out << "\"routing_time_per_call_us\":" << per_call(layer.routing_time_us, layer.calls) << ",";
         out << "\"worklist_time_per_call_us\":" << per_call(layer.worklist_time_us, layer.calls) << ",";
         out << "\"merge_time_per_call_us\":" << per_call(layer.merge_time_us, layer.calls) << ",";
+        out << "\"hot_branch_time_per_call_us\":" << per_call(layer.hot_branch_time_us, layer.calls) << ",";
+        out << "\"cold_branch_time_per_call_us\":" << per_call(layer.cold_branch_time_us, layer.calls) << ",";
+        out << "\"hot_expert_matmul_time_per_call_us\":" << per_call(layer.hot_expert_matmul_time_us, layer.calls) << ",";
+        out << "\"cold_expert_matmul_time_per_call_us\":" << per_call(layer.cold_expert_matmul_time_us, layer.calls) << ",";
+        out << "\"hot_gather_scatter_time_per_call_us\":" << per_call(layer.hot_gather_scatter_time_us, layer.calls) << ",";
+        out << "\"cold_gather_scatter_time_per_call_us\":" << per_call(layer.cold_gather_scatter_time_us, layer.calls) << ",";
         out << "\"parallel_region_wall_time_per_call_us\":" << per_call(layer.parallel_region_wall_time_us, layer.calls) << ",";
         out << "\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls) << ",";
         out << "\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls) << ",";

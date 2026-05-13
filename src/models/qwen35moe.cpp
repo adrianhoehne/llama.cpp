@@ -2,6 +2,7 @@
 #include "llama-memory-recurrent.h"
 #include "llama-moe-hot-cache.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -87,6 +88,26 @@ static bool llama_qwen35moe_hot_cache_hot_dummy_padding() {
     return enabled;
 }
 
+static bool llama_qwen35moe_hot_cache_shared_input_row() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_SHARED_INPUT_ROW");
+        return env == nullptr || env[0] == '\0' ||
+               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
+    }();
+
+    return enabled;
+}
+
+static bool llama_qwen35moe_hot_cache_cold_prefix_sum() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_COLD_PREFIX_SUM");
+        return env == nullptr || env[0] == '\0' ||
+               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
+    }();
+
+    return enabled;
+}
+
 static void llama_qwen35moe_hot_cache_build_worklist_op(
         ggml_tensor * dst,
         const ggml_tensor * src0,
@@ -114,6 +135,52 @@ static void llama_qwen35moe_hot_cache_build_worklist_from_logits_op(
     const auto * layer = static_cast<const llama_moe_hot_cache_layer *>(userdata);
     GGML_ASSERT(layer != nullptr);
     llama_moe_hot_cache_build_worklist_from_logits(dst, logits, *layer, ith, nth);
+}
+
+static void llama_qwen35moe_hot_cache_sum_prefix_rows_op(
+        ggml_tensor * dst,
+        const ggml_tensor * shape,
+        const ggml_tensor * src,
+        const ggml_tensor * count,
+        int ith,
+        int nth,
+        void * userdata) {
+    GGML_UNUSED(shape);
+    GGML_UNUSED(userdata);
+
+    GGML_ASSERT(dst != nullptr);
+    GGML_ASSERT(src != nullptr);
+    GGML_ASSERT(count != nullptr);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src->type == GGML_TYPE_F32);
+    GGML_ASSERT(count->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->ne[1] == 1);
+    GGML_ASSERT(src->ne[0] == dst->ne[0]);
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+
+    const int64_t n_embd = dst->ne[0];
+    const int64_t capacity = src->ne[1];
+    const float count_f = *(const float *) count->data;
+    int64_t n_prefix = count_f > 0.0f ? (int64_t) (count_f + 0.5f) : 0;
+    if (n_prefix > capacity) {
+        n_prefix = capacity;
+    }
+
+    const int64_t dr = (n_embd + nth - 1)/nth;
+    const int64_t i0 = dr*ith;
+    const int64_t i1 = std::min(i0 + dr, n_embd);
+
+    for (int64_t i = i0; i < i1; ++i) {
+        *(float *) ((char *) dst->data + i*dst->nb[0]) = 0.0f;
+    }
+
+    for (int64_t slot = 0; slot < n_prefix; ++slot) {
+        for (int64_t i = i0; i < i1; ++i) {
+            float * dst_i = (float *) ((char *) dst->data + i*dst->nb[0]);
+            const float * src_i = (const float *) ((const char *) src->data + i*src->nb[0] + slot*src->nb[1]);
+            *dst_i += *src_i;
+        }
+    }
 }
 
 } // namespace
@@ -799,7 +866,30 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         ? LLM_MUL_MAT_ID_FLAG_NONE
         : LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS;
 
-    const auto merge_compact_slots = [&](ggml_tensor * branch_out, ggml_backend_t branch_backend, const char * name) {
+    const auto merge_compact_slots = [&](
+            ggml_tensor * branch_out,
+            ggml_backend_t branch_backend,
+            ggml_tensor * prefix_count,
+            const char * name) {
+        if (prefix_count != nullptr && branch_backend != nullptr && n_tokens == 1 &&
+                llama_qwen35moe_hot_cache_cold_prefix_sum()) {
+            ggml_tensor * merged_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+            ggml_backend_sched_set_tensor_backend(sched, merged_shape, branch_backend);
+
+            ggml_tensor * merged = ggml_map_custom3(
+                    ctx0,
+                    merged_shape,
+                    branch_out,
+                    prefix_count,
+                    llama_qwen35moe_hot_cache_sum_prefix_rows_op,
+                    1,
+                    nullptr);
+            ggml_backend_sched_set_tensor_backend(sched, merged, branch_backend);
+            cb(merged, name, il);
+            ggml_build_forward_expand(gf, merged);
+            return merged;
+        }
+
         ggml_tensor * merged = ggml_reshape_3d(ctx0, branch_out, n_embd, capacity, 1);
         if (branch_backend != nullptr) {
             ggml_backend_sched_set_tensor_backend(sched, merged, branch_backend);
@@ -847,7 +937,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
 
     ggml_tensor * hot_slots = nullptr;
     if (decode_direct_merge) {
-        hot_slots = merge_compact_slots(hot_out, nullptr, "ffn_moe_hot_slots");
+        hot_slots = merge_compact_slots(hot_out, nullptr, nullptr, "ffn_moe_hot_slots");
     } else {
         hot_slots = ggml_scale(ctx0, hot_inputs, 0.0f);
         hot_slots = ggml_pad(ctx0, hot_slots, 0, 1, 0, 0);
@@ -862,14 +952,23 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
 
     if (cache.n_hot != cache.n_expert) {
         ggml_backend_t cold_branch_backend = cparams.warmup ? nullptr : backend_cpu;
+        const bool cold_shared_input_row =
+            decode_direct_merge && n_tokens == 1 && llama_qwen35moe_hot_cache_shared_input_row();
 
         ggml_tensor * cold_inputs = ggml_get_rows(ctx0, cur, cold_token_ids);
+        if (cold_shared_input_row) {
+            const int32_t get_rows_flags = GGML_GET_ROWS_FLAG_FIRST_ROW_ONLY;
+            memcpy(cold_inputs->op_params, &get_rows_flags, sizeof(get_rows_flags));
+        }
         cb(cold_inputs, "ffn_moe_cold_inputs", il);
         // Keep the cold lane on CPU. Otherwise this gather inherits the CUDA activation
         // backend and the hot/cold parallel region resolves both lanes to CUDA.
         if (cold_branch_backend != nullptr) {
             ggml_backend_sched_set_tensor_backend(sched, cold_inputs, cold_branch_backend);
         }
+
+        const uint32_t cold_mul_mat_id_flags = LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS |
+            (cold_shared_input_row ? LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW : LLM_MUL_MAT_ID_FLAG_NONE);
 
         ggml_tensor * cold_out = build_moe_ffn_with_ids(cold_inputs,
                 cold_ids,
@@ -885,14 +984,14 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
                 layer.ffn_up_exps_s,
                 layer.ffn_gate_exps_s,
                 layer.ffn_down_exps_s,
-                LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS,
+                cold_mul_mat_id_flags,
                 "cold",
                 cold_branch_backend);
         cb(cold_out, "ffn_moe_cold_out", il);
 
         ggml_tensor * cold_slots = nullptr;
         if (decode_direct_merge) {
-            cold_slots = merge_compact_slots(cold_out, cold_branch_backend, "ffn_moe_cold_slots");
+            cold_slots = merge_compact_slots(cold_out, cold_branch_backend, cold_count, "ffn_moe_cold_slots");
         } else {
             cold_slots = ggml_scale(ctx0, cold_inputs, 0.0f);
             if (cold_branch_backend != nullptr) {

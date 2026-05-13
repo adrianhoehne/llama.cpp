@@ -1460,10 +1460,6 @@ static void ggml_compute_forward_sum_rows_f32(
 
     const ggml_tensor * src0 = dst->src[0];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     GGML_ASSERT(src0->nb[0] % sizeof(float) == 0);
     GGML_ASSERT(src0->nb[1] % sizeof(float) == 0);
     GGML_ASSERT(src0->nb[2] % sizeof(float) == 0);
@@ -1476,6 +1472,36 @@ static void ggml_compute_forward_sum_rows_f32(
     GGML_ASSERT(ne1 == ne01);
     GGML_ASSERT(ne2 == ne02);
     GGML_ASSERT(ne3 == ne03);
+
+    if (nb01 == (int64_t) sizeof(float) && nb1 == (int64_t) sizeof(float)) {
+        const int64_t nr = ne01*ne02*ne03;
+        const int64_t dr = (nr + params->nth - 1)/params->nth;
+        int64_t ir = dr*params->ith;
+        const int64_t ir_end = MIN(ir + dr, nr);
+
+        while (ir < ir_end) {
+            const int64_t i1 = ir % ne01;
+            const int64_t i2 = (ir / ne01) % ne02;
+            const int64_t i3 = ir / (ne01*ne02);
+            const int64_t run = MIN(ir_end - ir, ne01 - i1);
+
+            float * dst_row = (float *) ((char *) dst->data + i1*nb1 + i2*nb2 + i3*nb3);
+            memset(dst_row, 0, run*sizeof(float));
+
+            for (int64_t i0 = 0; i0 < ne00; ++i0) {
+                const char * src_row = (const char *) src0->data + i0*nb00 + i1*nb01 + i2*nb02 + i3*nb03;
+                ggml_vec_acc_f32((int) run, dst_row, (const float *) src_row);
+            }
+
+            ir += run;
+        }
+
+        return;
+    }
+
+    if (params->ith != 0) {
+        return;
+    }
 
     for (int64_t i3 = 0; i3 < ne03; i3++) {
         for (int64_t i2 = 0; i2 < ne02; i2++) {
@@ -4715,6 +4741,12 @@ void ggml_compute_forward_cont(
 
 // ggml_compute_forward_get_rows
 
+static int64_t ggml_get_rows_nrows_to_copy(const ggml_tensor * dst) {
+    const int64_t nr = ggml_nelements(dst->src[1]);
+    const int32_t flags = ggml_get_op_params_i32(dst, 0);
+    return (flags & GGML_GET_ROWS_FLAG_FIRST_ROW_ONLY) != 0 ? MIN(nr, (int64_t) 1) : nr;
+}
+
 static void ggml_compute_forward_get_rows_q(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4725,7 +4757,7 @@ static void ggml_compute_forward_get_rows_q(
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int64_t nc = ne00;
-    const int64_t nr = ggml_nelements(src1);
+    const int64_t nr = ggml_get_rows_nrows_to_copy(dst);
 
     const ggml_type type = src0->type;
     ggml_to_float_t const dequantize_row_q = ggml_get_type_traits(type)->to_float;
@@ -4733,7 +4765,7 @@ static void ggml_compute_forward_get_rows_q(
     assert(ne0  == nc);
     assert(ne02 == ne11);
     assert(nb00 == ggml_type_size(type));
-    assert(ggml_nrows(dst) == nr);
+    assert(ggml_nrows(dst) == ggml_nelements(src1));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -4769,12 +4801,12 @@ static void ggml_compute_forward_get_rows_f16(
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int64_t nc = ne00;
-    const int64_t nr = ggml_nelements(src1);
+    const int64_t nr = ggml_get_rows_nrows_to_copy(dst);
 
     assert(ne0  == nc);
     assert(ne02 == ne11);
     assert(nb00 == sizeof(ggml_fp16_t));
-    assert(ggml_nrows(dst) == nr);
+    assert(ggml_nrows(dst) == ggml_nelements(src1));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -4810,12 +4842,12 @@ static void ggml_compute_forward_get_rows_bf16(
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int64_t nc = ne00;
-    const int64_t nr = ggml_nelements(src1);
+    const int64_t nr = ggml_get_rows_nrows_to_copy(dst);
 
     assert(ne0  == nc);
     assert(ne02 == ne11);
     assert(nb00 == sizeof(ggml_bf16_t));
-    assert(ggml_nrows(dst) == nr);
+    assert(ggml_nrows(dst) == ggml_nelements(src1));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -4851,12 +4883,12 @@ static void ggml_compute_forward_get_rows_f32(
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int64_t nc = ne00;
-    const int64_t nr = ggml_nelements(src1);
+    const int64_t nr = ggml_get_rows_nrows_to_copy(dst);
 
     assert(ne0  == nc);
     assert(ne02 == ne11);
     assert(nb00 == sizeof(float));
-    assert(ggml_nrows(dst) == nr);
+    assert(ggml_nrows(dst) == ggml_nelements(src1));
 
     const int ith = params->ith;
     const int nth = params->nth;

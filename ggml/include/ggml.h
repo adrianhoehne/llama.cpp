@@ -624,6 +624,11 @@ extern "C" {
         GGML_GLU_OP_COUNT,
     };
 
+    enum ggml_get_rows_flags {
+        GGML_GET_ROWS_FLAG_NONE           = 0,
+        GGML_GET_ROWS_FLAG_FIRST_ROW_ONLY = 1 << 0,
+    };
+
     enum ggml_object_type {
         GGML_OBJECT_TYPE_TENSOR,
         GGML_OBJECT_TYPE_GRAPH,
