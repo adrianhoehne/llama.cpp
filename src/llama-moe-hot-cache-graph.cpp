@@ -1,4 +1,5 @@
 #include "llama-moe-hot-cache.h"
+#include "ggml-backend-moe-hot-cache.h"
 #include "models/models.h"
 
 #include <algorithm>
@@ -8,6 +9,15 @@
 #include <cstring>
 
 namespace {
+
+enum llama_moe_hot_cache_mul_mat_id_flags : uint32_t {
+    LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE                         = 0,
+    LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS           = 1u << 1,
+    // Only valid when rows produced for negative IDs are guaranteed to be ignored later.
+    LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO = 1u << 2,
+    // Only valid when all selected input rows are duplicates of src1 row 0.
+    LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW             = 1u << 3,
+};
 
 static int llama_qwen35moe_hot_cache_parallel_mode() {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL");
@@ -305,7 +315,7 @@ static void llama_qwen35moe_hot_cache_first_row_input_op(
 }
 
 static void llama_moe_hot_cache_set_mul_mat_id_flags(ggml_tensor * t, uint32_t flags) {
-    if (flags != LLM_MUL_MAT_ID_FLAG_NONE) {
+    if (flags != LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE) {
         memcpy(t->op_params, &flags, sizeof(flags));
     }
 }
@@ -333,7 +343,7 @@ static ggml_tensor * llama_moe_hot_cache_build_lora_mm_id(
         llama_moe_hot_cache_set_mul_mat_id_flags(a_cur, flags);
 
         ggml_tensor * ab_cur = ggml_mul_mat_id(graph.ctx0, lw->b, a_cur, ids);
-        const uint32_t lora_output_flags = flags & ~LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW;
+        const uint32_t lora_output_flags = flags & ~LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW;
         llama_moe_hot_cache_set_mul_mat_id_flags(ab_cur, lora_output_flags);
 
         ab_cur = ggml_scale(graph.ctx0, ab_cur, scale);
@@ -403,7 +413,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_ffn_with_ids(
         ggml_build_forward_expand(gf, weights);
     }
 
-    if ((flags & LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS) &&
+    if ((flags & LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS) &&
         (up_exps_s != nullptr || gate_exps_s != nullptr || down_exps_s != nullptr)) {
         ggml_tensor * scale_ids_f32 = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
         scale_ids_f32 = ggml_clamp(ctx0, scale_ids_f32, 0.0f, float(n_expert - 1));
@@ -415,12 +425,12 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_ffn_with_ids(
     // clearing those intermediate outputs. The final down output keeps zeroing unless
     // the caller knows that invalid rows are ignored by the following merge.
     const uint32_t input_flags = weight_before_ffn
-        ? (flags & ~LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW)
+        ? (flags & ~LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW)
         : flags;
-    const uint32_t intermediate_flags = (input_flags & LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS)
-        ? (input_flags | LLM_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO)
+    const uint32_t intermediate_flags = (input_flags & LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS)
+        ? (input_flags | LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO)
         : input_flags;
-    const uint32_t output_flags = flags & ~LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW;
+    const uint32_t output_flags = flags & ~LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW;
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
@@ -745,8 +755,8 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     cb(hot_inputs, "ffn_moe_hot_inputs", il);
 
     const uint32_t hot_mul_mat_id_flags = llama_qwen35moe_hot_cache_hot_dummy_padding()
-        ? LLM_MUL_MAT_ID_FLAG_NONE
-        : LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS;
+        ? LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE
+        : LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS;
 
     const auto merge_compact_slots = [&](
             ggml_tensor * branch_out,
@@ -865,9 +875,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
             ggml_backend_sched_set_tensor_backend(sched, cold_inputs, cold_branch_backend);
         }
 
-        const uint32_t cold_mul_mat_id_flags = LLM_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS |
-            (cold_shared_input_row ? LLM_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW : LLM_MUL_MAT_ID_FLAG_NONE) |
-            (cold_prefix_merge ? LLM_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO : LLM_MUL_MAT_ID_FLAG_NONE);
+        const uint32_t cold_mul_mat_id_flags = LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS |
+            (cold_shared_input_row ? LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW : LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE) |
+            (cold_prefix_merge ? LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO : LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE);
 
         ggml_tensor * cold_out = llama_moe_hot_cache_build_moe_ffn_with_ids(*this,
                 cold_inputs,

@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-backend-moe-hot-cache.h"
 #include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"

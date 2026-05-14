@@ -9,6 +9,7 @@
 #endif
 
 #include "ggml-backend.h"
+#include "ggml-backend-moe-hot-cache.h"
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"

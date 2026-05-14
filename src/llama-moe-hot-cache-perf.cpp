@@ -1,6 +1,7 @@
 #include "llama-moe-hot-cache-perf.h"
 
 #include "ggml.h"
+#include "ggml-backend-moe-hot-cache.h"
 #include "llama-context.h"
 #include "llama.h"
 
