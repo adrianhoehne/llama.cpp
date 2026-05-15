@@ -1,5 +1,97 @@
-# llama.cpp
+# Experimental MoE hot-cache fork
 
+This is an experimental, AI-assisted fork of llama.cpp. The goal is to explore a static MoE expert hot cache for machines that can run large MoE models only with a CPU/GPU split.
+
+Use with caution. The feature is experimental, workload-dependent, and currently only Qwen3.5/Qwen3.6 MoE models are expected to benefit from it.
+
+## The idea
+
+Large MoE models often do not fit fully into VRAM. In that case, part of the model stays on the CPU and token generation can become CPU-bound.
+
+MoE models only use a subset of all experts for each token. If we know which experts are commonly used for a specific workload, we can keep those "hot" experts in a GPU cache and let the remaining "cold" expert work run on the CPU. The hot and cold paths can then run in parallel.
+
+The difficult part is knowing which experts are hot. This fork adds a `/moe-layer-perf` endpoint that can collect layer and expert usage data. That JSON can then be used on the next run to prefill the static expert cache.
+
+Detailed developer documentation:
+
+- [German guide](docs/development/moe-hot-cache-developer-guide.md)
+- [English guide](docs/development/moe-hot-cache-developer-guide.en.md)
+
+## Workflow
+
+### 1. Build
+
+```bash
+cmake --build build -j8 --target llama-server
+```
+
+### 2. Collect a representative profile
+
+Start the server without `--moe-hot-cache-max-mib`. This is the special first-run profiling mode: enable expert counts so `/moe-layer-perf` can record which experts your workload uses.
+
+`LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1` is only needed to create the initial profile. Do not use it for normal speed measurements.
+
+```bash
+LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1 \
+./build/bin/llama-server \
+  --perf \
+  <your normal model, device, context and server arguments>
+```
+
+Run prompts that match your real workload. For example, if you use the model for coding, run several coding requests with similar context size, prompt style, and generation length.
+
+Then save the profile:
+
+```bash
+curl http://127.0.0.1:8080/moe-layer-perf > moe-hot-cache.json
+```
+
+### 3. Start with the hot cache
+
+Restart the server with the collected JSON and a memory budget:
+
+```bash
+LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
+./build/bin/llama-server \
+  --moe-hot-cache moe-hot-cache.json \
+  --moe-hot-cache-max-mib <budget-in-mib> \
+  <your normal model, device, context and server arguments>
+```
+
+### 4. Measure performance
+
+For tuning, keep `--perf` enabled and inspect `/moe-layer-perf`. Look especially at hot slot ratio, cold path time, merge time, scheduler fallbacks, and join wait.
+
+For final throughput measurements, disable the performance counters:
+
+```bash
+LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
+./build/bin/llama-server \
+  --no-perf \
+  --moe-hot-cache moe-hot-cache.json \
+  --moe-hot-cache-max-mib <budget-in-mib> \
+  <your normal model, device, context and server arguments>
+```
+
+Optional: enable periodic per-slot TG progress logging:
+
+```bash
+--log-tg-progress
+```
+
+### 5. Iterate
+
+If the workload changes, collect a new `/moe-layer-perf` JSON and restart with the new cache profile. A hot cache built from coding prompts can be worse for simple chat prompts, and the other way around.
+
+## Next steps
+
+- Add an optional dynamic cache update mode that replaces a limited percentage of experts after a request. This must be measured carefully because unloading and loading experts can easily cost more time than it saves.
+- Show hot-cache hit rate after each request.
+- Support more MoE model families.
+- Support multiple workload-specific cache profiles.
+
+
+# llama.cpp
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
