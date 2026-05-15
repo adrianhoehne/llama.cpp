@@ -228,6 +228,13 @@ Weitere Decode-spezifische Reduktionen von Gather-/Input-Overhead.
 Deaktiviert die llama.cpp-Perf- und MoE-Perf-Zaehler fuer einen moeglichst sauberen Speed-Test.
 
 ```text
+--moe-layer-perf-out <datei.json>
+LLAMA_ARG_MOE_LAYER_PERF_OUT=<datei.json>
+```
+
+Server-only Hilfsschalter fuer den ersten Profiling-Lauf. Er aktiviert detaillierte Expert-Counts und schreibt die aktuelle `/moe-layer-perf`-JSON nach abgeschlossenen Requests sowie einmal beim Shutdown in die angegebene Datei. Ohne aktiven Hot-Cache erzeugt er rohe per-Layer `experts`-Listen. Mit aktivem Hot-Cache koennen zusaetzlich `hot_experts` und `cold_experts` entstehen.
+
+```text
 LLAMA_MOE_LAYER_PERF=0
 ```
 
@@ -714,13 +721,14 @@ kommen detaillierte Expertenzaehler dazu. Diese sind fuer die initiale Cache-Erz
 Wenn noch keine Hot-Cache-JSON existiert, startet man ohne Hot-Cache, aber mit Expert-Counts:
 
 ```bash
-LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1 \
 ./build/bin/llama-server \
-  --perf \
+  --moe-layer-perf-out moe-hot-cache.json \
   <normale modell- und server-argumente>
 ```
 
-Dann laesst man repraesentative Prompts laufen und liest die MoE-Perf-JSON aus dem Server, zum Beispiel ueber den vorhandenen `/moe-layer-perf`-Pfad.
+Dann laesst man repraesentative Prompts laufen. Die Ausgabedatei wird nach abgeschlossenen Requests und einmal beim Shutdown aktualisiert. Dieselben Daten koennen weiterhin ueber den vorhandenen `/moe-layer-perf`-Pfad angesehen werden. Das erste Profil wird aus den rohen `experts`-Arrays gebaut; spaetere Profile koennen bei aktivem Hot-Cache `hot_experts` und `cold_experts` verwenden.
+
+`LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1` bleibt als Low-Level-Schalter verfuegbar, der empfohlene First-Run-Workflow ist aber `--moe-layer-perf-out <datei.json>`.
 
 Diese JSON kann danach als Input fuer den Hot-Cache verwendet werden:
 

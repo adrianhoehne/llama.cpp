@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <filesystem>
 #include <utility>
@@ -1665,6 +1666,7 @@ private:
         res->generation_params = slot.task->params; // copy the parameters
 
         queue_results.send(std::move(res));
+        write_moe_layer_perf_file();
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
@@ -3257,6 +3259,23 @@ private:
     server_response_reader get_response_reader() {
         return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
     }
+
+    void write_moe_layer_perf_file() const {
+        if (params_base.moe_layer_perf_out.empty()) {
+            return;
+        }
+
+        std::ofstream file(params_base.moe_layer_perf_out, std::ios::binary | std::ios::trunc);
+        if (!file) {
+            SRV_WRN("failed to open MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
+            return;
+        }
+
+        file << llama_moe_layer_perf_json(nullptr) << '\n';
+        if (!file) {
+            SRV_WRN("failed to write MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
+        }
+    }
 };
 
 //
@@ -3277,6 +3296,10 @@ void server_context::start_loop() {
 
 void server_context::terminate() {
     impl->queue_tasks.terminate();
+}
+
+void server_context::write_moe_layer_perf_file() const {
+    impl->write_moe_layer_perf_file();
 }
 
 llama_context * server_context::get_llama_context() const {

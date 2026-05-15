@@ -68,6 +68,9 @@ struct server_context {
     // terminate main loop (will unblock start_loop)
     void terminate();
 
+    // write current MoE layer performance JSON to the configured output file, if enabled
+    void write_moe_layer_perf_file() const;
+
     // get the underlaying llama_context, can return nullptr if sleeping
     // not thread-safe, should only be used from the main thread
     llama_context * get_llama_context() const;

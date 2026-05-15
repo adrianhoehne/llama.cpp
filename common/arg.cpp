@@ -926,6 +926,10 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         if (ctx_arg.params.moe_hot_cache_max_mib > 0 && ctx_arg.params.moe_hot_cache.empty()) {
             throw std::invalid_argument("--moe-hot-cache is required when --moe-hot-cache-max-mib is greater than 0");
         }
+        if (!ctx_arg.params.moe_layer_perf_out.empty()) {
+            ctx_arg.params.no_perf = false;
+            ctx_arg.params.sampling.no_perf = false;
+        }
         params.lr.init();
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
@@ -3055,6 +3059,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE"));
+    add_opt(common_arg(
+        {"--moe-layer-perf-out"}, "FNAME",
+        "experimental: write /moe-layer-perf JSON to this file after each completed request; enables expert counts for hot-cache profiling",
+        [](common_params & params, const std::string & value) {
+            params.moe_layer_perf_out = value;
+            params.no_perf = false;
+            params.sampling.no_perf = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_LAYER_PERF_OUT"));
     add_opt(common_arg(
         {"--log-tg-progress"},
         {"--no-log-tg-progress"},

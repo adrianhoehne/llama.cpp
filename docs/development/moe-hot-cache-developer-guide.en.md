@@ -228,6 +228,13 @@ Enables additional decode-specific reductions of gather and input overhead.
 Disables llama.cpp performance counters and the MoE performance collection path for a cleaner throughput run.
 
 ```text
+--moe-layer-perf-out <file.json>
+LLAMA_ARG_MOE_LAYER_PERF_OUT=<file.json>
+```
+
+Server-only first-run profiling helper. It enables detailed expert counts and writes the current `/moe-layer-perf` JSON to the given file after completed requests and once more during shutdown. Without an active hot cache, this produces raw per-layer `experts` lists. With an active hot cache, it can also produce `hot_experts` and `cold_experts`.
+
+```text
 LLAMA_MOE_LAYER_PERF=0
 ```
 
@@ -712,13 +719,14 @@ detailed expert counters are included. They are useful for initial cache generat
 If no hot-cache JSON exists yet, start without the hot cache but with expert counts enabled:
 
 ```bash
-LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1 \
 ./build/bin/llama-server \
-  --perf \
+  --moe-layer-perf-out moe-hot-cache.json \
   <normal model and server arguments>
 ```
 
-Then run representative prompts and read the MoE performance JSON from the server, for example through the existing `/moe-layer-perf` path.
+Then run representative prompts. The output file is updated after completed requests and once more during shutdown. The same data can still be inspected through the existing `/moe-layer-perf` endpoint. The first profile is built from the raw `experts` arrays; later profiles can use `hot_experts` and `cold_experts` when the hot cache is already active.
+
+`LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1` remains available as a low-level switch, but the recommended first-run workflow is `--moe-layer-perf-out <file.json>`.
 
 That JSON can then be used as input for the hot cache:
 

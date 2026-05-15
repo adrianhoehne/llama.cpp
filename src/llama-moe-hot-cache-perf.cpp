@@ -908,7 +908,9 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
             out << "},";
         }
 
-        out << "\"hot_experts\":";
+        out << "\"experts\":";
+        write_expert_counts(layer.experts);
+        out << ",\"hot_experts\":";
         write_expert_counts(layer.hot_experts);
         out << ",\"cold_experts\":";
         write_expert_counts(layer.cold_experts);

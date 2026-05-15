@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <clocale>
+#include <cstdlib>
 #include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
@@ -23,6 +24,14 @@
 
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
+
+static void set_env_var(const char * name, const char * value) {
+#if defined(_WIN32)
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
 
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
@@ -81,6 +90,12 @@ int main(int argc, char ** argv) {
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
+    }
+
+    if (!params.moe_layer_perf_out.empty()) {
+        set_env_var("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS", "1");
+        params.no_perf = false;
+        params.sampling.no_perf = false;
     }
 
     llama_backend_init();
@@ -267,6 +282,7 @@ int main(int argc, char ** argv) {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            ctx_server.write_moe_layer_perf_file();
             ctx_http.stop();
             ctx_server.terminate();
             llama_backend_free();

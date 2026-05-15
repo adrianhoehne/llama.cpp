@@ -27,23 +27,22 @@ cmake --build build -j8 --target llama-server
 
 ### 2. Collect a representative profile
 
-Start the server without `--moe-hot-cache-max-mib`. This is the special first-run profiling mode: enable expert counts so `/moe-layer-perf` can record which experts your workload uses.
+Start the server without `--moe-hot-cache-max-mib`. This is the special first-run profiling mode: `--moe-layer-perf-out` enables expert counts and writes the collected `/moe-layer-perf` JSON to the given file. This file contains the raw per-layer `experts` lists used to build the initial cache.
 
-`LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1` is only needed to create the initial profile. Do not use it for normal speed measurements.
+`--moe-layer-perf-out` is only needed to create the initial profile. Do not use it for normal speed measurements.
 
 ```bash
-LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1 \
 ./build/bin/llama-server \
-  --perf \
+  --moe-layer-perf-out moe-hot-cache.json \
   <your normal model, device, context and server arguments>
 ```
 
 Run prompts that match your real workload. For example, if you use the model for coding, run several coding requests with similar context size, prompt style, and generation length.
 
-Then save the profile:
+The file is updated after completed requests and once more during server shutdown. You can still inspect the same data through the endpoint:
 
 ```bash
-curl http://127.0.0.1:8080/moe-layer-perf > moe-hot-cache.json
+curl http://127.0.0.1:8080/moe-layer-perf
 ```
 
 ### 3. Start with the hot cache
