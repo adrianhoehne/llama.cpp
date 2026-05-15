@@ -47,15 +47,18 @@ curl http://127.0.0.1:8080/moe-layer-perf
 
 ### 3. Start with the hot cache
 
-Restart the server with the collected JSON and a memory budget:
+Restart the server with the collected JSON and a memory budget. Use a positive value for a fixed budget, or use `-1` to auto-size the hot cache from remaining VRAM after the model and KV cache are allocated.
 
 ```bash
 LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --moe-hot-cache moe-hot-cache.json \
-  --moe-hot-cache-max-mib <budget-in-mib> \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
   <your normal model, device, context and server arguments>
 ```
+
+`--moe-hot-cache-auto-reserve-mib` is only used with `--moe-hot-cache-max-mib -1`. It keeps that many MiB free for compute buffers, warmup, and CUDA transient allocations. Increase it if startup or warmup hits CUDA OOM; decrease it if the run is stable and VRAM is still unused.
 
 ### 4. Measure performance
 
@@ -68,7 +71,8 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --no-perf \
   --moe-hot-cache moe-hot-cache.json \
-  --moe-hot-cache-max-mib <budget-in-mib> \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
   <your normal model, device, context and server arguments>
 ```
 
@@ -84,8 +88,7 @@ If the workload changes, collect a new `/moe-layer-perf` JSON and restart with t
 
 ## Next steps
 
-- Add an optional dynamic cache update mode that replaces a limited percentage of experts after a request. This must be measured carefully because unloading and loading experts can easily cost more time than it saves.
-- Show hot-cache hit rate after each request.
+- Tune auto-sizing and dynamic update defaults for different VRAM sizes.
 - Support more MoE model families.
 - Support multiple workload-specific cache profiles.
 

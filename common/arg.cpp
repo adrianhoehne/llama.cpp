@@ -923,8 +923,14 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             common_params_print_completion(ctx_arg);
             exit(0);
         }
-        if (ctx_arg.params.moe_hot_cache_max_mib > 0 && ctx_arg.params.moe_hot_cache.empty()) {
-            throw std::invalid_argument("--moe-hot-cache is required when --moe-hot-cache-max-mib is greater than 0");
+        if (ctx_arg.params.moe_hot_cache_max_mib != 0 && ctx_arg.params.moe_hot_cache.empty()) {
+            throw std::invalid_argument("--moe-hot-cache is required when --moe-hot-cache-max-mib is not 0");
+        }
+        if (ctx_arg.params.moe_hot_cache_max_mib < -1) {
+            throw std::invalid_argument("--moe-hot-cache-max-mib must be -1 or greater");
+        }
+        if (ctx_arg.params.moe_hot_cache_max_mib == -1 && ctx_arg.params.n_ctx <= 0) {
+            throw std::invalid_argument("--moe-hot-cache-max-mib -1 requires an explicit --ctx-size");
         }
         if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f && ctx_arg.params.moe_hot_cache_max_mib == 0) {
             throw std::invalid_argument("--moe-hot-cache-update-rate requires --moe-hot-cache-max-mib");
@@ -2341,14 +2347,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
         {"--moe-hot-cache-max-mib"}, "N",
-        "experimental: max MiB for static MoE hot expert cache (0 = disabled)",
-        [](common_params & params, int value) {
+        "experimental: max MiB for static MoE hot expert cache (0 = disabled, -1 = auto from remaining VRAM after model and KV cache allocation)",
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < -1) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_hot_cache_max_mib = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_MAX_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-auto-reserve-mib"}, "N",
+        string_format("experimental: MiB to keep free when --moe-hot-cache-max-mib -1 auto-sizes the hot cache (default: %zu)", (size_t) params.moe_hot_cache_auto_reserve_mib),
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
             if (value < 0) {
                 throw std::invalid_argument("invalid value");
             }
-            params.moe_hot_cache_max_mib = uint64_t(value);
+            params.moe_hot_cache_auto_reserve_mib = uint64_t(value);
         }
-    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_MAX_MIB"));
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_AUTO_RESERVE_MIB"));
     add_opt(common_arg(
         {"--moe-hot-cache"}, "FNAME",
         "experimental: path to /moe-layer-perf JSON used by --moe-hot-cache-max-mib",

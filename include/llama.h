@@ -299,9 +299,19 @@ extern "C" {
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 
-        // Experimental Qwen3.5 MoE hot expert cache. 0 disables it.
-        uint64_t moe_hot_cache_max_mib;
+        // Experimental Qwen3.5 MoE hot expert cache. 0 disables it, -1 uses remaining VRAM after model load and context reservation.
+        int64_t moe_hot_cache_max_mib;
         const char * moe_hot_cache_path;
+        uint32_t moe_hot_cache_auto_n_ctx;
+        uint32_t moe_hot_cache_auto_n_seq_max;
+        uint32_t moe_hot_cache_auto_n_ubatch;
+        uint64_t moe_hot_cache_auto_reserve_mib;
+        enum ggml_type moe_hot_cache_auto_type_k;
+        enum ggml_type moe_hot_cache_auto_type_v;
+        enum llama_flash_attn_type moe_hot_cache_auto_flash_attn_type;
+        bool moe_hot_cache_auto_offload_kqv;
+        bool moe_hot_cache_auto_swa_full;
+        bool moe_hot_cache_auto_kv_unified;
 
         // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
         // If the provided progress_callback returns true, model loading continues.

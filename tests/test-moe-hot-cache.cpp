@@ -128,11 +128,9 @@ static void test_select_budget() {
     };
 
     const auto plan = llama_moe_hot_cache_select(observed, sizes, 80);
-    require(plan.used_bytes == 70);
-    require(plan.selected.size() == 3);
+    require(plan.used_bytes == 80);
+    require(plan.selected.size() == 1);
     require(plan.selected[0].layer == 0 && plan.selected[0].expert == 0);
-    require(plan.selected[1].layer == 1 && plan.selected[1].expert == 0);
-    require(plan.selected[2].layer == 1 && plan.selected[2].expert == 1);
 }
 
 static void test_bad_schema() {

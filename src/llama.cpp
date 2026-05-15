@@ -329,7 +329,9 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             return {-2, nullptr};
         }
 
-        llama_moe_hot_cache_init(*model, params);
+        if (params.moe_hot_cache_max_mib > 0) {
+            llama_moe_hot_cache_init(*model, params);
+        }
 
         return {0, model_ptr.release()};
     } catch (const std::exception & err) {

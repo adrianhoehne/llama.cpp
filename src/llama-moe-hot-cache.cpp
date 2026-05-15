@@ -82,7 +82,16 @@ static uint64_t score_to_u64(long double score) {
     return std::max<uint64_t>(1, (uint64_t) (score + 0.5L));
 }
 
-static ggml_backend_buffer_type_t select_gpu_buft() {
+static ggml_backend_dev_t select_gpu_dev(const llama_model * model = nullptr) {
+    if (model != nullptr) {
+        for (const auto & dev : model->devices) {
+            const auto type = ggml_backend_dev_type(dev.dev);
+            if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                return dev.dev;
+            }
+        }
+    }
+
     ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
     if (dev == nullptr) {
         dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
@@ -91,7 +100,7 @@ static ggml_backend_buffer_type_t select_gpu_buft() {
         throw std::runtime_error("--moe-hot-cache requires a GPU backend device");
     }
 
-    return ggml_backend_dev_buffer_type(dev);
+    return dev;
 }
 
 static ggml_tensor * new_tensor_like_experts(
@@ -199,6 +208,97 @@ static std::vector<llama_moe_hot_cache_expert_size> collect_expert_sizes(const l
     }
 
     return result;
+}
+
+static size_t estimate_kv_cache_bytes_on_device(
+        const llama_model & model,
+        const llama_model_params & params,
+        ggml_backend_dev_t dev) {
+    if (!params.moe_hot_cache_auto_offload_kqv) {
+        return 0;
+    }
+
+    const auto & hparams = model.hparams;
+    if (params.moe_hot_cache_auto_n_ctx == 0) {
+        throw std::runtime_error("--moe-hot-cache-max-mib -1 requires an explicit --ctx-size");
+    }
+
+    const uint32_t n_seq_max = std::max<uint32_t>(1, params.moe_hot_cache_auto_n_seq_max);
+    const uint32_t n_ubatch = std::max<uint32_t>(1, params.moe_hot_cache_auto_n_ubatch);
+    uint32_t n_ctx = GGML_PAD(params.moe_hot_cache_auto_n_ctx, 256);
+    uint32_t n_ctx_seq = n_ctx;
+    if (!params.moe_hot_cache_auto_kv_unified) {
+        n_ctx_seq = GGML_PAD(n_ctx / n_seq_max, 256);
+        if (n_ctx_seq == 0) {
+            throw std::runtime_error("--moe-hot-cache-max-mib -1 computed n_ctx_seq == 0");
+        }
+    }
+
+    const uint32_t n_stream = params.moe_hot_cache_auto_kv_unified ? 1 : n_seq_max;
+    const bool v_trans = params.moe_hot_cache_auto_flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    const bool has_v = !hparams.is_mla();
+
+    uint64_t result = 0;
+    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+        if (!hparams.has_kv(il) || model.dev_layer(il) != dev) {
+            continue;
+        }
+
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
+        const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
+        uint32_t n_ctx_layer = n_ctx_seq;
+
+        if (hparams.swa_type != LLAMA_SWA_TYPE_NONE && hparams.is_swa(il) && !params.moe_hot_cache_auto_swa_full) {
+            n_ctx_layer = GGML_PAD(std::min(n_ctx_seq, hparams.n_swa*(params.moe_hot_cache_auto_kv_unified ? n_seq_max : 1) + n_ubatch), 256);
+        }
+
+        add_saturating(result, ggml_row_size(params.moe_hot_cache_auto_type_k, n_embd_k_gqa) * uint64_t(n_ctx_layer) * uint64_t(n_stream));
+        if (has_v) {
+            add_saturating(result, ggml_row_size(params.moe_hot_cache_auto_type_v, n_embd_v_gqa) * uint64_t(n_ctx_layer) * uint64_t(n_stream));
+        }
+    }
+
+    return result > std::numeric_limits<size_t>::max() ? std::numeric_limits<size_t>::max() : size_t(result);
+}
+
+static size_t auto_hot_cache_budget_bytes(
+        const llama_model & model,
+        const llama_model_params & params,
+        ggml_backend_dev_t dev,
+        bool reserve_kv_cache) {
+    size_t free = 0;
+    size_t total = 0;
+    ggml_backend_dev_memory(dev, &free, &total);
+    GGML_UNUSED(total);
+
+    const size_t kv_reserve = reserve_kv_cache ? estimate_kv_cache_bytes_on_device(model, params, dev) : 0;
+    const size_t safety_reserve = params.moe_hot_cache_auto_reserve_mib * LLAMA_MOE_HOT_CACHE_MIB;
+    const size_t reserved = kv_reserve > std::numeric_limits<size_t>::max() - safety_reserve
+        ? std::numeric_limits<size_t>::max()
+        : kv_reserve + safety_reserve;
+
+    if (free <= reserved) {
+        LLAMA_LOG_WARN("%s: auto hot-cache budget on %s is 0 MiB: free before hot-cache = %zu MiB, %s KV reserve = %zu MiB, safety reserve = %zu MiB\n",
+                __func__,
+                ggml_backend_dev_name(dev),
+                free / LLAMA_MOE_HOT_CACHE_MIB,
+                reserve_kv_cache ? "estimated" : "deferred",
+                kv_reserve / LLAMA_MOE_HOT_CACHE_MIB,
+                safety_reserve / LLAMA_MOE_HOT_CACHE_MIB);
+        return 0;
+    }
+
+    const size_t budget = ((free - reserved) / LLAMA_MOE_HOT_CACHE_MIB) * LLAMA_MOE_HOT_CACHE_MIB;
+    LLAMA_LOG_WARN("%s: auto hot-cache budget on %s: free before hot-cache = %zu MiB, %s KV reserve = %zu MiB, safety reserve = %zu MiB, budget = %zu MiB\n",
+            __func__,
+            ggml_backend_dev_name(dev),
+            free / LLAMA_MOE_HOT_CACHE_MIB,
+            reserve_kv_cache ? "estimated" : "deferred",
+            kv_reserve / LLAMA_MOE_HOT_CACHE_MIB,
+            safety_reserve / LLAMA_MOE_HOT_CACHE_MIB,
+            budget / LLAMA_MOE_HOT_CACHE_MIB);
+
+    return budget;
 }
 
 } // namespace
@@ -370,6 +470,7 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
         size_by_expert[key(size.layer, size.expert)] = size.bytes;
     }
 
+    std::unordered_set<uint32_t> active_layers;
     for (const auto & entry : observed) {
         const auto it = size_by_expert.find(key(entry.layer, entry.expert));
         if (it == size_by_expert.end()) {
@@ -377,19 +478,32 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
         }
 
         const size_t bytes = it->second;
-        if (bytes > budget_bytes || plan.used_bytes + bytes > budget_bytes) {
+        size_t cost = bytes;
+        if (active_layers.find(entry.layer) == active_layers.end()) {
+            if (cost > std::numeric_limits<size_t>::max() - bytes) {
+                continue;
+            }
+            cost += bytes; // final entry in each active layer is a zero dummy expert
+        }
+
+        if (cost > budget_bytes || plan.used_bytes > budget_bytes - cost) {
             continue;
         }
 
         plan.selected.push_back({ entry.layer, entry.expert, bytes });
-        plan.used_bytes += bytes;
+        plan.used_bytes += cost;
+        active_layers.insert(entry.layer);
     }
 
     return plan;
 }
 
-void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params) {
+void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params, bool reserve_kv_cache) {
     if (params.moe_hot_cache_max_mib == 0) {
+        return;
+    }
+
+    if (model.moe_hot_cache != nullptr) {
         return;
     }
 
@@ -399,8 +513,20 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
     }
 
     if (params.moe_hot_cache_path == nullptr || params.moe_hot_cache_path[0] == '\0') {
-        throw std::runtime_error("--moe-hot-cache is required when --moe-hot-cache-max-mib is greater than 0");
+        throw std::runtime_error("--moe-hot-cache is required when --moe-hot-cache-max-mib is not 0");
     }
+
+    LLAMA_LOG_WARN("%s: building hot-cache: max_mib = %lld, n_ctx = %u, n_seq_max = %u, n_ubatch = %u, swa_full = %d, kv_unified = %d, offload_kqv = %d, reserve_kv_cache = %d, path = %s\n",
+            __func__,
+            (long long) params.moe_hot_cache_max_mib,
+            params.moe_hot_cache_auto_n_ctx,
+            params.moe_hot_cache_auto_n_seq_max,
+            params.moe_hot_cache_auto_n_ubatch,
+            params.moe_hot_cache_auto_swa_full ? 1 : 0,
+            params.moe_hot_cache_auto_kv_unified ? 1 : 0,
+            params.moe_hot_cache_auto_offload_kqv ? 1 : 0,
+            reserve_kv_cache ? 1 : 0,
+            params.moe_hot_cache_path);
 
     std::ifstream file(params.moe_hot_cache_path);
     if (!file) {
@@ -410,9 +536,19 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
     const std::string json_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     const auto observed = llama_moe_hot_cache_parse_perf_json(json_str);
     const auto sizes = collect_expert_sizes(model);
-    const auto plan = llama_moe_hot_cache_select(observed, sizes, size_t(params.moe_hot_cache_max_mib)*LLAMA_MOE_HOT_CACHE_MIB);
+    ggml_backend_dev_t cache_dev = select_gpu_dev(&model);
+    const size_t budget_bytes = params.moe_hot_cache_max_mib < 0
+        ? auto_hot_cache_budget_bytes(model, params, cache_dev, reserve_kv_cache)
+        : size_t(params.moe_hot_cache_max_mib)*LLAMA_MOE_HOT_CACHE_MIB;
 
-    LLAMA_LOG_INFO("%s: selected %zu/%zu observed experts for hot-cache (%zu/%zu MiB)\n",
+    if (budget_bytes == 0) {
+        LLAMA_LOG_WARN("%s: hot-cache budget is 0 MiB; disabling hot-cache\n", __func__);
+        return;
+    }
+
+    const auto plan = llama_moe_hot_cache_select(observed, sizes, budget_bytes);
+
+    LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache (%zu/%zu MiB)\n",
             __func__, plan.selected.size(), plan.observed.size(),
             plan.used_bytes/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
 
@@ -522,7 +658,7 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
         ggml_format_name(dst.cold_mask, "blk.%u.moe_cold_mask", il);
     }
 
-    ggml_backend_buffer_type_t buft = select_gpu_buft();
+    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(cache_dev);
     ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft) };
     if (!buf) {
         throw std::runtime_error("failed to allocate MoE hot-cache buffer");
@@ -578,7 +714,7 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
         ggml_backend_tensor_set(dst.cold_mask,  cold_mask.data(),  0, cold_mask.size()*sizeof(cold_mask[0]));
     }
 
-    LLAMA_LOG_INFO("%s: %12s hot-cache buffer size = %8.2f MiB\n",
+    LLAMA_LOG_WARN("%s: %12s hot-cache buffer size = %8.2f MiB\n",
             __func__, ggml_backend_buffer_name(buf.get()), ggml_backend_buffer_get_size(buf.get())/1024.0/1024.0);
 
     cache->bufs.emplace_back(std::move(buf));

@@ -1,6 +1,6 @@
 # MoE Hot-Cache: Entwicklerdokumentation
 
-Stand: 2026-05-14  
+Stand: 2026-05-15
 Branch: `cached-experts-v2`  
 Letzter betrachteter Commit: `e3ace0d3b Separate moe hot cache feature pt5.`
 
@@ -15,7 +15,7 @@ Die Aenderung fuehrt einen optionalen Hot-Cache fuer MoE-Experten ein.
 Ohne Hot-Cache laeuft der Server wie vorher. Erst wenn ein Hot-Cache-Budget gesetzt wird, wird der neue Pfad aktiv:
 
 ```text
---moe-hot-cache-max-mib > 0
+--moe-hot-cache-max-mib != 0
 ```
 
 Dann muss zusaetzlich eine Hot-Cache-JSON-Datei gesetzt sein:
@@ -113,6 +113,8 @@ Der neue Pfad ist aktiv, wenn:
 --moe-hot-cache <datei.json>
 ```
 
+`N > 0` baut einen Cache mit festem MiB-Budget. `N = -1` aktiviert Auto-Sizing: der Cache wird erst nach der echten KV-Cache-Allokation im `llama_context` aufgebaut und nutzt den dann noch freien VRAM abzüglich `--moe-hot-cache-auto-reserve-mib`.
+
 Wenn ein Budget gesetzt ist, aber keine JSON-Datei, ist das absichtlich ein Fehler. Sonst waere unklar, welche Experten gecached werden sollen.
 
 Der Qwen-Hot-Pfad wird pro Layer nur gebaut, wenn:
@@ -141,7 +143,14 @@ Pfad zur Perf-/Hot-Cache-JSON.
 LLAMA_ARG_MOE_HOT_CACHE_MAX_MIB=<N>
 ```
 
-Maximales Speicherbudget fuer den Hot-Cache in MiB. `0` deaktiviert die Funktion.
+Maximales Speicherbudget fuer den Hot-Cache in MiB. `0` deaktiviert die Funktion, positive Werte sind feste Budgets, `-1` aktiviert Auto-Sizing. Auto-Sizing erfordert eine explizite `--ctx-size`, weil der KV-Cache Teil der Speicherentscheidung ist.
+
+```text
+--moe-hot-cache-auto-reserve-mib <N>
+LLAMA_ARG_MOE_HOT_CACHE_AUTO_RESERVE_MIB=<N>
+```
+
+Nur relevant bei `--moe-hot-cache-max-mib -1`. Der Wert gibt an, wie viele MiB nach KV-Cache und vor dem Hot-Cache frei bleiben sollen. Default ist `1024`. Hoehere Werte sind konservativer und vermeiden CUDA-OOM beim Warmup oder bei Compute-Transienten; niedrigere Werte machen den Hot-Cache groesser.
 
 ### Parallelisierung
 
@@ -380,8 +389,9 @@ Wenn Perf deaktiviert ist, liefert die JSON-Funktion absichtlich nur einen klein
 
 ### `src/llama-context.cpp`
 
-Nur noch kleine Hooks fuer:
+Enthaelt kleine Hooks fuer:
 
+- Auto-Hot-Cache-Aufbau bei `--moe-hot-cache-max-mib -1` nach der echten KV-Cache-Allokation,
 - Perf-Callback setzen,
 - Scheduler-Perf aktivieren,
 - Graph-Compute wie vorher ausfuehren.
@@ -390,13 +400,13 @@ Wenn `--no-perf` aktiv ist, wird der MoE-Perf-Pfad nicht gesetzt.
 
 ### `src/llama.cpp`
 
-Initialisiert den Hot-Cache beim Modell-Laden:
+Initialisiert den Hot-Cache beim Modell-Laden fuer feste Budgets:
 
 ```text
 llama_moe_hot_cache_init(*model, params)
 ```
 
-Die Funktion ist durch `moe_hot_cache_max_mib` gated.
+Die Funktion ist durch `moe_hot_cache_max_mib` gated. Positive Budgets werden beim Modell-Laden aufgebaut. `-1` wird bewusst bis zur Context-Erstellung verschoben, damit der echte freie VRAM nach KV-Cache-Allokation verwendet wird.
 
 ### `src/llama-model.cpp` und verwandte Param-Dateien
 
@@ -405,6 +415,7 @@ Erweitern die Modellparameter um:
 ```text
 moe_hot_cache_path
 moe_hot_cache_max_mib
+moe_hot_cache_auto_reserve_mib
 ```
 
 Das Modell besitzt ausserdem den Hot-Cache-Zustand:
@@ -512,9 +523,11 @@ Wichtig:
 
 ist der Default und bedeutet: kein Hot-Cache.
 
-### 2. Modell wird geladen
+### 2. Modell und Context werden geladen
 
-Wenn `moe_hot_cache_max_mib > 0` ist, wird beim Modell-Laden der Hot-Cache initialisiert.
+Wenn `moe_hot_cache_max_mib > 0` ist, wird beim Modell-Laden der Hot-Cache mit festem Budget initialisiert.
+
+Wenn `moe_hot_cache_max_mib == -1` ist, wird der Hot-Cache erst in `llama_context` aufgebaut, nachdem die echte KV-Cache-Allokation abgeschlossen ist. Danach wird der noch freie VRAM gelesen, `moe_hot_cache_auto_reserve_mib` abgezogen und der Rest als Cache-Budget genutzt.
 
 Der Cache braucht:
 
@@ -736,7 +749,8 @@ Diese JSON kann danach als Input fuer den Hot-Cache verwendet werden:
 LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --moe-hot-cache performance.json \
-  --moe-hot-cache-max-mib <budget> \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
   <normale modell- und server-argumente>
 ```
 
@@ -747,7 +761,8 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --no-perf \
   --moe-hot-cache performance.json \
-  --moe-hot-cache-max-mib <budget> \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
   <normale modell- und server-argumente>
 ```
 
@@ -1045,7 +1060,8 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --perf \
   --moe-hot-cache performance.json \
-  --moe-hot-cache-max-mib <budget> \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
   <normale argumente>
 ```
 
@@ -1056,7 +1072,8 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --no-perf \
   --moe-hot-cache performance.json \
-  --moe-hot-cache-max-mib <budget> \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
   <normale argumente>
 ```
 

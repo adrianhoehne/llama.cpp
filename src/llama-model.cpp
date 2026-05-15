@@ -1600,6 +1600,10 @@ llama_split_mode llama_model::split_mode() const {
     return params.split_mode;
 }
 
+const llama_model_params & llama_model::get_params() const {
+    return params;
+}
+
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> ret;
     for (const auto & [ctx, bufs] : pimpl->ctxs_bufs) {
@@ -2102,6 +2106,16 @@ llama_model_params llama_model_default_params() {
         /*.tensor_split                =*/ nullptr,
         /*.moe_hot_cache_max_mib       =*/ 0,
         /*.moe_hot_cache_path          =*/ nullptr,
+        /*.moe_hot_cache_auto_n_ctx    =*/ 0,
+        /*.moe_hot_cache_auto_n_seq_max=*/ 1,
+        /*.moe_hot_cache_auto_n_ubatch =*/ 512,
+        /*.moe_hot_cache_auto_reserve_mib =*/ 1024,
+        /*.moe_hot_cache_auto_type_k   =*/ GGML_TYPE_F16,
+        /*.moe_hot_cache_auto_type_v   =*/ GGML_TYPE_F16,
+        /*.moe_hot_cache_auto_flash_attn_type =*/ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /*.moe_hot_cache_auto_offload_kqv =*/ true,
+        /*.moe_hot_cache_auto_swa_full =*/ true,
+        /*.moe_hot_cache_auto_kv_unified =*/ false,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,

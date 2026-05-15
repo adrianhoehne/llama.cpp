@@ -545,7 +545,8 @@ struct common_params {
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
 
-    uint64_t moe_hot_cache_max_mib = 0;  // max MiB for experimental MoE hot expert cache, 0 = disabled
+    int64_t moe_hot_cache_max_mib = 0;   // max MiB for experimental MoE hot expert cache, 0 = disabled, -1 = auto
+    uint64_t moe_hot_cache_auto_reserve_mib = 1024; // MiB kept free when auto-sizing the MoE hot expert cache
     std::string moe_hot_cache;           // path to /moe-layer-perf JSON
     float moe_hot_cache_update_rate = 0.0f; // fraction of hot-cache entries to update after each completed server run
 

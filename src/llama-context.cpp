@@ -9,6 +9,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-moe-hot-cache.h"
 #include "llama-moe-hot-cache-perf.h"
 #include "llama-ext.h"
 #include "llama.h"
@@ -289,6 +290,10 @@ llama_context::llama_context(
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
+    }
+
+    if (!hparams.vocab_only && model.get_params().moe_hot_cache_max_mib < 0 && model.moe_hot_cache == nullptr) {
+        llama_moe_hot_cache_init(const_cast<llama_model &>(model), model.get_params(), false);
     }
 
     // init backends
