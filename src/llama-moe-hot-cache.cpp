@@ -15,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -146,6 +147,28 @@ static void copy_scale_slice(const ggml_tensor * src, ggml_tensor * dst, uint32_
     std::vector<uint8_t> buf(bytes);
     ggml_backend_tensor_get(src, buf.data(), src->nb[0]*src_expert, bytes);
     ggml_backend_tensor_set(dst, buf.data(), dst->nb[0]*dst_expert, bytes);
+}
+
+static void set_tensor_i32_1d(ggml_tensor * t, uint32_t index, int32_t value) {
+    ggml_backend_tensor_set(t, &value, t->nb[1]*index, sizeof(value));
+}
+
+static void set_tensor_f32_1d(ggml_tensor * t, uint32_t index, float value) {
+    ggml_backend_tensor_set(t, &value, t->nb[1]*index, sizeof(value));
+}
+
+static std::vector<uint32_t> current_hot_experts(const llama_moe_hot_cache_layer & layer) {
+    std::vector<uint32_t> result(layer.n_hot, std::numeric_limits<uint32_t>::max());
+
+    for (uint32_t expert = 0; expert < layer.hot_id_map_host.size(); ++expert) {
+        const int32_t cache_id = layer.hot_id_map_host[expert];
+        if (cache_id >= 0 && uint32_t(cache_id) < result.size()) {
+            result[cache_id] = expert;
+        }
+    }
+
+    result.erase(std::remove(result.begin(), result.end(), std::numeric_limits<uint32_t>::max()), result.end());
+    return result;
 }
 
 static std::vector<llama_moe_hot_cache_expert_size> collect_expert_sizes(const llama_model & model) {
@@ -561,6 +584,248 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
     cache->bufs.emplace_back(std::move(buf));
     cache->ctxs.emplace_back(std::move(ctx));
     model.moe_hot_cache = std::move(cache);
+}
+
+llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
+        llama_model & model,
+        const std::string & json_str,
+        double update_rate) {
+    llama_moe_hot_cache_update_stats stats;
+    stats.update_rate = std::clamp(update_rate, 0.0, 1.0);
+
+    if (!model.moe_hot_cache || !model.moe_hot_cache->active()) {
+        return stats;
+    }
+
+    json root;
+    try {
+        root = json::parse(json_str);
+    } catch (const std::exception & e) {
+        LLAMA_LOG_WARN("%s: failed to parse MoE layer perf JSON: %s\n", __func__, e.what());
+        return stats;
+    }
+
+    if (!root.is_object() || !root.value("enabled", false) ||
+        !root.contains("layers") || !root["layers"].is_array()) {
+        return stats;
+    }
+
+    stats.active = true;
+
+    struct layer_counts {
+        std::unordered_map<uint32_t, uint64_t> experts;
+    };
+
+    std::vector<layer_counts> counts(model.hparams.n_layer);
+
+    const auto add_counts = [](const json & layer, const char * field, std::unordered_map<uint32_t, uint64_t> & dst) {
+        const auto it = layer.find(field);
+        if (it == layer.end() || !it->is_array()) {
+            return false;
+        }
+
+        bool added = false;
+        for (const auto & entry : *it) {
+            if (!entry.is_array() || entry.size() != 2 ||
+                !entry[0].is_number_unsigned() || !entry[1].is_number_unsigned()) {
+                continue;
+            }
+
+            const uint64_t hits = entry[1].get<uint64_t>();
+            if (hits == 0) {
+                continue;
+            }
+
+            const uint32_t expert = entry[0].get<uint32_t>();
+            add_saturating(dst[expert], hits);
+            added = true;
+        }
+
+        return added;
+    };
+
+    for (const auto & layer : root["layers"]) {
+        if (!layer.is_object() || !layer.contains("layer") || !layer["layer"].is_number_unsigned()) {
+            continue;
+        }
+
+        const uint32_t il = layer["layer"].get<uint32_t>();
+        if (il >= counts.size()) {
+            continue;
+        }
+
+        const bool has_branch_counts =
+            add_counts(layer, "hot_experts",  counts[il].experts) |
+            add_counts(layer, "cold_experts", counts[il].experts);
+
+        if (!has_branch_counts) {
+            add_counts(layer, "experts", counts[il].experts);
+        }
+
+        const uint64_t hot_slots = layer.value("hot_slots_total", uint64_t(0));
+        const uint64_t cold_slots = layer.value("cold_slots_total", uint64_t(0));
+        stats.hot_slots += hot_slots;
+        stats.cold_slots += cold_slots;
+    }
+
+    const uint64_t total_slots = stats.hot_slots + stats.cold_slots;
+    stats.hit_rate = total_slots > 0 ? (double) stats.hot_slots / (double) total_slots : 0.0;
+
+    struct replacement_candidate {
+        uint32_t layer = 0;
+        uint32_t evict_expert = 0;
+        uint32_t add_expert = 0;
+        uint32_t cache_id = 0;
+        uint64_t add_score = 0;
+        uint64_t evict_score = 0;
+    };
+
+    std::vector<replacement_candidate> candidates;
+
+    for (uint32_t il = 0; il < model.moe_hot_cache->layers.size(); ++il) {
+        auto & cache_layer = model.moe_hot_cache->layers[il];
+        if (!cache_layer.active() || il >= counts.size() || counts[il].experts.empty()) {
+            continue;
+        }
+
+        std::vector<uint32_t> current = current_hot_experts(cache_layer);
+        if (current.empty()) {
+            continue;
+        }
+
+        stats.hot_experts += current.size();
+
+        std::unordered_set<uint32_t> current_set(current.begin(), current.end());
+        std::vector<std::pair<uint32_t, uint64_t>> ranked;
+        ranked.reserve(counts[il].experts.size());
+        for (const auto & [expert, hits] : counts[il].experts) {
+            if (expert < cache_layer.n_expert && hits > 0) {
+                ranked.push_back({ expert, hits });
+            }
+        }
+
+        std::sort(ranked.begin(), ranked.end(), [](const auto & a, const auto & b) {
+            if (a.second != b.second) {
+                return a.second > b.second;
+            }
+            return a.first < b.first;
+        });
+
+        if (ranked.size() > current.size()) {
+            ranked.resize(current.size());
+        }
+
+        std::unordered_set<uint32_t> desired_set;
+        desired_set.reserve(ranked.size());
+        for (const auto & [expert, hits] : ranked) {
+            GGML_UNUSED(hits);
+            desired_set.insert(expert);
+        }
+
+        std::vector<std::pair<uint32_t, uint64_t>> to_add;
+        for (const auto & [expert, hits] : ranked) {
+            if (current_set.find(expert) == current_set.end()) {
+                to_add.push_back({ expert, hits });
+            }
+        }
+
+        std::vector<std::pair<uint32_t, uint64_t>> to_evict;
+        for (uint32_t expert : current) {
+            if (desired_set.find(expert) == desired_set.end()) {
+                const auto it = counts[il].experts.find(expert);
+                to_evict.push_back({ expert, it == counts[il].experts.end() ? 0 : it->second });
+            }
+        }
+
+        std::sort(to_evict.begin(), to_evict.end(), [](const auto & a, const auto & b) {
+            if (a.second != b.second) {
+                return a.second < b.second;
+            }
+            return a.first < b.first;
+        });
+
+        const size_t n_layer_candidates = std::min(to_add.size(), to_evict.size());
+        for (size_t i = 0; i < n_layer_candidates; ++i) {
+            const uint32_t evict = to_evict[i].first;
+            const int32_t cache_id = cache_layer.hot_id_map_host[evict];
+            if (cache_id < 0 || uint32_t(cache_id) >= cache_layer.n_hot) {
+                continue;
+            }
+
+            candidates.push_back({
+                    il,
+                    evict,
+                    to_add[i].first,
+                    uint32_t(cache_id),
+                    to_add[i].second,
+                    to_evict[i].second,
+                });
+        }
+    }
+
+    stats.candidates = candidates.size();
+    stats.max_exchange = stats.update_rate > 0.0 && stats.hot_experts > 0
+        ? std::min(candidates.size(), (size_t) std::ceil(stats.update_rate * (double) stats.hot_experts))
+        : 0;
+
+    if (stats.max_exchange == 0) {
+        return stats;
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto & a, const auto & b) {
+        const uint64_t gain_a = a.add_score > a.evict_score ? a.add_score - a.evict_score : 0;
+        const uint64_t gain_b = b.add_score > b.evict_score ? b.add_score - b.evict_score : 0;
+        if (gain_a != gain_b) {
+            return gain_a > gain_b;
+        }
+        if (a.layer != b.layer) {
+            return a.layer < b.layer;
+        }
+        return a.add_expert < b.add_expert;
+    });
+
+    std::unordered_set<uint32_t> changed_layers;
+    for (size_t i = 0; i < stats.max_exchange; ++i) {
+        const auto & candidate = candidates[i];
+        const auto & src = model.layers[candidate.layer];
+        auto & dst = model.moe_hot_cache->layers[candidate.layer];
+
+        if (candidate.add_expert >= dst.n_expert || candidate.evict_expert >= dst.n_expert) {
+            continue;
+        }
+
+        const int32_t current_cache_id = dst.hot_id_map_host[candidate.evict_expert];
+        if (current_cache_id < 0 || uint32_t(current_cache_id) != candidate.cache_id) {
+            continue;
+        }
+        if (dst.hot_id_map_host[candidate.add_expert] >= 0) {
+            continue;
+        }
+
+        copy_expert_slice(src.ffn_gate_up_exps, dst.ffn_gate_up_exps, candidate.add_expert, candidate.cache_id);
+        copy_expert_slice(src.ffn_gate_exps,    dst.ffn_gate_exps,    candidate.add_expert, candidate.cache_id);
+        copy_expert_slice(src.ffn_up_exps,      dst.ffn_up_exps,      candidate.add_expert, candidate.cache_id);
+        copy_expert_slice(src.ffn_down_exps,    dst.ffn_down_exps,    candidate.add_expert, candidate.cache_id);
+        copy_scale_slice(src.ffn_gate_exps_s,   dst.ffn_gate_exps_s,  candidate.add_expert, candidate.cache_id);
+        copy_scale_slice(src.ffn_up_exps_s,     dst.ffn_up_exps_s,    candidate.add_expert, candidate.cache_id);
+        copy_scale_slice(src.ffn_down_exps_s,   dst.ffn_down_exps_s,  candidate.add_expert, candidate.cache_id);
+
+        dst.hot_id_map_host[candidate.evict_expert] = -1;
+        dst.hot_id_map_host[candidate.add_expert] = int32_t(candidate.cache_id);
+
+        set_tensor_i32_1d(dst.hot_id_map, candidate.evict_expert, int32_t(dst.n_hot));
+        set_tensor_i32_1d(dst.hot_id_map, candidate.add_expert, int32_t(candidate.cache_id));
+        set_tensor_f32_1d(dst.hot_mask, candidate.evict_expert, 0.0f);
+        set_tensor_f32_1d(dst.hot_mask, candidate.add_expert, 1.0f);
+        set_tensor_f32_1d(dst.cold_mask, candidate.evict_expert, 1.0f);
+        set_tensor_f32_1d(dst.cold_mask, candidate.add_expert, 0.0f);
+
+        stats.exchanged++;
+        changed_layers.insert(candidate.layer);
+    }
+
+    stats.layers_changed = changed_layers.size();
+    return stats;
 }
 
 bool llama_moe_hot_cache_layer_active(const llama_model & model, int il) {

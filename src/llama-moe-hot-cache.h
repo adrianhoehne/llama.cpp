@@ -30,6 +30,19 @@ struct llama_moe_hot_cache_plan {
     size_t used_bytes = 0;
 };
 
+struct llama_moe_hot_cache_update_stats {
+    bool active = false;
+    double update_rate = 0.0;
+    double hit_rate = 0.0;
+    uint64_t hot_slots = 0;
+    uint64_t cold_slots = 0;
+    size_t hot_experts = 0;
+    size_t candidates = 0;
+    size_t max_exchange = 0;
+    size_t exchanged = 0;
+    size_t layers_changed = 0;
+};
+
 struct llama_moe_hot_cache_layer {
     ggml_tensor * ffn_gate_up_exps = nullptr;
     ggml_tensor * ffn_gate_exps    = nullptr;
@@ -92,6 +105,11 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
         size_t budget_bytes);
 
 void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params);
+
+llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
+        llama_model & model,
+        const std::string & json_str,
+        double update_rate);
 
 bool llama_moe_hot_cache_layer_active(const llama_model & model, int il);
 

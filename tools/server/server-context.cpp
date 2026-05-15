@@ -14,6 +14,8 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "src/llama-moe-hot-cache.h"
+#include "src/llama-moe-hot-cache-perf.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -641,6 +643,8 @@ private:
     // use server_context methods instead
 
     common_params params_base;
+
+    bool moe_hot_cache_update_pending = false;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
@@ -1667,6 +1671,7 @@ private:
 
         queue_results.send(std::move(res));
         write_moe_layer_perf_file();
+        moe_hot_cache_update_pending = true;
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
@@ -2148,6 +2153,7 @@ private:
             }
 
             if (all_idle) {
+                update_moe_hot_cache_if_pending();
                 SRV_INF("%s", "all slots are idle\n");
 
                 return;
@@ -3274,6 +3280,44 @@ private:
         file << llama_moe_layer_perf_json(nullptr) << '\n';
         if (!file) {
             SRV_WRN("failed to write MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
+        }
+    }
+
+    void update_moe_hot_cache_if_pending() {
+        if (!moe_hot_cache_update_pending) {
+            return;
+        }
+
+        moe_hot_cache_update_pending = false;
+
+        if (model_tgt == nullptr) {
+            return;
+        }
+
+        const std::string perf_json = llama_moe_layer_perf_json(nullptr);
+        const auto stats = llama_moe_hot_cache_update_from_perf_json(
+                *model_tgt,
+                perf_json,
+                params_base.moe_hot_cache_update_rate);
+
+        if (!stats.active || stats.hot_slots + stats.cold_slots == 0) {
+            return;
+        }
+
+        SRV_INF("MoE hot-cache hit rate: %.2f%% (%" PRIu64 "/%" PRIu64 " slots)\n",
+                100.0*stats.hit_rate,
+                stats.hot_slots,
+                stats.hot_slots + stats.cold_slots);
+
+        if (params_base.moe_hot_cache_update_rate > 0.0f) {
+            SRV_INF("MoE hot-cache update: rate = %.2f%%, exchanged = %zu/%zu candidates, budget = %zu/%zu hot experts, layers changed = %zu\n",
+                    100.0*stats.update_rate,
+                    stats.exchanged,
+                    stats.candidates,
+                    stats.max_exchange,
+                    stats.hot_experts,
+                    stats.layers_changed);
+            llama_moe_layer_perf_reset();
         }
     }
 };

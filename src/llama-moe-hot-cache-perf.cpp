@@ -104,7 +104,7 @@ struct llama_moe_layer_perf_local {
         }
     }
 
-    void reset_locked() {
+    void reset_locked(bool count_overflow = true) {
         for (auto & layer : layers) {
             layer.calls = 0;
             layer.expert_hits_total = 0;
@@ -157,7 +157,9 @@ struct llama_moe_layer_perf_local {
         }
 
         updates = 0;
-        overflow_resets++;
+        if (count_overflow) {
+            overflow_resets++;
+        }
         last_callback_us = 0;
     }
 
@@ -413,6 +415,13 @@ void llama_moe_layer_perf_end() {
 
     g_llama_moe_layer_perf.active = false;
     g_llama_moe_layer_perf.last_callback_us = 0;
+}
+
+void llama_moe_layer_perf_reset() {
+    std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
+
+    g_llama_moe_layer_perf.reset_locked(false);
+    g_llama_moe_layer_perf.updates = 0;
 }
 
 static void llama_moe_layer_perf_count_topk_locked(uint32_t layer, ggml_tensor * t) {

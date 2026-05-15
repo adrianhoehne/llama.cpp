@@ -926,7 +926,14 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         if (ctx_arg.params.moe_hot_cache_max_mib > 0 && ctx_arg.params.moe_hot_cache.empty()) {
             throw std::invalid_argument("--moe-hot-cache is required when --moe-hot-cache-max-mib is greater than 0");
         }
+        if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f && ctx_arg.params.moe_hot_cache_max_mib == 0) {
+            throw std::invalid_argument("--moe-hot-cache-update-rate requires --moe-hot-cache-max-mib");
+        }
         if (!ctx_arg.params.moe_layer_perf_out.empty()) {
+            ctx_arg.params.no_perf = false;
+            ctx_arg.params.sampling.no_perf = false;
+        }
+        if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f) {
             ctx_arg.params.no_perf = false;
             ctx_arg.params.sampling.no_perf = false;
         }
@@ -2349,6 +2356,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_hot_cache = value;
         }
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-update-rate"}, "N",
+        string_format("experimental: fraction of hot-cache entries to replace after each completed server run, 0.0-1.0 (default: %.2f)", params.moe_hot_cache_update_rate),
+        [](common_params & params, const std::string & value_str) {
+            const float value = std::stof(value_str);
+            if (value < 0.0f || value > 1.0f) {
+                throw std::invalid_argument("--moe-hot-cache-update-rate must be between 0.0 and 1.0");
+            }
+            params.moe_hot_cache_update_rate = value;
+            if (value > 0.0f) {
+                params.no_perf = false;
+                params.sampling.no_perf = false;
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_HOT_CACHE_UPDATE_RATE"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

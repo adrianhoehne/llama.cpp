@@ -98,7 +98,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (!params.moe_layer_perf_out.empty()) {
+    if (!params.moe_layer_perf_out.empty() || params.moe_hot_cache_update_rate > 0.0f) {
         set_env_var("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS", "1");
         params.no_perf = false;
         params.sampling.no_perf = false;

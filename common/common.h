@@ -547,6 +547,7 @@ struct common_params {
 
     uint64_t moe_hot_cache_max_mib = 0;  // max MiB for experimental MoE hot expert cache, 0 = disabled
     std::string moe_hot_cache;           // path to /moe-layer-perf JSON
+    float moe_hot_cache_update_rate = 0.0f; // fraction of hot-cache entries to update after each completed server run
 
     bool single_turn       = false; // single turn chat conversation
 
