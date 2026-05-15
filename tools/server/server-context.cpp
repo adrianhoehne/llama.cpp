@@ -418,7 +418,11 @@ struct server_slot {
         return stop_pos;
     }
 
-    void print_timings_tg() {
+    void print_timings_tg(bool enabled) {
+        if (!enabled) {
+            return;
+        }
+
         if (n_decoded < 100) {
             return;
         }
@@ -3124,7 +3128,7 @@ private:
                     continue;
                 }
 
-                slot.print_timings_tg();
+                slot.print_timings_tg(params_base.log_tg_progress);
             }
 
             // speculative decoding - main model sample and accept
@@ -3237,7 +3241,7 @@ private:
                     }
                 }
 
-                slot.print_timings_tg();
+                slot.print_timings_tg(params_base.log_tg_progress);
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
             }
