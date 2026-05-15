@@ -1,7 +1,6 @@
 #include "llama-context.h"
 
 #include "ggml.h"
-#include "ggml-backend-moe-hot-cache.h"
 #include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
@@ -292,9 +291,7 @@ llama_context::llama_context(
         memory.reset(model.create_memory(params_mem, cparams));
     }
 
-    if (!hparams.vocab_only && model.get_params().moe_hot_cache_max_mib < 0 && model.moe_hot_cache == nullptr) {
-        llama_moe_hot_cache_init(const_cast<llama_model &>(model), model.get_params(), false);
-    }
+    llama_moe_hot_cache_init_after_context_memory(model);
 
     // init backends
     if (!hparams.vocab_only) {
@@ -2209,24 +2206,11 @@ ggml_status llama_context::graph_compute(
     }
 
     ggml_status status;
-    const bool moe_layer_perf_enabled = !cparams.warmup && llama_moe_layer_perf_is_enabled(this) && model.hparams.n_expert > 0;
-    ggml_backend_sched_set_moe_hot_cache_parallel_perf_enabled(sched.get(), moe_layer_perf_enabled);
-
+    const bool moe_layer_perf_enabled = llama_moe_layer_perf_graph_compute_begin(this, sched.get());
     if (moe_layer_perf_enabled) {
-        ggml_backend_sched_set_eval_callback(sched.get(), llama_moe_layer_perf_eval_callback, this);
-
-        llama_moe_layer_perf_begin(
-            model.hparams.n_layer,
-            model.hparams.n_expert,
-            model.hparams.n_expert_used);
-
         status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
         ggml_backend_sched_synchronize(sched.get());
-
-        llama_moe_layer_perf_collect_parallel_metrics(sched.get());
-        llama_moe_layer_perf_end();
-
-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        llama_moe_layer_perf_graph_compute_end(this, sched.get());
     } else {
         status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     }

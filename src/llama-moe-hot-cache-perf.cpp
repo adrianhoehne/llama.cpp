@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "ggml-backend-moe-hot-cache.h"
 #include "llama-context.h"
+#include "llama-model.h"
 #include "llama.h"
 
 #include <algorithm>
@@ -710,6 +711,30 @@ void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t sched) {
         g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_zero_output, metric.parallel_fallback_zero_output);
         g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_other, metric.parallel_fallback_other);
     }
+}
+
+bool llama_moe_layer_perf_graph_compute_begin(llama_context * ctx, ggml_backend_sched_t sched) {
+    const auto & cparams = ctx->get_cparams();
+    const auto & model = ctx->get_model();
+    const bool enabled = !cparams.warmup && llama_moe_layer_perf_is_enabled(ctx) && model.hparams.n_expert > 0;
+
+    ggml_backend_sched_set_moe_hot_cache_parallel_perf_enabled(sched, enabled);
+    if (!enabled) {
+        return false;
+    }
+
+    ggml_backend_sched_set_eval_callback(sched, llama_moe_layer_perf_eval_callback, ctx);
+    llama_moe_layer_perf_begin(model.hparams.n_layer, model.hparams.n_expert, model.hparams.n_expert_used);
+
+    return true;
+}
+
+void llama_moe_layer_perf_graph_compute_end(llama_context * ctx, ggml_backend_sched_t sched) {
+    const auto & cparams = ctx->get_cparams();
+
+    llama_moe_layer_perf_collect_parallel_metrics(sched);
+    llama_moe_layer_perf_end();
+    ggml_backend_sched_set_eval_callback(sched, cparams.cb_eval, cparams.cb_eval_user_data);
 }
 
 const char * llama_moe_layer_perf_json(struct llama_context * ctx) {

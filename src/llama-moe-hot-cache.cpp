@@ -722,6 +722,23 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
     model.moe_hot_cache = std::move(cache);
 }
 
+void llama_moe_hot_cache_init_after_model_load(llama_model & model, const llama_model_params & params) {
+    if (params.moe_hot_cache_max_mib <= 0) {
+        return;
+    }
+
+    llama_moe_hot_cache_init(model, params, true);
+}
+
+void llama_moe_hot_cache_init_after_context_memory(const llama_model & model) {
+    const auto & params = model.get_params();
+    if (model.hparams.vocab_only || params.moe_hot_cache_max_mib >= 0 || model.moe_hot_cache != nullptr) {
+        return;
+    }
+
+    llama_moe_hot_cache_init(const_cast<llama_model &>(model), params, false);
+}
+
 llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
         llama_model & model,
         const std::string & json_str,

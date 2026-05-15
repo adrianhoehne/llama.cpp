@@ -105,6 +105,8 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
         size_t budget_bytes);
 
 void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params, bool reserve_kv_cache = true);
+void llama_moe_hot_cache_init_after_model_load(llama_model & model, const llama_model_params & params);
+void llama_moe_hot_cache_init_after_context_memory(const llama_model & model);
 
 llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
         llama_model & model,
