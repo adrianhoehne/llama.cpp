@@ -220,6 +220,7 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
                 throw std::runtime_error(std::string("--moe-hot-cache ") + field_name + " must be an array");
             }
 
+            bool added_any = false;
             for (const auto & expert : *it) {
                 if (!expert.is_array() || expert.size() != 2 ||
                     !expert[0].is_number_unsigned() || !expert[1].is_number_unsigned()) {
@@ -233,9 +234,10 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
 
                 const uint32_t expert_id = expert[0].get<uint32_t>();
                 add_saturating(obs.experts[expert_id].*member, hit_count);
+                added_any = true;
             }
 
-            return true;
+            return added_any;
         };
 
         obs.has_branch_counts =
@@ -405,6 +407,30 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
             selected_by_layer[selected.layer].push_back(selected.expert);
         }
     }
+
+    size_t active_layers = 0;
+    size_t total_hot_per_layer = 0;
+    size_t min_hot_per_layer = std::numeric_limits<size_t>::max();
+    size_t max_hot_per_layer = 0;
+
+    for (const auto & experts : selected_by_layer) {
+        if (experts.empty()) {
+            continue;
+        }
+
+        active_layers++;
+        total_hot_per_layer += experts.size();
+        min_hot_per_layer = std::min(min_hot_per_layer, experts.size());
+        max_hot_per_layer = std::max(max_hot_per_layer, experts.size());
+    }
+
+    LLAMA_LOG_INFO("%s: hot-cache active layers = %zu/%zu, hot experts per active layer min/avg/max = %zu/%.1f/%zu\n",
+            __func__,
+            active_layers,
+            selected_by_layer.size(),
+            active_layers > 0 ? min_hot_per_layer : 0,
+            active_layers > 0 ? (double) total_hot_per_layer / (double) active_layers : 0.0,
+            max_hot_per_layer);
 
     size_t n_tensors = 0;
     for (uint32_t il = 0; il < selected_by_layer.size(); ++il) {

@@ -7,11 +7,13 @@
 #include <string>
 #include <vector>
 
-static void require(bool condition) {
+static void require_impl(bool condition, int line) {
     if (!condition) {
-        throw std::runtime_error("test assertion failed");
+        throw std::runtime_error("test assertion failed at line " + std::to_string(line));
     }
 }
+
+#define require(condition) require_impl((condition), __LINE__)
 
 static bool hot_dummy_padding_enabled() {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_HOT_DUMMY_PADDING");
@@ -70,6 +72,44 @@ static void test_parse_branch_counts_and_layer_weight() {
     require(entries[0].layer == 0 && entries[0].expert == 1 && entries[0].hit_count == 13);
     require(entries[1].layer == 0 && entries[1].expert == 2 && entries[1].hit_count == 13);
     require(entries[2].layer == 1 && entries[2].expert == 3 && entries[2].hit_count == 10);
+}
+
+static void test_parse_raw_opt_schema() {
+    const std::string json = R"({
+        "enabled": true,
+        "schema": "llama.cpp.moe_layer_opt_perf.v1",
+        "n_expert": 4,
+        "n_expert_used": 16,
+        "summary": {
+            "layer_calls": 8,
+            "hot_slot_ratio": 0
+        },
+        "layers": [
+            {
+                "layer": 0,
+                "calls": 4,
+                "experts": [[0, 2], [1, 5], [2, 0], [3, 4]],
+                "hot_experts": [],
+                "cold_experts": []
+            },
+            {
+                "layer": 1,
+                "calls": 4,
+                "experts": [[0, 1], [1, 6], [2, 3], [3, 0]],
+                "hot_experts": [],
+                "cold_experts": []
+            }
+        ]
+    })";
+
+    const auto entries = llama_moe_hot_cache_parse_perf_json(json);
+    require(entries.size() == 6);
+    require(entries[0].layer == 1 && entries[0].expert == 1 && entries[0].hit_count == 6);
+    require(entries[1].layer == 0 && entries[1].expert == 1 && entries[1].hit_count == 5);
+    require(entries[2].layer == 0 && entries[2].expert == 3 && entries[2].hit_count == 4);
+    require(entries[3].layer == 1 && entries[3].expert == 2 && entries[3].hit_count == 3);
+    require(entries[4].layer == 0 && entries[4].expert == 0 && entries[4].hit_count == 2);
+    require(entries[5].layer == 1 && entries[5].expert == 0 && entries[5].hit_count == 1);
 }
 
 static void test_select_budget() {
@@ -292,6 +332,7 @@ static void test_build_worklist_from_logits() {
 int main() {
     test_parse_and_sort();
     test_parse_branch_counts_and_layer_weight();
+    test_parse_raw_opt_schema();
     test_select_budget();
     test_bad_schema();
     test_build_worklist_mixed();
