@@ -425,6 +425,20 @@ void llama_moe_layer_perf_reset() {
     g_llama_moe_layer_perf.updates = 0;
 }
 
+bool llama_moe_layer_perf_has_data() {
+    std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
+
+    return std::any_of(
+            g_llama_moe_layer_perf.layers.begin(),
+            g_llama_moe_layer_perf.layers.end(),
+            [](const llama_moe_layer_perf_layer & layer) {
+                return layer.calls != 0 ||
+                       layer.expert_hits_total != 0 ||
+                       layer.total_moe_time_us != 0 ||
+                       layer.parallel_fallbacks != 0;
+            });
+}
+
 static void llama_moe_layer_perf_count_topk_locked(uint32_t layer, ggml_tensor * t) {
     if (t == nullptr) {
         return;

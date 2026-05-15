@@ -3271,6 +3271,11 @@ private:
             return;
         }
 
+        if (!llama_moe_layer_perf_has_data()) {
+            SRV_DBG("skipping MoE layer perf output file '%s': no MoE perf data collected\n", params_base.moe_layer_perf_out.c_str());
+            return;
+        }
+
         std::ofstream file(params_base.moe_layer_perf_out, std::ios::binary | std::ios::trunc);
         if (!file) {
             SRV_WRN("failed to open MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
