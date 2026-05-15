@@ -3061,7 +3061,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE"));
     add_opt(common_arg(
         {"--moe-layer-perf-out"}, "FNAME",
-        "experimental: write /moe-layer-perf JSON to this file after each completed request; enables expert counts for hot-cache profiling",
+        "experimental: write /moe-layer-perf JSON to this file after each completed request; enables perf for hot-cache profiling",
         [](common_params & params, const std::string & value) {
             params.moe_layer_perf_out = value;
             params.no_perf = false;

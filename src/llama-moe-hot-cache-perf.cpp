@@ -255,8 +255,12 @@ static bool llama_moe_is_topk_node(const char * name) {
     return llama_moe_name_contains(name, "ffn_moe_topk-");
 }
 
-static bool llama_moe_is_hot_ids_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_ids_compact-");
+static bool llama_moe_is_hot_count_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_hot_count-");
+}
+
+static bool llama_moe_is_cold_count_node(const char * name) {
+    return llama_moe_name_contains(name, "ffn_moe_cold_count-");
 }
 
 static bool llama_moe_is_hot_expert_ids_node(const char * name) {
@@ -444,28 +448,26 @@ static void llama_moe_layer_perf_count_topk_locked(uint32_t layer, ggml_tensor *
     }
 }
 
-static void llama_moe_layer_perf_count_compact_ids_locked(uint32_t layer, ggml_tensor * t, bool hot) {
+static void llama_moe_layer_perf_count_worklist_count_locked(uint32_t layer, ggml_tensor * t, bool hot) {
     if (t == nullptr || layer >= g_llama_moe_layer_perf.layers.size()) {
         return;
     }
 
-    const int64_t n_ids = ggml_nelements(t);
-    if (n_ids <= 0) {
+    if (ggml_nelements(t) <= 0) {
         return;
     }
 
-    std::vector<int32_t> ids(n_ids);
-    ggml_backend_tensor_get(
-        t,
-        ids.data(),
-        0,
-        ids.size() * sizeof(int32_t));
-
     uint64_t valid = 0;
-    for (int32_t id : ids) {
-        if (id >= 0) {
-            valid++;
-        }
+    if (t->type == GGML_TYPE_F32) {
+        float count = 0.0f;
+        ggml_backend_tensor_get(t, &count, 0, sizeof(count));
+        valid = count > 0.0f ? (uint64_t) (count + 0.5f) : 0;
+    } else if (t->type == GGML_TYPE_I32) {
+        int32_t count = 0;
+        ggml_backend_tensor_get(t, &count, 0, sizeof(count));
+        valid = count > 0 ? (uint64_t) count : 0;
+    } else {
+        return;
     }
 
     auto & dst = g_llama_moe_layer_perf.layers[layer];
@@ -618,12 +620,13 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
     const bool expert_counts_enabled = llama_moe_layer_perf_expert_counts_enabled();
     if (expert_counts_enabled && llama_moe_is_topk_node(name)) {
         llama_moe_layer_perf_count_topk_locked((uint32_t) layer, t);
-    } else if (expert_counts_enabled && llama_moe_is_hot_ids_node(name)) {
-        llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, true);
+    } else if (expert_counts_enabled && llama_moe_is_hot_count_node(name)) {
+        llama_moe_layer_perf_count_worklist_count_locked((uint32_t) layer, t, true);
+    } else if (expert_counts_enabled && llama_moe_is_cold_count_node(name)) {
+        llama_moe_layer_perf_count_worklist_count_locked((uint32_t) layer, t, false);
     } else if (expert_counts_enabled && llama_moe_is_hot_expert_ids_node(name)) {
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, true);
     } else if (expert_counts_enabled && llama_moe_is_cold_ids_node(name)) {
-        llama_moe_layer_perf_count_compact_ids_locked((uint32_t) layer, t, false);
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, false);
     }
 

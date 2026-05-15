@@ -2204,7 +2204,7 @@ ggml_status llama_context::graph_compute(
     }
 
     ggml_status status;
-    const bool moe_layer_perf_enabled = llama_moe_layer_perf_is_enabled(this) && model.hparams.n_expert > 0;
+    const bool moe_layer_perf_enabled = !cparams.warmup && llama_moe_layer_perf_is_enabled(this) && model.hparams.n_expert > 0;
     ggml_backend_sched_set_moe_hot_cache_parallel_perf_enabled(sched.get(), moe_layer_perf_enabled);
 
     if (moe_layer_perf_enabled) {

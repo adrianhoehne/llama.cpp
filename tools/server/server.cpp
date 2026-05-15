@@ -33,6 +33,12 @@ static void set_env_var(const char * name, const char * value) {
 #endif
 }
 
+static void set_env_var_if_unset(const char * name, const char * value) {
+    if (std::getenv(name) == nullptr) {
+        set_env_var(name, value);
+    }
+}
+
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
         // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
@@ -96,6 +102,8 @@ int main(int argc, char ** argv) {
         set_env_var("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS", "1");
         params.no_perf = false;
         params.sampling.no_perf = false;
+    } else if (!params.no_perf) {
+        set_env_var_if_unset("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS", "1");
     }
 
     llama_backend_init();
