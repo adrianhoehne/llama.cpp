@@ -104,6 +104,35 @@ static void test_qwen_layer_pressure_uses_total_wait() {
     require(entries[1].layer == 1 && entries[1].expert == 2 && entries[1].hit_count == 8);
 }
 
+static void test_gemma4_layer_pressure_uses_total_wait() {
+    const std::string json = R"({
+        "enabled": true,
+        "schema": "llama.cpp.moe_layer_perf.v1",
+        "n_expert": 4,
+        "n_expert_used": 2,
+        "layers": [
+            {
+                "layer": 0,
+                "cold_experts": [[1, 10]],
+                "cold_slots_per_call": 10.0,
+                "parallel_join_wait_time_per_call_us": 20.0
+            },
+            {
+                "layer": 1,
+                "cold_experts": [[2, 10]],
+                "cold_slots_per_call": 5.0,
+                "parallel_join_wait_time_per_call_us": 10.0
+            }
+        ]
+    })";
+
+    const auto entries = llama_moe_hot_cache_gemma4_weighting::score_observations(
+            llama_moe_hot_cache_parse_perf_json_observations(json));
+    require(entries.size() == 2);
+    require(entries[0].layer == 0 && entries[0].expert == 1 && entries[0].hit_count == 12);
+    require(entries[1].layer == 1 && entries[1].expert == 2 && entries[1].hit_count == 8);
+}
+
 static void test_parse_raw_opt_schema() {
     const std::string json = R"({
         "enabled": true,
@@ -361,6 +390,7 @@ int main() {
     test_parse_and_sort();
     test_parse_branch_counts_and_layer_weight();
     test_qwen_layer_pressure_uses_total_wait();
+    test_gemma4_layer_pressure_uses_total_wait();
     test_parse_raw_opt_schema();
     test_select_budget();
     test_bad_schema();

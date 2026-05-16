@@ -6,6 +6,11 @@
 extern "C" {
 #endif
 
+    enum ggml_backend_sched_moe_hot_cache_parallel_flags {
+        GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_NONE              = 0,
+        GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE = 1u << 0,
+    };
+
     struct ggml_backend_sched_moe_hot_cache_parallel_perf {
         int32_t  layer;
         uint64_t parallel_hot_count;
@@ -32,6 +37,17 @@ extern "C" {
         uint64_t parallel_fallback_threshold;
         uint64_t parallel_fallback_zero_output;
         uint64_t parallel_fallback_other;
+        uint64_t parallel_split_debug_samples;
+        int32_t  parallel_split_debug_hot_begin;
+        int32_t  parallel_split_debug_hot_end;
+        int32_t  parallel_split_debug_cold_begin;
+        int32_t  parallel_split_debug_cold_end;
+        int32_t  parallel_split_debug_join;
+        int32_t  parallel_split_debug_hot_count;
+        int32_t  parallel_split_debug_cold_count;
+        int32_t  parallel_split_debug_hot_backend;
+        int32_t  parallel_split_debug_cold_backend;
+        int32_t  parallel_split_debug_join_backend;
     };
 
     GGML_API void ggml_backend_sched_set_moe_hot_cache_parallel_perf_enabled(
@@ -53,7 +69,8 @@ extern "C" {
             struct ggml_tensor * cold_start,
             struct ggml_tensor * cold_end,
             struct ggml_tensor * cold_output,
-            struct ggml_tensor * join);
+            struct ggml_tensor * join,
+            uint32_t flags);
 
     GGML_API int ggml_backend_sched_get_moe_hot_cache_parallel_perf(
             ggml_backend_sched_t sched,

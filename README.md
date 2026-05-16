@@ -2,7 +2,7 @@
 
 This is an experimental, AI-assisted fork of llama.cpp. The goal is to explore a static MoE expert hot cache for machines that can run large MoE models only with a CPU/GPU split.
 
-Use with caution. The feature is experimental, workload-dependent, and currently only Qwen3.5/Qwen3.6 MoE models are expected to benefit from it.
+Use with caution. The feature is experimental and workload-dependent. Qwen3.5/Qwen3.6 MoE is the primary optimized path; Gemma 4 26B-A4B has an experimental hot-cache graph hook.
 
 ## The idea
 
@@ -76,9 +76,13 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 
 `--moe-hot-cache-qwen-layer-curve` is Qwen3.5/Qwen3.6 MoE specific. `0.0` uses flat expert counts, `0.5` is the damped default, and `1.0` aggressively favors layers that show more join/wait time in the performance JSON. The same curve is used for the initial cache selection and for dynamic update candidate ranking.
 
+Gemma 4 26B-A4B has a separate experimental weighting class. It uses the same idea of layer-pressure scoring, defaults to a curve strength of `0.5`, and can be overridden with `LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<0.0..1.0>`. Gemma4 also enables Branch-Reduce-Merge by default, which reduces hot and cold branch outputs before the final join; set `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE=0` to disable that Gemma4-specific path. Qwen does not use Branch-Reduce-Merge.
+
 ### 4. Measure performance
 
 For detailed tuning, keep MoE perf mode at `Full` and inspect `/moe-layer-perf` or the Web UI. Look especially at hot slot ratio, routing/worklist time, parallel wall time, hot/cold lane wall time, overlap, join wait, merge time, and scheduler fallbacks.
+
+`Full` mode also includes temporary `parallel_split_debug` fields for checking how the scheduler split the hot, cold, bridge, and join sections. These fields are only diagnostic and are not needed for dynamic cache updates.
 
 For longer runs with dynamic cache replacement, use `Update` to keep only the counters needed by `--moe-hot-cache-update-rate`. This avoids the full per-node timing callback while still allowing the cache to adapt after completed requests.
 

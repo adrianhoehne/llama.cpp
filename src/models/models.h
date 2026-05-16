@@ -768,6 +768,11 @@ struct llama_model_gemma4 : public llama_model_base {
         // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
         ggml_tensor * build_inp_per_layer();
         ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
+
+        ggml_tensor * build_layer_moe_hot(
+                    ggml_tensor * cur,
+                    ggml_tensor * logits,
+                            int   il);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

@@ -120,6 +120,11 @@ struct llama_moe_hot_cache_qwen35moe_weighting {
             const std::vector<llama_moe_hot_cache_layer_observation> & observations);
 };
 
+struct llama_moe_hot_cache_gemma4_weighting {
+    static std::vector<llama_moe_hot_cache_entry> score_observations(
+            const std::vector<llama_moe_hot_cache_layer_observation> & observations);
+};
+
 std::vector<llama_moe_hot_cache_layer_observation> llama_moe_hot_cache_parse_perf_json_observations(
         const std::string & json_str);
 

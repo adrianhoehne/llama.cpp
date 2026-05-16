@@ -19,6 +19,7 @@ struct ggml_backend_sched_moe_hot_cache_parallel_region_info {
     struct ggml_tensor * cold_end;
     struct ggml_tensor * cold_output;
     struct ggml_tensor * join;
+    uint32_t flags;
 
     int hot_split_begin;
     int hot_split_end;
@@ -223,6 +224,36 @@ static int ggml_backend_sched_find_split_containing(
     return -1;
 }
 
+static int32_t ggml_backend_sched_moe_parallel_split_backend_id(
+        ggml_backend_sched_t sched,
+        int split_id) {
+    if (split_id < 0 || split_id >= sched->n_splits) {
+        return -1;
+    }
+
+    return sched->splits[split_id].backend_id;
+}
+
+static void ggml_backend_sched_moe_parallel_fill_split_debug(
+        ggml_backend_sched_t sched,
+        const ggml_backend_sched_moe_hot_cache_parallel_region_info & region,
+        ggml_backend_sched_moe_hot_cache_parallel_perf & perf) {
+    const int hot_count_split  = ggml_backend_sched_find_split_containing(sched, region.hot_count);
+    const int cold_count_split = ggml_backend_sched_find_split_containing(sched, region.cold_count);
+
+    perf.parallel_split_debug_samples = 1;
+    perf.parallel_split_debug_hot_begin = region.hot_split_begin;
+    perf.parallel_split_debug_hot_end = region.hot_split_end;
+    perf.parallel_split_debug_cold_begin = region.cold_split_begin;
+    perf.parallel_split_debug_cold_end = region.cold_split_end;
+    perf.parallel_split_debug_join = region.join_split;
+    perf.parallel_split_debug_hot_count = hot_count_split;
+    perf.parallel_split_debug_cold_count = cold_count_split;
+    perf.parallel_split_debug_hot_backend = ggml_backend_sched_moe_parallel_split_backend_id(sched, region.hot_split_begin);
+    perf.parallel_split_debug_cold_backend = ggml_backend_sched_moe_parallel_split_backend_id(sched, region.cold_split_begin);
+    perf.parallel_split_debug_join_backend = ggml_backend_sched_moe_parallel_split_backend_id(sched, region.join_split);
+}
+
 static bool ggml_backend_sched_backend_is_cuda(ggml_backend_t backend) {
     const char * name = ggml_backend_name(backend);
     return name != nullptr && strstr(name, "CUDA") != nullptr;
@@ -235,15 +266,16 @@ static bool ggml_backend_sched_backend_is_cpu(ggml_backend_t backend) {
 
 static void ggml_backend_sched_moe_parallel_record_fallback(
         ggml_backend_sched_t sched,
-        int32_t layer,
+        const ggml_backend_sched_moe_hot_cache_parallel_region_info & region,
         const char * reason) {
     if (!sched->moe_hot_cache_parallel->perf_enabled) {
         return;
     }
 
     ggml_backend_sched_moe_hot_cache_parallel_perf perf = {};
-    perf.layer = layer;
+    perf.layer = region.layer;
     perf.parallel_fallbacks = 1;
+    ggml_backend_sched_moe_parallel_fill_split_debug(sched, region, perf);
 
     if (reason != nullptr && strcmp(reason, "incomplete region annotation") == 0) {
         perf.parallel_fallback_incomplete = 1;
@@ -300,7 +332,7 @@ static bool ggml_backend_sched_moe_parallel_fail_or_fallback(
         }
     }
 
-    ggml_backend_sched_moe_parallel_record_fallback(sched, region.layer, reason);
+    ggml_backend_sched_moe_parallel_record_fallback(sched, region, reason);
     return true;
 }
 
@@ -330,23 +362,29 @@ static bool ggml_backend_sched_resolve_moe_parallel_region(
         return false;
     }
 
-    const bool hot_then_cold =
+    const bool hot_then_cold_lanes =
         region.hot_split_begin <= region.hot_split_end &&
         region.hot_split_end < region.cold_split_begin &&
         region.cold_split_begin <= region.cold_split_end &&
         region.cold_split_end < region.join_split &&
-        region.hot_split_end + 1 == region.cold_split_begin &&
-        region.cold_split_end + 1 == region.join_split;
+        region.hot_split_end + 1 == region.cold_split_begin;
 
-    const bool cold_then_hot =
+    const bool cold_then_hot_lanes =
         region.cold_split_begin <= region.cold_split_end &&
         region.cold_split_end < region.hot_split_begin &&
         region.hot_split_begin <= region.hot_split_end &&
         region.hot_split_end < region.join_split &&
-        region.cold_split_end + 1 == region.hot_split_begin &&
-        region.hot_split_end + 1 == region.join_split;
+        region.cold_split_end + 1 == region.hot_split_begin;
 
-    if (!hot_then_cold && !cold_then_hot) {
+    const int second_lane_end = hot_then_cold_lanes ? region.cold_split_end :
+        cold_then_hot_lanes ? region.hot_split_end : -1;
+    const bool allow_join_bridge =
+        (region.flags & GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE) != 0;
+    const int join_gap = second_lane_end >= 0 ? region.join_split - second_lane_end : -1;
+    const bool join_is_contiguous = join_gap == 1;
+    const bool join_has_single_bridge = allow_join_bridge && join_gap == 2;
+
+    if ((!hot_then_cold_lanes && !cold_then_hot_lanes) || (!join_is_contiguous && !join_has_single_bridge)) {
         *reason = "region split order does not contain two contiguous lanes before join";
         return false;
     }
@@ -489,6 +527,7 @@ static enum ggml_status ggml_backend_sched_compute_moe_parallel_region(
     if (collect_perf) {
         perf.parallel_hot_count = hot_count > 0 ? (uint64_t) hot_count : 0;
         perf.parallel_cold_count = cold_count > 0 ? (uint64_t) cold_count : 0;
+        ggml_backend_sched_moe_parallel_fill_split_debug(sched, region, perf);
     }
 
     const int64_t region_start_us = collect_perf ? ggml_time_us() : 0;
@@ -674,7 +713,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         } else if (ec != GGML_STATUS_SUCCESS) {
             return ec;
         } else {
-            split_id = region.join_split;
+            split_id = std::max(region.hot_split_end, region.cold_split_end) + 1;
         }
     }
 
@@ -707,7 +746,8 @@ void ggml_backend_sched_moe_hot_cache_parallel_region(
         struct ggml_tensor * cold_start,
         struct ggml_tensor * cold_end,
         struct ggml_tensor * cold_output,
-        struct ggml_tensor * join) {
+        struct ggml_tensor * join,
+        uint32_t flags) {
     GGML_ASSERT(sched);
 
     if (mode == 0) {
@@ -727,6 +767,7 @@ void ggml_backend_sched_moe_hot_cache_parallel_region(
     region.cold_end = cold_end;
     region.cold_output = cold_output;
     region.join = join;
+    region.flags = flags;
     region.hot_split_begin = -1;
     region.hot_split_end = -1;
     region.cold_split_begin = -1;
@@ -754,4 +795,3 @@ int ggml_backend_sched_get_moe_hot_cache_parallel_perf(
 
     return n;
 }
-

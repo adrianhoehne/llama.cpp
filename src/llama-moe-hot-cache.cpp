@@ -208,6 +208,19 @@ static std::vector<llama_moe_hot_cache_entry> score_observations_default(
     return result;
 }
 
+static std::vector<llama_moe_hot_cache_entry> score_observations_for_arch(
+        llm_arch arch,
+        const std::vector<llama_moe_hot_cache_layer_observation> & observations) {
+    switch (arch) {
+        case LLM_ARCH_QWEN35MOE:
+            return llama_moe_hot_cache_qwen35moe_weighting::score_observations(observations);
+        case LLM_ARCH_GEMMA4:
+            return llama_moe_hot_cache_gemma4_weighting::score_observations(observations);
+        default:
+            return score_observations_default(observations);
+    }
+}
+
 static std::vector<llama_moe_hot_cache_expert_size> collect_expert_sizes(const llama_model & model) {
     std::vector<llama_moe_hot_cache_expert_size> result;
 
@@ -522,9 +535,7 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
 
     const std::string json_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
-    const auto observed = model.arch == LLM_ARCH_QWEN35MOE
-        ? llama_moe_hot_cache_qwen35moe_weighting::score_observations(observations)
-        : score_observations_default(observations);
+    const auto observed = score_observations_for_arch(model.arch, observations);
     const auto sizes = collect_expert_sizes(model);
     ggml_backend_dev_t cache_dev = select_gpu_dev(&model);
     const size_t budget_bytes = params.moe_hot_cache_max_mib < 0
@@ -773,9 +784,7 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
     std::vector<llama_moe_hot_cache_entry> scored_observed;
     try {
         const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
-        scored_observed = model.arch == LLM_ARCH_QWEN35MOE
-            ? llama_moe_hot_cache_qwen35moe_weighting::score_observations(observations)
-            : score_observations_default(observations);
+        scored_observed = score_observations_for_arch(model.arch, observations);
     } catch (const std::exception & e) {
         LLAMA_LOG_WARN("%s: failed to score MoE layer perf JSON: %s\n", __func__, e.what());
         return stats;

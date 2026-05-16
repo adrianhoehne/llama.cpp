@@ -6,7 +6,7 @@ Last referenced commit: `e3ace0d3b Separate moe hot cache feature pt5.`
 
 This document is the English developer guide for the experimental MoE hot-cache work in this fork. It explains what was changed, why it was changed, how the runtime path works, which switches matter, how to interpret the performance data, and where the remaining maintenance risks are.
 
-The implementation targets Qwen3.5/Qwen3.6 MoE decode throughput. The core idea is to cache frequently used experts on the GPU and run the remaining cold expert work on the CPU in parallel.
+The implementation targets Qwen3.5/Qwen3.6 MoE decode throughput. The core idea is to cache frequently used experts on the GPU and run the remaining cold expert work on the CPU in parallel. There is also a separate experimental hot-graph hook for Gemma 4 26B-A4B.
 
 ## Summary
 
@@ -29,7 +29,7 @@ The hot-cache path:
 1. reads a performance JSON with layer and expert usage data,
 2. selects hot experts per layer within a memory budget,
 3. copies the selected experts into dedicated hot-cache tensors,
-4. builds a specialized Qwen MoE graph for active layers,
+4. builds a specialized MoE hot graph for active layers of the current model,
 5. splits runtime MoE work into hot and cold expert slots,
 6. runs hot work on the GPU and cold work on the CPU in parallel,
 7. merges both branches back into the normal tensor flow.
@@ -102,7 +102,7 @@ In that case:
 
 - `llama_moe_hot_cache_init(...)` returns without building a cache,
 - `model.moe_hot_cache` stays empty,
-- Qwen35Moe uses the normal `build_moe_ffn` path,
+- wired-in models use their normal MoE/FFN path,
 - the hot-cache graph is not built,
 - the scheduler does not see a hot-cache parallel region.
 
@@ -117,7 +117,7 @@ The new path is active when both are provided:
 
 If a budget is set but no JSON file is provided, that is intentionally treated as an error. Otherwise the runtime would not know which experts should be cached.
 
-The Qwen hot path is built per layer only when:
+The model-specific hot path is built per layer only when:
 
 ```text
 llama_moe_hot_cache_layer_active(model, il)
@@ -159,6 +159,12 @@ LLAMA_ARG_MOE_HOT_CACHE_QWEN_LAYER_CURVE=<N>
 
 Qwen35Moe only. Controls the layer-pressure weighting curve for hot-cache selection. `0.0` uses flat expert counts without layer wait time. `0.5` is the damped default. `1.0` weights waiting layers aggressively. Internally, the Qwen-specific weighting reads `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; the CLI/INI argument sets that value.
 
+```text
+LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<N>
+```
+
+Gemma4 only. Controls the same layer-pressure weighting for initial hot-cache selection and dynamic updates. `0.0` uses flat expert counts, `0.5` is the default, and `1.0` weights waiting layers aggressively. This switch is currently environment-variable only.
+
 ### Parallelization
 
 ```text
@@ -186,6 +192,12 @@ LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS=<N>
 Minimum number of slots required before the scheduler launches the hot/cold parallel region. Default: `64`.
 
 This avoids paying thread and scheduler overhead for tiny work packets.
+
+```text
+LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE=0
+```
+
+Disables the Gemma4 Branch-Reduce-Merge path. The path is enabled by default for Gemma4: the hot and cold lanes reduce their slot outputs before the final join, so the merge has less work to do. Qwen35Moe explicitly disables this profile switch.
 
 ### Decode And Merge Optimizations
 
@@ -316,7 +328,7 @@ llama.cpp.moe_layer_perf.v1
 llama.cpp.moe_layer_opt_perf.v1
 ```
 
-The generic selection intentionally stays simple. It uses observed expert counts without Qwen-specific layer heuristics.
+The generic selection intentionally stays simple. It uses observed expert counts without model-specific layer heuristics. Qwen35Moe and Gemma4 have dedicated weighting classes that turn the same observation list into architecture-specific scores.
 
 ### `src/models/qwen35moe-hot-cache.cpp`
 
@@ -330,15 +342,24 @@ The same weighting is also used by dynamic updates. During updates, it can only 
 
 Experts that are already hot get a small sticky bonus. This keeps the cache set more stable and avoids churn from small one-off changes.
 
+### `src/models/gemma4-hot-cache.cpp`
+
+Contains the Gemma4-specific weighting for hot-cache selection.
+
+The `llama_moe_hot_cache_gemma4_weighting` class rescoring uses the same layer/expert observations as the Qwen weighting, but stays separate from the Qwen code. The weighting prefers absolute join wait per layer and falls back to cold/hot lane delta, cold slots, or wait per cold slot.
+
+The curve strength is controlled by `LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE`. The default is `0.5`. The weighting is used both during initial JSON loading and dynamic updates. Experts that are already hot also get a small sticky bonus.
+
 ### `src/llama-moe-hot-cache-graph.cpp`
 
-Contains the Qwen35Moe-specific hot-cache graph implementation.
+Contains the extracted hot-cache graph logic for the wired-in models.
 
-This was an important refactor. The experimental graph logic was moved out of `src/models/qwen35moe.cpp`, so the model file stays closer to upstream.
+This was an important refactor. The experimental graph logic was moved out of the model files, so `src/models/qwen35moe.cpp` and `src/models/gemma4.cpp` stay closer to upstream.
 
 Responsibilities:
 
 - build the hot/cold FFN for Qwen35Moe,
+- build the Gemma4 hot/cold MoE from logits,
 - build decode-specific worklists,
 - wire CPU custom ops for routing and merge,
 - build the hot branch using cached experts,
@@ -347,7 +368,7 @@ Responsibilities:
 - annotate the scheduler parallel region,
 - set local `mul_mat_id` flags.
 
-This code is intentionally Qwen35Moe-specific. It is not a generic MoE replacement for all architectures.
+This code is not a generic MoE replacement for all architectures. New models should be added through small model hooks, architecture-specific profiles, and dedicated weighting classes so the Qwen paths do not get side effects.
 
 ### `src/models/qwen35moe.cpp`
 
@@ -363,6 +384,19 @@ else:
 ```
 
 The normal model path remains available.
+
+### `src/models/gemma4.cpp`
+
+Contains only the small Gemma4 hook into the extracted hot graph:
+
+```text
+if the layer has an active hot cache:
+    build_layer_moe_hot(...)
+else:
+    normal build_moe_ffn(...)
+```
+
+The actual Gemma4 hot-cache logic stays in `src/llama-moe-hot-cache-graph.cpp` and `src/models/gemma4-hot-cache.cpp`. This keeps the Gemma4 model path separate from the Qwen path.
 
 ### `src/llama-moe-hot-cache-perf.h`
 
@@ -398,7 +432,10 @@ Collected data includes:
 - join wait time,
 - overlap,
 - launch and fallback counts,
-- expert counts in `full` and `update` mode.
+- expert counts in `full` and `update` mode,
+- temporary scheduler split debug data in `full` mode.
+
+`parallel_split_debug` shows the last observed hot, cold, and join splits including backend IDs. It is only diagnostic for scheduler work and is not needed by dynamic updates.
 
 When performance collection is disabled, the JSON function intentionally returns only a small disabled block:
 
@@ -478,11 +515,14 @@ Responsibilities:
 - force split boundaries,
 - validate regions,
 - identify hot and cold splits,
+- optionally allow a bridge split between lane end and join,
 - run a CPU worker for the cold path,
 - let the normal thread/GPU backend run the hot path,
 - join both paths,
 - collect errors and fallback reasons,
 - collect scheduler performance data.
+
+The bridge split is allowed through `GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE`. This matters for Gemma4 Branch-Reduce-Merge, where a small serial split can sit between the hot/cold lanes and the join. Without the flag, validation stays strict at hot-then-cold-then-join.
 
 ### `ggml/src/ggml-backend.cpp`
 
@@ -527,7 +567,8 @@ Unit tests for:
 - JSON selection,
 - budget and layer behavior,
 - basic worklist and mapping behavior,
-- gating cases.
+- gating cases,
+- Qwen and Gemma4 weighting.
 
 Future decode-path optimizations should extend this test file when possible.
 
@@ -870,6 +911,14 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 `--moe-hot-cache-update-rate` is optional. `0.0` disables dynamic updates; `0.10` replaces up to 10 percent of the current hot-cache entries after completed server runs.
 
 `--moe-hot-cache-qwen-layer-curve` only affects Qwen35Moe. The curve is used both during initial JSON loading and dynamic updates. `0.0` means flat expert counts, `0.5` is the damped default, and `1.0` weights waiting layers aggressively.
+
+For Gemma4, the same mechanism is exposed as an environment variable:
+
+```bash
+LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=0.5
+```
+
+Gemma4 also uses Branch-Reduce-Merge by default. For comparison runs, disable it with `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE=0`. Qwen35Moe does not use this path.
 
 For final throughput measurements:
 
@@ -1273,9 +1322,9 @@ cold: CPU
 
 Other backends are not the goal of this code. Vulkan, Metal, or multi-CUDA-GPU support would require changes to scheduler validation and graph assignment.
 
-### Qwen35Moe Specificity
+### Model Specificity
 
-The hot graph is built for Qwen35Moe. Other MoE models use the normal path unless they are explicitly wired in.
+The hot graph is active only for explicitly wired-in models. Qwen35Moe and Gemma4 have separate model hooks, profiles, and weighting classes. Other MoE models use the normal path unless they are explicitly wired in.
 
 ### Workload-Dependent Performance Data
 
@@ -1415,7 +1464,7 @@ If runtime behavior changed:
 
 ## Final Notes For Future Developers
 
-This fork accelerates Qwen3.x MoE decode by caching frequently used experts and running hot GPU work in parallel with cold CPU work.
+This fork accelerates Qwen3.x MoE decode and experimentally Gemma4 decode by caching frequently used experts and running hot GPU work in parallel with cold CPU work.
 
 The normal llama.cpp path remains active as long as no hot-cache budget is set.
 
@@ -1424,6 +1473,8 @@ The experimental code was moved into dedicated files:
 - graph specialization in `llama-moe-hot-cache-graph.cpp`,
 - cache construction in `llama-moe-hot-cache.cpp`,
 - performance collection in `llama-moe-hot-cache-perf.cpp`,
+- Qwen weighting in `src/models/qwen35moe-hot-cache.cpp`,
+- Gemma4 weighting in `src/models/gemma4-hot-cache.cpp`,
 - scheduler extension in `ggml-backend-moe-hot-cache.inc`,
 - experimental scheduler API in `ggml-backend-moe-hot-cache.h`.
 

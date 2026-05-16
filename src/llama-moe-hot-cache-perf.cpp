@@ -61,6 +61,17 @@ struct llama_moe_layer_perf_layer {
     uint64_t parallel_fallback_threshold = 0;
     uint64_t parallel_fallback_zero_output = 0;
     uint64_t parallel_fallback_other = 0;
+    uint64_t parallel_split_debug_samples = 0;
+    int32_t parallel_split_debug_hot_begin = -1;
+    int32_t parallel_split_debug_hot_end = -1;
+    int32_t parallel_split_debug_cold_begin = -1;
+    int32_t parallel_split_debug_cold_end = -1;
+    int32_t parallel_split_debug_join = -1;
+    int32_t parallel_split_debug_hot_count = -1;
+    int32_t parallel_split_debug_cold_count = -1;
+    int32_t parallel_split_debug_hot_backend = -1;
+    int32_t parallel_split_debug_cold_backend = -1;
+    int32_t parallel_split_debug_join_backend = -1;
 
     uint64_t gate_time_us = 0;
     uint64_t up_time_us = 0;
@@ -150,6 +161,17 @@ struct llama_moe_layer_perf_local {
             layer.parallel_fallback_threshold = 0;
             layer.parallel_fallback_zero_output = 0;
             layer.parallel_fallback_other = 0;
+            layer.parallel_split_debug_samples = 0;
+            layer.parallel_split_debug_hot_begin = -1;
+            layer.parallel_split_debug_hot_end = -1;
+            layer.parallel_split_debug_cold_begin = -1;
+            layer.parallel_split_debug_cold_end = -1;
+            layer.parallel_split_debug_join = -1;
+            layer.parallel_split_debug_hot_count = -1;
+            layer.parallel_split_debug_cold_count = -1;
+            layer.parallel_split_debug_hot_backend = -1;
+            layer.parallel_split_debug_cold_backend = -1;
+            layer.parallel_split_debug_join_backend = -1;
             layer.gate_time_us = 0;
             layer.up_time_us = 0;
             layer.down_time_us = 0;
@@ -811,6 +833,19 @@ void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t sched) {
             g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_threshold, metric.parallel_fallback_threshold);
             g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_zero_output, metric.parallel_fallback_zero_output);
             g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_other, metric.parallel_fallback_other);
+            if (metric.parallel_split_debug_samples > 0) {
+                g_llama_moe_layer_perf.add_locked(dst.parallel_split_debug_samples, metric.parallel_split_debug_samples);
+                dst.parallel_split_debug_hot_begin = metric.parallel_split_debug_hot_begin;
+                dst.parallel_split_debug_hot_end = metric.parallel_split_debug_hot_end;
+                dst.parallel_split_debug_cold_begin = metric.parallel_split_debug_cold_begin;
+                dst.parallel_split_debug_cold_end = metric.parallel_split_debug_cold_end;
+                dst.parallel_split_debug_join = metric.parallel_split_debug_join;
+                dst.parallel_split_debug_hot_count = metric.parallel_split_debug_hot_count;
+                dst.parallel_split_debug_cold_count = metric.parallel_split_debug_cold_count;
+                dst.parallel_split_debug_hot_backend = metric.parallel_split_debug_hot_backend;
+                dst.parallel_split_debug_cold_backend = metric.parallel_split_debug_cold_backend;
+                dst.parallel_split_debug_join_backend = metric.parallel_split_debug_join_backend;
+            }
         }
     }
 }
@@ -1079,6 +1114,18 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
                 write_fallback_reason(first_reason, "zero_output", layer.parallel_fallback_zero_output);
                 write_fallback_reason(first_reason, "other", layer.parallel_fallback_other);
                 out << "}";
+            }
+
+            if (layer.parallel_split_debug_samples > 0) {
+                out << ",\"parallel_split_debug\":{";
+                out << "\"samples\":" << layer.parallel_split_debug_samples << ",";
+                out << "\"last\":{";
+                out << "\"hot\":[" << layer.parallel_split_debug_hot_begin << "," << layer.parallel_split_debug_hot_end << "],";
+                out << "\"cold\":[" << layer.parallel_split_debug_cold_begin << "," << layer.parallel_split_debug_cold_end << "],";
+                out << "\"join\":" << layer.parallel_split_debug_join << ",";
+                out << "\"counts\":{\"hot\":" << layer.parallel_split_debug_hot_count << ",\"cold\":" << layer.parallel_split_debug_cold_count << "},";
+                out << "\"backends\":{\"hot\":" << layer.parallel_split_debug_hot_backend << ",\"cold\":" << layer.parallel_split_debug_cold_backend << ",\"join\":" << layer.parallel_split_debug_join_backend << "}";
+                out << "}}";
             }
         }
 
