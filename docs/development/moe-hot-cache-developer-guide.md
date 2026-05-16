@@ -1,6 +1,6 @@
 # MoE Hot-Cache: Entwicklerdokumentation
 
-Stand: 2026-05-15
+Stand: 2026-05-16
 Branch: `cached-experts-v2`  
 Letzter betrachteter Commit: `e3ace0d3b Separate moe hot cache feature pt5.`
 
@@ -726,16 +726,23 @@ Wichtige Felder:
 ```text
 summary.layer_calls
 summary.hot_slot_ratio
-summary.total_moe_us_per_call
-summary.routing_us_per_call
-summary.worklist_us_per_call
-summary.merge_us_per_call
-summary.parallel_region_us_per_call
-summary.parallel_hot_us_per_call
-summary.parallel_cold_us_per_call
-summary.parallel_join_wait_us_per_call
-summary.parallel_overlap_us_per_call
-summary.parallel_launches
+summary.total_moe_time_per_call_us
+summary.routing_time_per_call_us
+summary.worklist_time_per_call_us
+summary.merge_time_per_call_us
+summary.hot_branch_time_per_call_us
+summary.cold_branch_time_per_call_us
+summary.hot_expert_matmul_time_per_call_us
+summary.cold_expert_matmul_time_per_call_us
+summary.hot_gather_scatter_time_per_call_us
+summary.cold_gather_scatter_time_per_call_us
+summary.parallel_region_wall_time_per_call_us
+summary.parallel_hot_lane_wall_time_per_call_us
+summary.parallel_cold_lane_wall_time_per_call_us
+summary.parallel_join_wait_time_per_call_us
+summary.parallel_overlap_estimate_per_call_us
+summary.parallel_hot_launches
+summary.parallel_cold_launches
 summary.parallel_fallbacks
 layers[]
 ```
@@ -747,6 +754,62 @@ LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1
 ```
 
 kommen detaillierte Expertenzaehler dazu. Diese sind fuer die initiale Cache-Erzeugung nuetzlich, aber fuer reine Speed-Laeufe teuer und deshalb standardmaessig aus.
+
+## Live-Visualisierung im Web UI
+
+Die Web-UI besitzt eine eigene MoE-Layer-Perf-Seite:
+
+```text
+#/moe-layer-perf
+```
+
+Im Chat ist sie ueber den Activity-Button neben den Eingabefeld-Aktionen erreichbar. Der Button sitzt bewusst nicht im `t/s`-Bereich der Antwortstatistik, weil dieser Bereich waehrend laufender Generierung seine Position aendern kann.
+
+![MoE-Layer-Perf-UI](assets/moe-layer-perf-overview-wide.png)
+
+Die Seite liest dieselben Daten wie der JSON-Endpunkt `/moe-layer-perf`. Im Routermodus wird das aktuell ausgewaehlte Modell als Query-Parameter mitgegeben und `autoload=false` gesetzt, damit das reine Betrachten der Seite keinen Modellwechsel erzwingt.
+
+Die Aktualisierung laeuft automatisch. Das Intervall ist im Kopfbereich einstellbar und auf `0.5` bis `3.0` Sekunden begrenzt. Ein manueller Refresh-Button wurde bewusst entfernt, weil das wiederholte Klicken zusaetzliche Endpoint-Abfragen und UI-Arbeit erzeugt.
+
+Die obere Grafik zeigt die Hot-Hit-Rate pro Layer. Die Layer-Kacheln darunter zeigen pro Experte:
+
+| Farbe | Bedeutung |
+| --- | --- |
+| Rot | Hot-Experte |
+| Blau | Cold-Experte |
+| Gelb | Seit dem letzten UI-Update aktiv |
+| Grau | Kein Hit im aktuellen Perf-Fenster |
+
+Gelb wird nicht aus einem separaten `active_experts`-Feld gelesen. Die UI vergleicht stattdessen die aktuellen Expertenzaehler mit dem vorherigen Poll. Wenn ein Zaehler gestiegen ist, war dieser Experte im letzten Intervall aktiv.
+
+Leere Felder entstehen nur als quadratisches Padding, wenn die Expertenanzahl nicht exakt in ein Quadrat passt. Normale graue Felder sind echte Experten ohne Hits.
+
+### Timing-Reihenfolge in der UI
+
+Die Timing-Karten sind nach Ablauf sortiert, nicht nach Groesse:
+
+1. `Summary`
+2. `Routing / prep`
+3. `Parallel region`
+4. `Hot lane` und `Cold lane`
+5. `Synchronization`
+6. `Merge`
+
+Diese Reihenfolge hilft beim Lesen der Pipeline:
+
+| UI-Gruppe | Relevante Felder | Interpretation |
+| --- | --- | --- |
+| `Summary` | `total_moe_time_per_call_us`, `layer_calls`, `parallel_fallbacks` | Grober Zustand des aktuellen Perf-Fensters |
+| `Routing / prep` | `routing_time_per_call_us`, `worklist_time_per_call_us` | Arbeit vor dem Hot/Cold-Split |
+| `Parallel region` | `parallel_region_wall_time_per_call_us` | Wandzeit der gesamten parallelen Scheduler-Region |
+| `Hot lane` | `parallel_hot_lane_wall_time_per_call_us`, `hot_branch_time_per_call_us`, `hot_gather_scatter_time_per_call_us`, `hot_expert_matmul_time_per_call_us`, `parallel_hot_launches` | GPU-Hot-Cache-Seite der parallelen Region |
+| `Cold lane` | `parallel_cold_lane_wall_time_per_call_us`, `cold_branch_time_per_call_us`, `cold_gather_scatter_time_per_call_us`, `cold_expert_matmul_time_per_call_us`, `parallel_cold_launches` | Cold-Expert-Seite der parallelen Region |
+| `Synchronization` | `parallel_overlap_estimate_per_call_us`, `parallel_join_wait_time_per_call_us` | Wie viel Arbeit ueberlappt und wie lange eine Lane am Join wartet |
+| `Merge` | `merge_time_per_call_us` | Zusammenfuehren der Hot- und Cold-Ergebnisse |
+
+Wichtig: Die Werte sind nicht alle additiv. `Parallel wall` ist Wandzeit der parallelen Region. `Hot lane` und `Cold lane` sind Lane-Wandzeiten innerhalb dieser Region. `Hot branch` und `Cold branch` sind interne Teilmessungen und duerfen nicht einfach mit der Lane-Wandzeit addiert werden.
+
+`Overlap` ist die geschaetzte Zeit, die durch parallele Ausfuehrung versteckt wurde. `Join wait` ist die Wartezeit der zuerst fertigen Lane am Join-Punkt. In den aktuellen Qwen-Laeufen wartet meistens die Hot-Lane auf die langsamere Cold-Lane, konzeptionell kann es aber auch umgekehrt sein.
 
 ## Wie man eine erste Hot-Cache-Liste erzeugt
 
@@ -1125,7 +1188,7 @@ Beim Lesen einer neuen `performance*.json` sind diese Fragen am wichtigsten:
 
 1. Wie hoch ist `hot_slot_ratio`?
 2. Gibt es unerwartete Scheduler-Fallbacks?
-3. Ist `parallel_join_wait_us_per_call` hoch?
+3. Ist `parallel_join_wait_time_per_call_us` hoch?
 4. Ist der Cold-Pfad zu langsam?
 5. Ist der Merge wieder sichtbar teuer?
 6. Ist Routing/Worklist im Decode sichtbar?
@@ -1233,11 +1296,11 @@ Jede neue Optimierung sollte mindestens diese Werte vor/nachher vergleichen:
 
 - tk/s am Ende eines laengeren Laufs,
 - `hot_slot_ratio`,
-- `parallel_join_wait_us_per_call`,
-- `parallel_overlap_us_per_call`,
-- `cold_branch_us_per_call`,
-- `merge_us_per_call`,
-- `routing_us_per_call`,
+- `parallel_join_wait_time_per_call_us`,
+- `parallel_overlap_estimate_per_call_us`,
+- `cold_branch_time_per_call_us`,
+- `merge_time_per_call_us`,
+- `routing_time_per_call_us`,
 - Fallback-Counts.
 
 ### 2. Normale Pfade nicht anfassen, wenn es vermeidbar ist

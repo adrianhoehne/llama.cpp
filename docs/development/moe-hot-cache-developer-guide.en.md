@@ -1,6 +1,6 @@
 # MoE Hot Cache: Developer Guide
 
-Status: 2026-05-15  
+Status: 2026-05-16
 Branch: `cached-experts-v2`  
 Last referenced commit: `e3ace0d3b Separate moe hot cache feature pt5.`
 
@@ -724,16 +724,23 @@ Important fields:
 ```text
 summary.layer_calls
 summary.hot_slot_ratio
-summary.total_moe_us_per_call
-summary.routing_us_per_call
-summary.worklist_us_per_call
-summary.merge_us_per_call
-summary.parallel_region_us_per_call
-summary.parallel_hot_us_per_call
-summary.parallel_cold_us_per_call
-summary.parallel_join_wait_us_per_call
-summary.parallel_overlap_us_per_call
-summary.parallel_launches
+summary.total_moe_time_per_call_us
+summary.routing_time_per_call_us
+summary.worklist_time_per_call_us
+summary.merge_time_per_call_us
+summary.hot_branch_time_per_call_us
+summary.cold_branch_time_per_call_us
+summary.hot_expert_matmul_time_per_call_us
+summary.cold_expert_matmul_time_per_call_us
+summary.hot_gather_scatter_time_per_call_us
+summary.cold_gather_scatter_time_per_call_us
+summary.parallel_region_wall_time_per_call_us
+summary.parallel_hot_lane_wall_time_per_call_us
+summary.parallel_cold_lane_wall_time_per_call_us
+summary.parallel_join_wait_time_per_call_us
+summary.parallel_overlap_estimate_per_call_us
+summary.parallel_hot_launches
+summary.parallel_cold_launches
 summary.parallel_fallbacks
 layers[]
 ```
@@ -745,6 +752,62 @@ LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1
 ```
 
 detailed expert counters are included. They are useful for initial cache generation but too expensive for clean speed runs.
+
+## Live Visualization In The Web UI
+
+The Web UI has a dedicated MoE layer performance page:
+
+```text
+#/moe-layer-perf
+```
+
+In chat, open it with the activity button next to the input actions. The button is intentionally not placed next to the live `t/s` statistic because that area can move while generation is still running.
+
+![MoE layer performance UI](assets/moe-layer-perf-overview-wide.png)
+
+The page reads the same data as the `/moe-layer-perf` JSON endpoint. In router mode, it passes the currently selected model as a query parameter and sets `autoload=false`, so merely opening the page does not force a model load or model switch.
+
+The page refreshes automatically. The update interval is configurable in the header and limited to `0.5` to `3.0` seconds. The manual refresh button was removed intentionally because repeated clicking adds endpoint requests and UI work.
+
+The top graph shows hot hit rate by layer. The layer cards below show each expert:
+
+| Color | Meaning |
+| --- | --- |
+| Red | Hot expert |
+| Blue | Cold expert |
+| Yellow | Active since the previous UI update |
+| Gray | No hit in the current performance window |
+
+Yellow is not read from a separate `active_experts` field. The UI compares the current expert counters with the previous poll. If a counter increased, that expert was active during the last interval.
+
+Blank cells are only square-grid padding when the expert count does not fit an exact square. Normal gray cells are real experts with no hits.
+
+### Timing Order In The UI
+
+The timing cards are ordered by execution flow, not by size:
+
+1. `Summary`
+2. `Routing / prep`
+3. `Parallel region`
+4. `Hot lane` and `Cold lane`
+5. `Synchronization`
+6. `Merge`
+
+This order makes the pipeline easier to read:
+
+| UI group | Relevant fields | Interpretation |
+| --- | --- | --- |
+| `Summary` | `total_moe_time_per_call_us`, `layer_calls`, `parallel_fallbacks` | Top-level state of the current performance window |
+| `Routing / prep` | `routing_time_per_call_us`, `worklist_time_per_call_us` | Work before the hot/cold split |
+| `Parallel region` | `parallel_region_wall_time_per_call_us` | Wall time of the full parallel scheduler region |
+| `Hot lane` | `parallel_hot_lane_wall_time_per_call_us`, `hot_branch_time_per_call_us`, `hot_gather_scatter_time_per_call_us`, `hot_expert_matmul_time_per_call_us`, `parallel_hot_launches` | GPU hot-cache side of the parallel region |
+| `Cold lane` | `parallel_cold_lane_wall_time_per_call_us`, `cold_branch_time_per_call_us`, `cold_gather_scatter_time_per_call_us`, `cold_expert_matmul_time_per_call_us`, `parallel_cold_launches` | Cold expert side of the parallel region |
+| `Synchronization` | `parallel_overlap_estimate_per_call_us`, `parallel_join_wait_time_per_call_us` | How much work overlapped and how long one lane waited at the join |
+| `Merge` | `merge_time_per_call_us` | Merge of hot and cold outputs |
+
+Important: these values are not all additive. `Parallel wall` is the wall time of the parallel region. `Hot lane` and `Cold lane` are lane wall times inside that region. `Hot branch` and `Cold branch` are internal sub-measurements and should not simply be added to lane wall time.
+
+`Overlap` is the estimated time hidden by parallel execution. `Join wait` is the time the first finished lane waits at the join point. In the current Qwen runs, the hot lane usually waits for the slower cold lane, but the opposite is possible in principle.
 
 ## Creating The First Hot-Cache JSON
 
@@ -1121,7 +1184,7 @@ When inspecting a new `performance*.json`, the most important questions are:
 
 1. What is `hot_slot_ratio`?
 2. Are there unexpected scheduler fallbacks?
-3. Is `parallel_join_wait_us_per_call` high?
+3. Is `parallel_join_wait_time_per_call_us` high?
 4. Is the cold path too slow?
 5. Is merge cost visible again?
 6. Is routing or worklist time visible in decode?
@@ -1229,11 +1292,11 @@ Every new optimization should compare at least:
 
 - final tok/s after a longer run,
 - `hot_slot_ratio`,
-- `parallel_join_wait_us_per_call`,
-- `parallel_overlap_us_per_call`,
-- `cold_branch_us_per_call`,
-- `merge_us_per_call`,
-- `routing_us_per_call`,
+- `parallel_join_wait_time_per_call_us`,
+- `parallel_overlap_estimate_per_call_us`,
+- `cold_branch_time_per_call_us`,
+- `merge_time_per_call_us`,
+- `routing_time_per_call_us`,
 - fallback counts.
 
 ### 2. Avoid Touching Normal Paths When Possible

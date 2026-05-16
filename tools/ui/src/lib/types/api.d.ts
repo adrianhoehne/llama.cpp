@@ -117,6 +117,58 @@ export interface ApiModelListResponse {
 	models?: ApiModelDetails[];
 }
 
+export type ApiMoeLayerPerfExpertCounts = Array<[number, number]>;
+
+export interface ApiMoeLayerPerfTimingFields {
+	total_moe_time_per_call_us?: number;
+	routing_time_per_call_us?: number;
+	worklist_time_per_call_us?: number;
+	merge_time_per_call_us?: number;
+	hot_branch_time_per_call_us?: number;
+	cold_branch_time_per_call_us?: number;
+	hot_expert_matmul_time_per_call_us?: number;
+	cold_expert_matmul_time_per_call_us?: number;
+	hot_gather_scatter_time_per_call_us?: number;
+	cold_gather_scatter_time_per_call_us?: number;
+	parallel_region_wall_time_per_call_us?: number;
+	parallel_hot_lane_wall_time_per_call_us?: number;
+	parallel_cold_lane_wall_time_per_call_us?: number;
+	parallel_join_wait_time_per_call_us?: number;
+	parallel_overlap_estimate_per_call_us?: number;
+	parallel_hot_launches?: number;
+	parallel_cold_launches?: number;
+	parallel_fallbacks?: number;
+}
+
+export interface ApiMoeLayerPerfSummary extends ApiMoeLayerPerfTimingFields {
+	layer_calls?: number;
+	hot_slot_ratio?: number;
+}
+
+export interface ApiMoeLayerPerfLayer extends ApiMoeLayerPerfTimingFields {
+	layer: number;
+	calls?: number;
+	hot_slots_total?: number;
+	cold_slots_total?: number;
+	hot_slot_ratio?: number;
+	parallel_hot_skips_zero?: number;
+	parallel_cold_skips_zero?: number;
+	experts?: ApiMoeLayerPerfExpertCounts;
+	hot_experts?: ApiMoeLayerPerfExpertCounts;
+	cold_experts?: ApiMoeLayerPerfExpertCounts;
+}
+
+export interface ApiMoeLayerPerfResponse {
+	enabled: boolean;
+	schema: string;
+	n_expert?: number;
+	n_expert_used?: number;
+	updates?: number;
+	overflow_resets?: number;
+	summary?: ApiMoeLayerPerfSummary;
+	layers: ApiMoeLayerPerfLayer[];
+}
+
 export interface ApiLlamaCppServerProps {
 	default_generation_settings: {
 		id: number;

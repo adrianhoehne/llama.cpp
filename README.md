@@ -45,6 +45,10 @@ The file is updated after completed requests and once more during server shutdow
 curl http://127.0.0.1:8080/moe-layer-perf
 ```
 
+The Web UI also has a live MoE layer performance page at `#/moe-layer-perf`. Open it with the activity button next to the chat input actions. The page shows the per-layer hit-rate graph, hot/cold expert heatmaps, and timing groups ordered by the MoE execution flow.
+
+![MoE layer performance UI](docs/development/assets/moe-layer-perf-overview.png)
+
 ### 3. Start with the hot cache
 
 Restart the server with the collected JSON and a memory budget. Use a positive value for a fixed budget, or use `-1` to auto-size the hot cache from remaining VRAM after the model and KV cache are allocated.
@@ -68,7 +72,18 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 
 ### 4. Measure performance
 
-For tuning, keep `--perf` enabled and inspect `/moe-layer-perf`. Look especially at hot slot ratio, cold path time, merge time, scheduler fallbacks, and join wait.
+For tuning, keep `--perf` enabled and inspect `/moe-layer-perf` or the Web UI. Look especially at hot slot ratio, routing/worklist time, parallel wall time, hot/cold lane wall time, overlap, join wait, merge time, and scheduler fallbacks.
+
+The timing cards are ordered by execution flow:
+
+1. Summary
+2. Routing / prep
+3. Parallel region
+4. Hot lane and cold lane
+5. Synchronization
+6. Merge
+
+Do not add all timing cards together. Some values are nested or overlapping measurements. `Parallel wall` is the wall time of the hot/cold region, `Hot lane` and `Cold lane` are lane wall times, `Overlap` is the time hidden by parallel execution, and `Join wait` is the time one lane waits for the other.
 
 For final throughput measurements, disable the performance counters:
 

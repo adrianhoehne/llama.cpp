@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { Square } from '@lucide/svelte';
+	import { Activity, Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		ChatFormActionsAdd,
 		ChatFormActionModels,
@@ -103,6 +104,24 @@
 				{onMcpResourcesClick}
 				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
 			/>
+
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<Button
+						href={ROUTES.MOE_LAYER_PERF}
+						variant="ghost"
+						size="icon"
+						class="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+					>
+						<Activity class="h-4 w-4" />
+						<span class="sr-only">MoE layer performance</span>
+					</Button>
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>MoE layer performance</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
 		</div>
 	{/if}
 
