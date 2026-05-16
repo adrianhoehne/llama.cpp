@@ -118,6 +118,7 @@ export interface ApiModelListResponse {
 }
 
 export type ApiMoeLayerPerfExpertCounts = Array<[number, number]>;
+export type ApiMoeLayerPerfMode = 'full' | 'update' | 'off';
 
 export interface ApiMoeLayerPerfTimingFields {
 	total_moe_time_per_call_us?: number;
@@ -150,6 +151,8 @@ export interface ApiMoeLayerPerfLayer extends ApiMoeLayerPerfTimingFields {
 	calls?: number;
 	hot_slots_total?: number;
 	cold_slots_total?: number;
+	hot_slots_per_call?: number;
+	cold_slots_per_call?: number;
 	hot_slot_ratio?: number;
 	parallel_hot_skips_zero?: number;
 	parallel_cold_skips_zero?: number;
@@ -160,6 +163,7 @@ export interface ApiMoeLayerPerfLayer extends ApiMoeLayerPerfTimingFields {
 
 export interface ApiMoeLayerPerfResponse {
 	enabled: boolean;
+	mode?: ApiMoeLayerPerfMode;
 	schema: string;
 	n_expert?: number;
 	n_expert_used?: number;

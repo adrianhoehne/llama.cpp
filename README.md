@@ -45,7 +45,13 @@ The file is updated after completed requests and once more during server shutdow
 curl http://127.0.0.1:8080/moe-layer-perf
 ```
 
-The Web UI also has a live MoE layer performance page at `#/moe-layer-perf`. Open it with the activity button next to the chat input actions. The page shows the per-layer hit-rate graph, hot/cold expert heatmaps, and timing groups ordered by the MoE execution flow.
+The Web UI also has a live MoE layer performance page at `#/moe-layer-perf`. Open it with the activity button next to the chat input actions. The dropdown next to that button controls the runtime MoE perf mode:
+
+- `Full`: all counters and timing fields for detailed tuning.
+- `Update`: only the counters required for dynamic hot-cache updates and hit-rate visualization.
+- `Off`: MoE perf counters are disabled.
+
+When the server starts with `--no-perf`, the dropdown starts in `Off`. The same mode switch is available through `POST /moe-layer-perf` with `{"mode":"full"}`, `{"mode":"update"}`, or `{"mode":"off"}`. The page shows the per-layer hit-rate graph, hot/cold expert heatmaps, and timing groups ordered by the MoE execution flow.
 
 ![MoE layer performance UI](docs/development/assets/moe-layer-perf-overview.png)
 
@@ -72,7 +78,9 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 
 ### 4. Measure performance
 
-For tuning, keep `--perf` enabled and inspect `/moe-layer-perf` or the Web UI. Look especially at hot slot ratio, routing/worklist time, parallel wall time, hot/cold lane wall time, overlap, join wait, merge time, and scheduler fallbacks.
+For detailed tuning, keep MoE perf mode at `Full` and inspect `/moe-layer-perf` or the Web UI. Look especially at hot slot ratio, routing/worklist time, parallel wall time, hot/cold lane wall time, overlap, join wait, merge time, and scheduler fallbacks.
+
+For longer runs with dynamic cache replacement, use `Update` to keep only the counters needed by `--moe-hot-cache-update-rate`. This avoids the full per-node timing callback while still allowing the cache to adapt after completed requests.
 
 The timing cards are ordered by execution flow:
 
@@ -85,7 +93,7 @@ The timing cards are ordered by execution flow:
 
 Do not add all timing cards together. Some values are nested or overlapping measurements. `Parallel wall` is the wall time of the hot/cold region, `Hot lane` and `Cold lane` are lane wall times, `Overlap` is the time hidden by parallel execution, and `Join wait` is the time one lane waits for the other.
 
-For final throughput measurements, disable the performance counters:
+For final throughput measurements, disable the performance counters. With `--no-perf`, the MoE perf mode starts as `Off`; dynamic cache replacement needs `Update` or `Full`, so leave it off only when you want to measure raw throughput without adaptation.
 
 ```bash
 LLAMA_MOE_HOT_CACHE_PARALLEL=1 \

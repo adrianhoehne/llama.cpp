@@ -241,7 +241,7 @@ Enables additional decode-specific reductions of gather and input overhead.
 --no-perf
 ```
 
-Disables llama.cpp performance counters and the MoE performance collection path for a cleaner throughput run.
+Disables llama.cpp performance counters and starts the MoE performance mode as `off`. The mode can still be changed to `update` or `full` at runtime.
 
 ```text
 --moe-layer-perf-out <file.json>
@@ -251,16 +251,20 @@ LLAMA_ARG_MOE_LAYER_PERF_OUT=<file.json>
 Server-only first-run profiling helper. It enables detailed expert counts and writes the current `/moe-layer-perf` JSON to the given file after completed requests and once more during shutdown. Without an active hot cache, this produces raw per-layer `experts` lists. With an active hot cache, it can also produce `hot_experts` and `cold_experts`.
 
 ```text
-LLAMA_MOE_LAYER_PERF=0
+LLAMA_MOE_LAYER_PERF=full|update|off
 ```
 
-Disables the MoE layer performance output.
+Sets the initial MoE performance mode when the server does not derive it from `--no-perf`. `full` collects all existing counters and timing fields. `update` collects only the data needed by dynamic hot-cache updates: expert counts, hot/cold slots, and hot/cold/join wait timings. `off` disables the MoE performance path.
 
-```text
-LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1
+The mode can be changed at runtime via HTTP:
+
+```bash
+curl -X POST http://127.0.0.1:8080/moe-layer-perf \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"update"}'
 ```
 
-Enables detailed expert counts. This is useful when creating the first hot-cache JSON from real traffic, but it should be off for speed tests.
+In router mode, pass `?model=<name>&autoload=false`.
 
 ## File Map
 
@@ -394,13 +398,14 @@ Collected data includes:
 - join wait time,
 - overlap,
 - launch and fallback counts,
-- optional expert counts.
+- expert counts in `full` and `update` mode.
 
 When performance collection is disabled, the JSON function intentionally returns only a small disabled block:
 
 ```json
 {
   "enabled": false,
+  "mode": "off",
   "schema": "llama.cpp.moe_layer_opt_perf.v1",
   "layers": []
 }
@@ -415,7 +420,7 @@ Contains small hooks to:
 - enable scheduler performance collection,
 - compute the graph as before.
 
-When `--no-perf` is active, the MoE performance path is not installed.
+When the MoE performance mode is `off`, the MoE performance path is not installed. `--no-perf` sets this mode to `off` at server startup.
 
 ### `src/llama.cpp`
 
@@ -719,7 +724,15 @@ Current schema:
 llama.cpp.moe_layer_opt_perf.v1
 ```
 
-Important fields:
+The root object always contains `mode`. The relevant modes are:
+
+| Mode | JSON content | Purpose |
+| --- | --- | --- |
+| `full` | All existing counters, expert lists, and timing fields | Detailed analysis and UI timings |
+| `update` | Expert lists, hot/cold slots, hit rate, hot lane, cold lane, join wait | Dynamic hot-cache updates with lower measurement overhead |
+| `off` | `enabled=false`, no layer data | Throughput tests without MoE perf overhead |
+
+Important `full` fields:
 
 ```text
 summary.layer_calls
@@ -745,13 +758,29 @@ summary.parallel_fallbacks
 layers[]
 ```
 
-With:
+`update` reduces this to the fields required by `llama_moe_hot_cache_update_from_perf_json(...)` and the hit-rate view:
 
 ```text
-LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1
+summary.layer_calls
+summary.hot_slot_ratio
+summary.parallel_hot_lane_wall_time_per_call_us
+summary.parallel_cold_lane_wall_time_per_call_us
+summary.parallel_join_wait_time_per_call_us
+layers[].calls
+layers[].hot_slots_total
+layers[].cold_slots_total
+layers[].hot_slots_per_call
+layers[].cold_slots_per_call
+layers[].hot_slot_ratio
+layers[].parallel_hot_lane_wall_time_per_call_us
+layers[].parallel_cold_lane_wall_time_per_call_us
+layers[].parallel_join_wait_time_per_call_us
+layers[].experts
+layers[].hot_experts
+layers[].cold_experts
 ```
 
-detailed expert counters are included. They are useful for initial cache generation but too expensive for clean speed runs.
+Expert counters are included in `full` and `update`. In `off`, they are not collected.
 
 ## Live Visualization In The Web UI
 
@@ -761,11 +790,13 @@ The Web UI has a dedicated MoE layer performance page:
 #/moe-layer-perf
 ```
 
-In chat, open it with the activity button next to the input actions. The button is intentionally not placed next to the live `t/s` statistic because that area can move while generation is still running.
+In chat, open it with the activity button next to the input actions. The button is intentionally not placed next to the live `t/s` statistic because that area can move while generation is still running. A mode dropdown next to the button switches between `Full`, `Update`, and `Off`.
+
+`Full` returns all existing counters and timing fields. `Update` returns only the data needed for `--moe-hot-cache-update-rate` and the hit-rate view. `Off` disables the MoE performance path. If the server was started with `--no-perf`, the dropdown starts in `Off`.
 
 ![MoE layer performance UI](assets/moe-layer-perf-overview-wide.png)
 
-The page reads the same data as the `/moe-layer-perf` JSON endpoint. In router mode, it passes the currently selected model as a query parameter and sets `autoload=false`, so merely opening the page does not force a model load or model switch.
+The page reads the same data as the `/moe-layer-perf` JSON endpoint. In router mode, it passes the currently selected model as a query parameter and sets `autoload=false`, so merely opening the page does not force a model load or model switch. Mode changes use the same path via `POST /moe-layer-perf`.
 
 The page refreshes automatically. The update interval is configurable in the header and limited to `0.5` to `3.0` seconds. The manual refresh button was removed intentionally because repeated clicking adds endpoint requests and UI work.
 
@@ -821,7 +852,7 @@ If no hot-cache JSON exists yet, start without the hot cache but with expert cou
 
 Then run representative prompts. The output file is updated after completed requests and once more during shutdown. The same data can still be inspected through the existing `/moe-layer-perf` endpoint. The first profile is built from the raw `experts` arrays; later profiles can use `hot_experts` and `cold_experts` when the hot cache is already active.
 
-`LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1` remains available as a low-level switch, but the recommended first-run workflow is `--moe-layer-perf-out <file.json>`.
+The recommended first-run workflow is `--moe-layer-perf-out <file.json>`. For normal dynamic updates after that, the slimmer `update` mode is enough.
 
 That JSON can then be used as input for the hot cache:
 
@@ -860,25 +891,32 @@ Performance counters are not free.
 
 Even when the JSON endpoint is queried rarely, decode still has to update measurement points, counters, and sometimes scheduler data. For very small decode steps, this overhead is visible.
 
-There are therefore two useful modes.
+There are therefore three useful MoE performance modes.
 
 Development mode:
 
 ```text
---perf
-LLAMA_MOE_LAYER_PERF=1
+full
 ```
 
-Goal: understand where time is spent.
+Goal: understand where time is spent. This mode collects all timing fields.
+
+Update mode:
+
+```text
+update
+```
+
+Goal: dynamic hot-cache updates with lower measurement overhead. This mode collects expert counts, slot counts, and hot/cold/join wait timings, but it avoids the full per-node timing callback.
 
 Speed mode:
 
 ```text
 --no-perf
-LLAMA_MOE_LAYER_PERF=0
+off
 ```
 
-Goal: measure real throughput without measurement overhead.
+Goal: measure real throughput without measurement overhead. Dynamic updates need `update` or `full`; in `off`, the cache is not adapted from new performance data.
 
 ## Why The First Parallel Proof Of Concept Was Slower
 

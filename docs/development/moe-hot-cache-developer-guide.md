@@ -241,7 +241,7 @@ Weitere Decode-spezifische Reduktionen von Gather-/Input-Overhead.
 --no-perf
 ```
 
-Deaktiviert die llama.cpp-Perf- und MoE-Perf-Zaehler fuer einen moeglichst sauberen Speed-Test.
+Deaktiviert die llama.cpp-Perf-Zaehler und startet den MoE-Perf-Modus mit `off`. Der Modus kann zur Laufzeit wieder auf `update` oder `full` gestellt werden.
 
 ```text
 --moe-layer-perf-out <datei.json>
@@ -251,16 +251,20 @@ LLAMA_ARG_MOE_LAYER_PERF_OUT=<datei.json>
 Server-only Hilfsschalter fuer den ersten Profiling-Lauf. Er aktiviert detaillierte Expert-Counts und schreibt die aktuelle `/moe-layer-perf`-JSON nach abgeschlossenen Requests sowie einmal beim Shutdown in die angegebene Datei. Ohne aktiven Hot-Cache erzeugt er rohe per-Layer `experts`-Listen. Mit aktivem Hot-Cache koennen zusaetzlich `hot_experts` und `cold_experts` entstehen.
 
 ```text
-LLAMA_MOE_LAYER_PERF=0
+LLAMA_MOE_LAYER_PERF=full|update|off
 ```
 
-Deaktiviert die MoE-Layer-Perf-Ausgabe.
+Setzt den initialen MoE-Perf-Modus, falls der Server ihn nicht explizit aus `--no-perf` ableitet. `full` sammelt alle bisherigen Zaehler und Timing-Felder. `update` sammelt nur die Daten, die das dynamische Hot-Cache-Update braucht: Expert-Counts, Hot/Cold-Slots und Hot/Cold/Join-Wartezeiten. `off` deaktiviert den MoE-Perf-Pfad.
 
-```text
-LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1
+Zur Laufzeit kann der Modus per HTTP geaendert werden:
+
+```bash
+curl -X POST http://127.0.0.1:8080/moe-layer-perf \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"update"}'
 ```
 
-Aktiviert detaillierte Expert-Counts. Das ist hilfreich, um eine erste Hot-Cache-Liste aus echten Traffic-Daten zu erzeugen. Fuer Speed-Tests sollte es deaktiviert bleiben.
+Im Routermodus kann `?model=<name>&autoload=false` mitgegeben werden.
 
 ## Dateiuebersicht
 
@@ -394,13 +398,14 @@ Erfasste Daten:
 - Join-Wartezeit,
 - Overlap,
 - Launch-/Fallback-Counts,
-- optional Expert-Counts.
+- Expert-Counts in den Modi `full` und `update`.
 
 Wenn Perf deaktiviert ist, liefert die JSON-Funktion absichtlich nur einen kleinen Disabled-Block:
 
 ```json
 {
   "enabled": false,
+  "mode": "off",
   "schema": "llama.cpp.moe_layer_opt_perf.v1",
   "layers": []
 }
@@ -415,7 +420,7 @@ Enthaelt kleine Hooks fuer:
 - Scheduler-Perf aktivieren,
 - Graph-Compute wie vorher ausfuehren.
 
-Wenn `--no-perf` aktiv ist, wird der MoE-Perf-Pfad nicht gesetzt.
+Wenn der MoE-Perf-Modus `off` ist, wird der MoE-Perf-Pfad nicht gesetzt. `--no-perf` setzt diesen Modus beim Serverstart initial auf `off`.
 
 ### `src/llama.cpp`
 
@@ -721,7 +726,15 @@ Aktuelles Schema:
 llama.cpp.moe_layer_opt_perf.v1
 ```
 
-Wichtige Felder:
+Der Root enthaelt immer `mode`. Die relevanten Modi sind:
+
+| Modus | JSON-Inhalt | Zweck |
+| --- | --- | --- |
+| `full` | Alle bisherigen Zaehler, Expert-Listen und Timing-Felder | Detailanalyse und UI-Timings |
+| `update` | Expert-Listen, Hot/Cold-Slots, Hit-Rate, Hot-Lane, Cold-Lane, Join-Wait | Dynamisches Hot-Cache-Update mit weniger Messlast |
+| `off` | `enabled=false`, keine Layerdaten | Speed-Test ohne MoE-Perf-Overhead |
+
+Wichtige `full`-Felder:
 
 ```text
 summary.layer_calls
@@ -747,13 +760,29 @@ summary.parallel_fallbacks
 layers[]
 ```
 
-Optional mit:
+`update` reduziert das auf die Felder, die fuer `llama_moe_hot_cache_update_from_perf_json(...)` und die Hit-Rate-Anzeige gebraucht werden:
 
 ```text
-LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1
+summary.layer_calls
+summary.hot_slot_ratio
+summary.parallel_hot_lane_wall_time_per_call_us
+summary.parallel_cold_lane_wall_time_per_call_us
+summary.parallel_join_wait_time_per_call_us
+layers[].calls
+layers[].hot_slots_total
+layers[].cold_slots_total
+layers[].hot_slots_per_call
+layers[].cold_slots_per_call
+layers[].hot_slot_ratio
+layers[].parallel_hot_lane_wall_time_per_call_us
+layers[].parallel_cold_lane_wall_time_per_call_us
+layers[].parallel_join_wait_time_per_call_us
+layers[].experts
+layers[].hot_experts
+layers[].cold_experts
 ```
 
-kommen detaillierte Expertenzaehler dazu. Diese sind fuer die initiale Cache-Erzeugung nuetzlich, aber fuer reine Speed-Laeufe teuer und deshalb standardmaessig aus.
+Expert-Zaehler sind in `full` und `update` enthalten. In `off` werden sie nicht gesammelt.
 
 ## Live-Visualisierung im Web UI
 
@@ -763,11 +792,13 @@ Die Web-UI besitzt eine eigene MoE-Layer-Perf-Seite:
 #/moe-layer-perf
 ```
 
-Im Chat ist sie ueber den Activity-Button neben den Eingabefeld-Aktionen erreichbar. Der Button sitzt bewusst nicht im `t/s`-Bereich der Antwortstatistik, weil dieser Bereich waehrend laufender Generierung seine Position aendern kann.
+Im Chat ist sie ueber den Activity-Button neben den Eingabefeld-Aktionen erreichbar. Der Button sitzt bewusst nicht im `t/s`-Bereich der Antwortstatistik, weil dieser Bereich waehrend laufender Generierung seine Position aendern kann. Direkt daneben sitzt ein Modus-Dropdown fuer `Full`, `Update` und `Off`.
+
+`Full` liefert alle bisherigen Zaehler und Timing-Felder. `Update` liefert nur die Daten, die fuer `--moe-hot-cache-update-rate` und die Hit-Rate-Anzeige gebraucht werden. `Off` schaltet den MoE-Perf-Pfad ab. Wenn der Server mit `--no-perf` gestartet wurde, steht das Dropdown initial auf `Off`.
 
 ![MoE-Layer-Perf-UI](assets/moe-layer-perf-overview-wide.png)
 
-Die Seite liest dieselben Daten wie der JSON-Endpunkt `/moe-layer-perf`. Im Routermodus wird das aktuell ausgewaehlte Modell als Query-Parameter mitgegeben und `autoload=false` gesetzt, damit das reine Betrachten der Seite keinen Modellwechsel erzwingt.
+Die Seite liest dieselben Daten wie der JSON-Endpunkt `/moe-layer-perf`. Im Routermodus wird das aktuell ausgewaehlte Modell als Query-Parameter mitgegeben und `autoload=false` gesetzt, damit das reine Betrachten der Seite keinen Modellwechsel erzwingt. Der Moduswechsel nutzt denselben Pfad per `POST /moe-layer-perf`.
 
 Die Aktualisierung laeuft automatisch. Das Intervall ist im Kopfbereich einstellbar und auf `0.5` bis `3.0` Sekunden begrenzt. Ein manueller Refresh-Button wurde bewusst entfernt, weil das wiederholte Klicken zusaetzliche Endpoint-Abfragen und UI-Arbeit erzeugt.
 
@@ -823,7 +854,7 @@ Wenn noch keine Hot-Cache-JSON existiert, startet man ohne Hot-Cache, aber mit E
 
 Dann laesst man repraesentative Prompts laufen. Die Ausgabedatei wird nach abgeschlossenen Requests und einmal beim Shutdown aktualisiert. Dieselben Daten koennen weiterhin ueber den vorhandenen `/moe-layer-perf`-Pfad angesehen werden. Das erste Profil wird aus den rohen `experts`-Arrays gebaut; spaetere Profile koennen bei aktivem Hot-Cache `hot_experts` und `cold_experts` verwenden.
 
-`LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1` bleibt als Low-Level-Schalter verfuegbar, der empfohlene First-Run-Workflow ist aber `--moe-layer-perf-out <datei.json>`.
+Der empfohlene First-Run-Workflow ist `--moe-layer-perf-out <datei.json>`. Fuer normale dynamische Updates reicht danach der schlankere `update`-Modus.
 
 Diese JSON kann danach als Input fuer den Hot-Cache verwendet werden:
 
@@ -862,25 +893,32 @@ Die Perf-Zaehler sind nicht kostenlos.
 
 Auch wenn die JSON-Ausgabe selten abgefragt wird, muessen waehrend Decode Messpunkte, Counter und teils Scheduler-Daten aktualisiert werden. Bei sehr kleinen Decode-Schritten ist dieser Overhead sichtbar.
 
-Deshalb gibt es zwei Modi:
+Deshalb gibt es drei MoE-Perf-Modi:
 
 Entwicklungsmodus:
 
 ```text
---perf
-LLAMA_MOE_LAYER_PERF=1
+full
 ```
 
-Ziel: verstehen, wo Zeit verloren geht.
+Ziel: verstehen, wo Zeit verloren geht. Dieser Modus sammelt alle Timing-Felder.
+
+Update-Modus:
+
+```text
+update
+```
+
+Ziel: dynamische Hot-Cache-Updates mit weniger Messlast. Dieser Modus sammelt Expert-Counts, Slot-Counts sowie Hot/Cold/Join-Wartezeiten, aber keine volle per-Node-Zeitmessung.
 
 Speed-Modus:
 
 ```text
 --no-perf
-LLAMA_MOE_LAYER_PERF=0
+off
 ```
 
-Ziel: reale Geschwindigkeit ohne Messlast.
+Ziel: reale Geschwindigkeit ohne Messlast. Dynamische Updates brauchen `update` oder `full`; in `off` wird der Cache nicht aus neuen Perf-Daten angepasst.
 
 ## Warum der erste parallele PoC langsamer war
 

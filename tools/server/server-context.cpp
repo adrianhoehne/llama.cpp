@@ -3275,6 +3275,11 @@ private:
         last_moe_layer_perf_json = perf_json;
     }
 
+    void forget_moe_layer_perf_json() const {
+        std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+        last_moe_layer_perf_json.clear();
+    }
+
     bool has_remembered_moe_layer_perf_json() const {
         std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
         return !last_moe_layer_perf_json.empty();
@@ -3319,6 +3324,11 @@ private:
         if (!file) {
             SRV_WRN("failed to write MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
         }
+    }
+
+    void set_moe_layer_perf_mode(llama_moe_layer_perf_mode mode) const {
+        llama_moe_layer_perf_set_mode(mode);
+        forget_moe_layer_perf_json();
     }
 
     void update_moe_hot_cache_if_pending() {
@@ -3382,6 +3392,10 @@ void server_context::terminate() {
 
 void server_context::write_moe_layer_perf_file() const {
     impl->write_moe_layer_perf_file();
+}
+
+void server_context::set_moe_layer_perf_mode(llama_moe_layer_perf_mode mode) const {
+    impl->set_moe_layer_perf_mode(mode);
 }
 
 llama_context * server_context::get_llama_context() const {
@@ -3724,6 +3738,24 @@ void server_routes::init_routes() {
         res->status = 200;
         res->data = ctx_server.get_moe_layer_perf_json();
 
+        return res;
+    };
+
+    this->post_moe_layer_perf = [this](const server_http_req & req) -> server_http_res_ptr {
+        const json body = json::parse(req.body);
+        const std::string mode_value = json_value(body, "mode", std::string());
+
+        llama_moe_layer_perf_mode mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
+        if (!llama_moe_layer_perf_parse_mode(mode_value.c_str(), mode)) {
+            throw std::invalid_argument("invalid MoE layer perf mode; expected one of: full, update, off");
+        }
+
+        ctx_server.set_moe_layer_perf_mode(mode);
+        SRV_INF("MoE layer perf mode set to %s\n", llama_moe_layer_perf_mode_name(mode));
+
+        auto res = std::make_unique<server_http_res>();
+        res->status = 200;
+        res->data = ctx_server.get_moe_layer_perf_json();
         return res;
     };
 

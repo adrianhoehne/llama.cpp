@@ -479,13 +479,15 @@ Die JSON enthaelt heute vor allem:
 - Parallelregion, Hot-Lane, Cold-Lane, Join-Wait,
 - Fallback-Zaehler und Fallback-Gruende.
 
-Expert-Counts sind optional:
+Expert-Counts werden heute ueber den MoE-Perf-Modus gesteuert:
 
-- `LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS=1`
+- `full`: alle Zaehler und Timing-Felder,
+- `update`: nur Expert-/Slot-Daten plus Hot/Cold/Join-Wartezeiten,
+- `off`: keine MoE-Perf-Erfassung.
 
-Die Perf-Erfassung ist nur aktiv, wenn sie per Env aktiviert ist und der Kontext
-nicht `no_perf` gesetzt hat. `--no-perf` deaktiviert dadurch auch die
-MoE-Layer-Perf und die Scheduler-Parallel-Perf.
+Die Perf-Erfassung ist nur aktiv, wenn der Modus nicht `off` ist. `--no-perf`
+setzt den initialen Modus auf `off`; per `POST /moe-layer-perf` kann er zur
+Laufzeit wieder auf `update` oder `full` gestellt werden.
 
 ### Warum
 
@@ -726,4 +728,3 @@ Die sinnvollsten naechsten Ansatzpunkte sind aus heutiger Sicht:
      nur helfen, wenn dadurch Cold-Tail-Layer getroffen werden.
    - Da die Hot-Hitrate vermutlich nahe 70% gedeckelt ist, sollte dynamisches
      Update nicht auf maximale Hitrate, sondern auf weniger Join-Wait optimieren.
-

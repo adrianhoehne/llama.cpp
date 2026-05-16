@@ -7,6 +7,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -200,26 +201,90 @@ struct llama_moe_layer_perf_local {
 };
 
 static llama_moe_layer_perf_local g_llama_moe_layer_perf;
+static std::atomic<int> g_llama_moe_layer_perf_mode{-1};
 
-static bool llama_moe_layer_perf_env_enabled() {
-    const char * env = std::getenv("LLAMA_MOE_LAYER_PERF");
-    return env == nullptr || std::strcmp(env, "0") != 0;
-}
-
-bool llama_moe_layer_perf_is_enabled(const llama_context * ctx) {
-    if (ctx != nullptr && ctx->get_cparams().no_perf) {
+bool llama_moe_layer_perf_parse_mode(const char * value, llama_moe_layer_perf_mode & mode) {
+    if (value == nullptr) {
         return false;
     }
 
-    return llama_moe_layer_perf_env_enabled();
+    if (std::strcmp(value, "full") == 0 || std::strcmp(value, "1") == 0 || std::strcmp(value, "on") == 0 || std::strcmp(value, "true") == 0) {
+        mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
+        return true;
+    }
+
+    if (std::strcmp(value, "update") == 0) {
+        mode = LLAMA_MOE_LAYER_PERF_MODE_UPDATE;
+        return true;
+    }
+
+    if (std::strcmp(value, "off") == 0 || std::strcmp(value, "0") == 0 || std::strcmp(value, "false") == 0) {
+        mode = LLAMA_MOE_LAYER_PERF_MODE_OFF;
+        return true;
+    }
+
+    return false;
 }
 
-static bool llama_moe_layer_perf_expert_counts_enabled() {
-    const char * env = std::getenv("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS");
-    return env != nullptr && env[0] != '\0' &&
-           std::strcmp(env, "0") != 0 &&
-           std::strcmp(env, "off") != 0 &&
-           std::strcmp(env, "false") != 0;
+const char * llama_moe_layer_perf_mode_name(llama_moe_layer_perf_mode mode) {
+    switch (mode) {
+        case LLAMA_MOE_LAYER_PERF_MODE_FULL:
+            return "full";
+        case LLAMA_MOE_LAYER_PERF_MODE_UPDATE:
+            return "update";
+        case LLAMA_MOE_LAYER_PERF_MODE_OFF:
+        default:
+            return "off";
+    }
+}
+
+static llama_moe_layer_perf_mode llama_moe_layer_perf_env_mode() {
+    const char * env = std::getenv("LLAMA_MOE_LAYER_PERF");
+    if (env == nullptr || env[0] == '\0') {
+        return LLAMA_MOE_LAYER_PERF_MODE_FULL;
+    }
+
+    llama_moe_layer_perf_mode mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
+    return llama_moe_layer_perf_parse_mode(env, mode) ? mode : LLAMA_MOE_LAYER_PERF_MODE_FULL;
+}
+
+llama_moe_layer_perf_mode llama_moe_layer_perf_get_mode(const llama_context * ctx) {
+    const int configured = g_llama_moe_layer_perf_mode.load(std::memory_order_relaxed);
+    if (configured >= 0) {
+        return (llama_moe_layer_perf_mode) configured;
+    }
+
+    if (ctx != nullptr && ctx->get_cparams().no_perf) {
+        return LLAMA_MOE_LAYER_PERF_MODE_OFF;
+    }
+
+    return llama_moe_layer_perf_env_mode();
+}
+
+void llama_moe_layer_perf_set_initial_mode(bool no_perf) {
+    llama_moe_layer_perf_set_mode(no_perf ? LLAMA_MOE_LAYER_PERF_MODE_OFF : llama_moe_layer_perf_env_mode());
+}
+
+void llama_moe_layer_perf_set_mode(llama_moe_layer_perf_mode mode) {
+    g_llama_moe_layer_perf_mode.store((int) mode, std::memory_order_relaxed);
+
+    std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
+    g_llama_moe_layer_perf.reset_locked(false);
+    g_llama_moe_layer_perf.active = false;
+    g_llama_moe_layer_perf.updates = 0;
+}
+
+bool llama_moe_layer_perf_is_enabled(const llama_context * ctx) {
+    return llama_moe_layer_perf_get_mode(ctx) != LLAMA_MOE_LAYER_PERF_MODE_OFF;
+}
+
+bool llama_moe_layer_perf_needs_expert_counts(bool no_perf) {
+    const int configured = g_llama_moe_layer_perf_mode.load(std::memory_order_relaxed);
+    const llama_moe_layer_perf_mode mode = configured >= 0 ?
+        (llama_moe_layer_perf_mode) configured :
+        (no_perf ? LLAMA_MOE_LAYER_PERF_MODE_OFF : llama_moe_layer_perf_env_mode());
+
+    return mode != LLAMA_MOE_LAYER_PERF_MODE_OFF;
 }
 
 static int llama_moe_parse_layer_from_name(const char * name) {
@@ -254,6 +319,8 @@ static bool llama_moe_is_any_node(const char * name) {
     return llama_moe_name_contains(name, "ffn_moe_");
 }
 
+static bool llama_moe_is_update_node(const char * name);
+
 static bool llama_moe_is_topk_node(const char * name) {
     return llama_moe_name_contains(name, "ffn_moe_topk-");
 }
@@ -272,6 +339,14 @@ static bool llama_moe_is_hot_expert_ids_node(const char * name) {
 
 static bool llama_moe_is_cold_ids_node(const char * name) {
     return llama_moe_name_contains(name, "ffn_moe_cold_ids_compact-");
+}
+
+static bool llama_moe_is_update_node(const char * name) {
+    return llama_moe_is_topk_node(name) ||
+           llama_moe_is_hot_count_node(name) ||
+           llama_moe_is_cold_count_node(name) ||
+           llama_moe_is_hot_expert_ids_node(name) ||
+           llama_moe_is_cold_ids_node(name);
 }
 
 static bool llama_moe_is_gate_node(const char * name) {
@@ -554,7 +629,10 @@ static void llama_moe_layer_perf_count_branch_experts_locked(uint32_t layer, ggm
 }
 
 bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_data) {
-    if (!llama_moe_layer_perf_is_enabled(static_cast<const llama_context *>(user_data))) {
+    const auto * ctx = static_cast<const llama_context *>(user_data);
+    const llama_moe_layer_perf_mode mode = llama_moe_layer_perf_get_mode(ctx);
+
+    if (mode == LLAMA_MOE_LAYER_PERF_MODE_OFF) {
         return true;
     }
 
@@ -565,7 +643,9 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
     const char * name = t->name;
 
     if (ask) {
-        return llama_moe_is_any_node(name);
+        return mode == LLAMA_MOE_LAYER_PERF_MODE_FULL ?
+            llama_moe_is_any_node(name) :
+            llama_moe_is_update_node(name);
     }
 
     if (!llama_moe_is_any_node(name)) {
@@ -576,8 +656,6 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
     if (layer < 0) {
         return true;
     }
-
-    const int64_t now_us = ggml_time_us();
 
     std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
 
@@ -591,15 +669,19 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
 
     uint64_t elapsed_us = 0;
 
-    if (g_llama_moe_layer_perf.last_callback_us != 0 && now_us > g_llama_moe_layer_perf.last_callback_us) {
-        elapsed_us = (uint64_t) (now_us - g_llama_moe_layer_perf.last_callback_us);
-    }
-
-    g_llama_moe_layer_perf.last_callback_us = now_us;
-
     auto & dst = g_llama_moe_layer_perf.layers[layer];
 
-    if (elapsed_us > 0) {
+    if (mode == LLAMA_MOE_LAYER_PERF_MODE_FULL) {
+        const int64_t now_us = ggml_time_us();
+
+        if (g_llama_moe_layer_perf.last_callback_us != 0 && now_us > g_llama_moe_layer_perf.last_callback_us) {
+            elapsed_us = (uint64_t) (now_us - g_llama_moe_layer_perf.last_callback_us);
+        }
+
+        g_llama_moe_layer_perf.last_callback_us = now_us;
+    }
+
+    if (mode == LLAMA_MOE_LAYER_PERF_MODE_FULL && elapsed_us > 0) {
         g_llama_moe_layer_perf.add_locked(dst.total_moe_time_us, elapsed_us);
 
         if (llama_moe_is_expert_matmul_node(name)) {
@@ -641,16 +723,15 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
         }
     }
 
-    const bool expert_counts_enabled = llama_moe_layer_perf_expert_counts_enabled();
-    if (expert_counts_enabled && llama_moe_is_topk_node(name)) {
+    if (llama_moe_is_topk_node(name)) {
         llama_moe_layer_perf_count_topk_locked((uint32_t) layer, t);
-    } else if (expert_counts_enabled && llama_moe_is_hot_count_node(name)) {
+    } else if (llama_moe_is_hot_count_node(name)) {
         llama_moe_layer_perf_count_worklist_count_locked((uint32_t) layer, t, true);
-    } else if (expert_counts_enabled && llama_moe_is_cold_count_node(name)) {
+    } else if (llama_moe_is_cold_count_node(name)) {
         llama_moe_layer_perf_count_worklist_count_locked((uint32_t) layer, t, false);
-    } else if (expert_counts_enabled && llama_moe_is_hot_expert_ids_node(name)) {
+    } else if (llama_moe_is_hot_expert_ids_node(name)) {
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, true);
-    } else if (expert_counts_enabled && llama_moe_is_cold_ids_node(name)) {
+    } else if (llama_moe_is_cold_ids_node(name)) {
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, false);
     }
 
@@ -661,6 +742,12 @@ void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t sched) {
     if (sched == nullptr) {
         return;
     }
+
+    const llama_moe_layer_perf_mode mode = llama_moe_layer_perf_get_mode(nullptr);
+    if (mode == LLAMA_MOE_LAYER_PERF_MODE_OFF) {
+        return;
+    }
+    const bool full_mode = mode == LLAMA_MOE_LAYER_PERF_MODE_FULL;
 
     const int n_metrics = ggml_backend_sched_get_moe_hot_cache_parallel_perf(sched, nullptr, 0);
     if (n_metrics <= 0) {
@@ -676,8 +763,6 @@ void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t sched) {
         return;
     }
 
-    const bool expert_counts_enabled = llama_moe_layer_perf_expert_counts_enabled();
-
     for (const auto & metric : metrics) {
         if (metric.layer < 0 || (uint32_t) metric.layer >= g_llama_moe_layer_perf.layers.size()) {
             continue;
@@ -688,7 +773,7 @@ void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t sched) {
             dst.hot_worklist_calls > dst.parallel_regions ||
             dst.cold_worklist_calls > dst.parallel_regions;
 
-        if (!expert_counts_enabled || !slots_counted_by_callback) {
+        if (!slots_counted_by_callback) {
             g_llama_moe_layer_perf.add_locked(dst.calls, 1);
             g_llama_moe_layer_perf.add_locked(dst.hot_worklist_calls, 1);
             g_llama_moe_layer_perf.add_locked(dst.cold_worklist_calls, 1);
@@ -702,28 +787,31 @@ void llama_moe_layer_perf_collect_parallel_metrics(ggml_backend_sched_t sched) {
             }
         }
         g_llama_moe_layer_perf.add_locked(dst.parallel_regions, 1);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_region_wall_time_us, metric.parallel_region_wall_time_us);
         g_llama_moe_layer_perf.add_locked(dst.parallel_hot_lane_wall_time_us, metric.parallel_hot_lane_wall_time_us);
         g_llama_moe_layer_perf.add_locked(dst.parallel_cold_lane_wall_time_us, metric.parallel_cold_lane_wall_time_us);
         g_llama_moe_layer_perf.add_locked(dst.parallel_join_wait_time_us, metric.parallel_join_wait_time_us);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_overlap_estimate_us, metric.parallel_overlap_estimate_us);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_hot_launches, metric.parallel_hot_launches);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_cold_launches, metric.parallel_cold_launches);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_hot_skips_zero, metric.parallel_hot_skips_zero);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_cold_skips_zero, metric.parallel_cold_skips_zero);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallbacks, metric.parallel_fallbacks);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_incomplete, metric.parallel_fallback_incomplete);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_count_not_prefix, metric.parallel_fallback_count_not_prefix);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_bad_split_order, metric.parallel_fallback_bad_split_order);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_same_backend, metric.parallel_fallback_same_backend);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_hot_spans_backends, metric.parallel_fallback_hot_spans_backends);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_cold_spans_backends, metric.parallel_fallback_cold_spans_backends);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_hot_not_cuda, metric.parallel_fallback_hot_not_cuda);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_cold_not_cpu, metric.parallel_fallback_cold_not_cpu);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_count_readback, metric.parallel_fallback_count_readback);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_threshold, metric.parallel_fallback_threshold);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_zero_output, metric.parallel_fallback_zero_output);
-        g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_other, metric.parallel_fallback_other);
+
+        if (full_mode) {
+            g_llama_moe_layer_perf.add_locked(dst.parallel_region_wall_time_us, metric.parallel_region_wall_time_us);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_overlap_estimate_us, metric.parallel_overlap_estimate_us);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_hot_launches, metric.parallel_hot_launches);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_cold_launches, metric.parallel_cold_launches);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_hot_skips_zero, metric.parallel_hot_skips_zero);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_cold_skips_zero, metric.parallel_cold_skips_zero);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallbacks, metric.parallel_fallbacks);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_incomplete, metric.parallel_fallback_incomplete);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_count_not_prefix, metric.parallel_fallback_count_not_prefix);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_bad_split_order, metric.parallel_fallback_bad_split_order);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_same_backend, metric.parallel_fallback_same_backend);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_hot_spans_backends, metric.parallel_fallback_hot_spans_backends);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_cold_spans_backends, metric.parallel_fallback_cold_spans_backends);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_hot_not_cuda, metric.parallel_fallback_hot_not_cuda);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_cold_not_cpu, metric.parallel_fallback_cold_not_cpu);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_count_readback, metric.parallel_fallback_count_readback);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_threshold, metric.parallel_fallback_threshold);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_zero_output, metric.parallel_fallback_zero_output);
+            g_llama_moe_layer_perf.add_locked(dst.parallel_fallback_other, metric.parallel_fallback_other);
+        }
     }
 }
 
@@ -754,10 +842,12 @@ void llama_moe_layer_perf_graph_compute_end(llama_context * ctx, ggml_backend_sc
 const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
     static thread_local std::string result;
 
-    if (!llama_moe_layer_perf_is_enabled(ctx)) {
-        result = "{\"enabled\":false,\"schema\":\"llama.cpp.moe_layer_opt_perf.v1\",\"layers\":[]}";
+    const llama_moe_layer_perf_mode mode = llama_moe_layer_perf_get_mode(ctx);
+    if (mode == LLAMA_MOE_LAYER_PERF_MODE_OFF) {
+        result = "{\"enabled\":false,\"mode\":\"off\",\"schema\":\"llama.cpp.moe_layer_opt_perf.v1\",\"layers\":[]}";
         return result.c_str();
     }
+    const bool full_mode = mode == LLAMA_MOE_LAYER_PERF_MODE_FULL;
 
     std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
 
@@ -846,32 +936,35 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
 
     out << "{";
     out << "\"enabled\":true,";
+    out << "\"mode\":\"" << llama_moe_layer_perf_mode_name(mode) << "\",";
     out << "\"schema\":\"llama.cpp.moe_layer_opt_perf.v1\",";
     out << "\"n_expert\":" << g_llama_moe_layer_perf.n_expert << ",";
     out << "\"n_expert_used\":" << g_llama_moe_layer_perf.n_expert_used << ",";
     out << "\"updates\":" << g_llama_moe_layer_perf.updates << ",";
     out << "\"overflow_resets\":" << g_llama_moe_layer_perf.overflow_resets << ",";
     out << "\"summary\":{";
-    out << "\"layer_calls\":" << summary_calls << ",";
-    out << "\"hot_slot_ratio\":" << ratio(summary_hot_slots, summary_slots) << ",";
-    out << "\"total_moe_time_per_call_us\":" << per_call(summary_total_moe_time_us, summary_calls) << ",";
-    out << "\"routing_time_per_call_us\":" << per_call(summary_routing_time_us, summary_calls) << ",";
-    out << "\"worklist_time_per_call_us\":" << per_call(summary_worklist_time_us, summary_calls) << ",";
-    out << "\"merge_time_per_call_us\":" << per_call(summary_merge_time_us, summary_calls) << ",";
-    out << "\"hot_branch_time_per_call_us\":" << per_call(summary_hot_branch_time_us, summary_calls) << ",";
-    out << "\"cold_branch_time_per_call_us\":" << per_call(summary_cold_branch_time_us, summary_calls) << ",";
-    out << "\"hot_expert_matmul_time_per_call_us\":" << per_call(summary_hot_expert_matmul_time_us, summary_calls) << ",";
-    out << "\"cold_expert_matmul_time_per_call_us\":" << per_call(summary_cold_expert_matmul_time_us, summary_calls) << ",";
-    out << "\"hot_gather_scatter_time_per_call_us\":" << per_call(summary_hot_gather_scatter_time_us, summary_calls) << ",";
-    out << "\"cold_gather_scatter_time_per_call_us\":" << per_call(summary_cold_gather_scatter_time_us, summary_calls) << ",";
-    out << "\"parallel_region_wall_time_per_call_us\":" << per_call(summary_parallel_region_wall_time_us, summary_calls) << ",";
-    out << "\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(summary_parallel_hot_lane_wall_time_us, summary_calls) << ",";
-    out << "\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(summary_parallel_cold_lane_wall_time_us, summary_calls) << ",";
-    out << "\"parallel_join_wait_time_per_call_us\":" << per_call(summary_parallel_join_wait_time_us, summary_calls) << ",";
-    out << "\"parallel_overlap_estimate_per_call_us\":" << per_call(summary_parallel_overlap_estimate_us, summary_calls) << ",";
-    out << "\"parallel_hot_launches\":" << summary_parallel_hot_launches << ",";
-    out << "\"parallel_cold_launches\":" << summary_parallel_cold_launches << ",";
-    out << "\"parallel_fallbacks\":" << summary_parallel_fallbacks;
+    out << "\"layer_calls\":" << summary_calls;
+    out << ",\"hot_slot_ratio\":" << ratio(summary_hot_slots, summary_slots);
+    out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(summary_parallel_hot_lane_wall_time_us, summary_calls);
+    out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(summary_parallel_cold_lane_wall_time_us, summary_calls);
+    out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(summary_parallel_join_wait_time_us, summary_calls);
+    if (full_mode) {
+        out << ",\"total_moe_time_per_call_us\":" << per_call(summary_total_moe_time_us, summary_calls);
+        out << ",\"routing_time_per_call_us\":" << per_call(summary_routing_time_us, summary_calls);
+        out << ",\"worklist_time_per_call_us\":" << per_call(summary_worklist_time_us, summary_calls);
+        out << ",\"merge_time_per_call_us\":" << per_call(summary_merge_time_us, summary_calls);
+        out << ",\"hot_branch_time_per_call_us\":" << per_call(summary_hot_branch_time_us, summary_calls);
+        out << ",\"cold_branch_time_per_call_us\":" << per_call(summary_cold_branch_time_us, summary_calls);
+        out << ",\"hot_expert_matmul_time_per_call_us\":" << per_call(summary_hot_expert_matmul_time_us, summary_calls);
+        out << ",\"cold_expert_matmul_time_per_call_us\":" << per_call(summary_cold_expert_matmul_time_us, summary_calls);
+        out << ",\"hot_gather_scatter_time_per_call_us\":" << per_call(summary_hot_gather_scatter_time_us, summary_calls);
+        out << ",\"cold_gather_scatter_time_per_call_us\":" << per_call(summary_cold_gather_scatter_time_us, summary_calls);
+        out << ",\"parallel_region_wall_time_per_call_us\":" << per_call(summary_parallel_region_wall_time_us, summary_calls);
+        out << ",\"parallel_overlap_estimate_per_call_us\":" << per_call(summary_parallel_overlap_estimate_us, summary_calls);
+        out << ",\"parallel_hot_launches\":" << summary_parallel_hot_launches;
+        out << ",\"parallel_cold_launches\":" << summary_parallel_cold_launches;
+        out << ",\"parallel_fallbacks\":" << summary_parallel_fallbacks;
+    }
     out << "},";
     out << "\"layers\":[";
 
@@ -946,47 +1039,50 @@ const char * llama_moe_layer_perf_json(struct llama_context * ctx) {
         out << "\"cold_slots_total\":" << cold_slots_total << ",";
         out << "\"hot_slots_per_call\":" << hot_slots_per_call << ",";
         out << "\"cold_slots_per_call\":" << cold_slots_per_call << ",";
-        out << "\"hot_slot_ratio\":" << ratio(hot_slots_total, slots_total) << ",";
-        out << "\"total_moe_time_per_call_us\":" << per_call(layer.total_moe_time_us, layer.calls) << ",";
-        out << "\"routing_time_per_call_us\":" << per_call(layer.routing_time_us, layer.calls) << ",";
-        out << "\"worklist_time_per_call_us\":" << per_call(layer.worklist_time_us, layer.calls) << ",";
-        out << "\"merge_time_per_call_us\":" << per_call(layer.merge_time_us, layer.calls) << ",";
-        out << "\"hot_branch_time_per_call_us\":" << per_call(layer.hot_branch_time_us, layer.calls) << ",";
-        out << "\"cold_branch_time_per_call_us\":" << per_call(layer.cold_branch_time_us, layer.calls) << ",";
-        out << "\"hot_expert_matmul_time_per_call_us\":" << per_call(layer.hot_expert_matmul_time_us, layer.calls) << ",";
-        out << "\"cold_expert_matmul_time_per_call_us\":" << per_call(layer.cold_expert_matmul_time_us, layer.calls) << ",";
-        out << "\"hot_gather_scatter_time_per_call_us\":" << per_call(layer.hot_gather_scatter_time_us, layer.calls) << ",";
-        out << "\"cold_gather_scatter_time_per_call_us\":" << per_call(layer.cold_gather_scatter_time_us, layer.calls) << ",";
-        out << "\"parallel_region_wall_time_per_call_us\":" << per_call(layer.parallel_region_wall_time_us, layer.calls) << ",";
-        out << "\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls) << ",";
-        out << "\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls) << ",";
-        out << "\"parallel_join_wait_time_per_call_us\":" << per_call(layer.parallel_join_wait_time_us, layer.calls) << ",";
-        out << "\"parallel_overlap_estimate_per_call_us\":" << per_call(layer.parallel_overlap_estimate_us, layer.calls) << ",";
-        out << "\"parallel_hot_launches\":" << layer.parallel_hot_launches << ",";
-        out << "\"parallel_cold_launches\":" << layer.parallel_cold_launches << ",";
-        out << "\"parallel_hot_skips_zero\":" << layer.parallel_hot_skips_zero << ",";
-        out << "\"parallel_cold_skips_zero\":" << layer.parallel_cold_skips_zero << ",";
-        out << "\"parallel_fallbacks\":" << layer.parallel_fallbacks << ",";
+        out << "\"hot_slot_ratio\":" << ratio(hot_slots_total, slots_total);
+        out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls);
+        out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls);
+        out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(layer.parallel_join_wait_time_us, layer.calls);
 
-        if (layer.parallel_fallbacks > 0) {
-            bool first_reason = true;
-            out << "\"parallel_fallback_reasons\":{";
-            write_fallback_reason(first_reason, "incomplete", layer.parallel_fallback_incomplete);
-            write_fallback_reason(first_reason, "count_not_prefix", layer.parallel_fallback_count_not_prefix);
-            write_fallback_reason(first_reason, "bad_split_order", layer.parallel_fallback_bad_split_order);
-            write_fallback_reason(first_reason, "same_backend", layer.parallel_fallback_same_backend);
-            write_fallback_reason(first_reason, "hot_spans_backends", layer.parallel_fallback_hot_spans_backends);
-            write_fallback_reason(first_reason, "cold_spans_backends", layer.parallel_fallback_cold_spans_backends);
-            write_fallback_reason(first_reason, "hot_not_cuda", layer.parallel_fallback_hot_not_cuda);
-            write_fallback_reason(first_reason, "cold_not_cpu", layer.parallel_fallback_cold_not_cpu);
-            write_fallback_reason(first_reason, "count_readback", layer.parallel_fallback_count_readback);
-            write_fallback_reason(first_reason, "threshold", layer.parallel_fallback_threshold);
-            write_fallback_reason(first_reason, "zero_output", layer.parallel_fallback_zero_output);
-            write_fallback_reason(first_reason, "other", layer.parallel_fallback_other);
-            out << "},";
+        if (full_mode) {
+            out << ",\"total_moe_time_per_call_us\":" << per_call(layer.total_moe_time_us, layer.calls);
+            out << ",\"routing_time_per_call_us\":" << per_call(layer.routing_time_us, layer.calls);
+            out << ",\"worklist_time_per_call_us\":" << per_call(layer.worklist_time_us, layer.calls);
+            out << ",\"merge_time_per_call_us\":" << per_call(layer.merge_time_us, layer.calls);
+            out << ",\"hot_branch_time_per_call_us\":" << per_call(layer.hot_branch_time_us, layer.calls);
+            out << ",\"cold_branch_time_per_call_us\":" << per_call(layer.cold_branch_time_us, layer.calls);
+            out << ",\"hot_expert_matmul_time_per_call_us\":" << per_call(layer.hot_expert_matmul_time_us, layer.calls);
+            out << ",\"cold_expert_matmul_time_per_call_us\":" << per_call(layer.cold_expert_matmul_time_us, layer.calls);
+            out << ",\"hot_gather_scatter_time_per_call_us\":" << per_call(layer.hot_gather_scatter_time_us, layer.calls);
+            out << ",\"cold_gather_scatter_time_per_call_us\":" << per_call(layer.cold_gather_scatter_time_us, layer.calls);
+            out << ",\"parallel_region_wall_time_per_call_us\":" << per_call(layer.parallel_region_wall_time_us, layer.calls);
+            out << ",\"parallel_overlap_estimate_per_call_us\":" << per_call(layer.parallel_overlap_estimate_us, layer.calls);
+            out << ",\"parallel_hot_launches\":" << layer.parallel_hot_launches;
+            out << ",\"parallel_cold_launches\":" << layer.parallel_cold_launches;
+            out << ",\"parallel_hot_skips_zero\":" << layer.parallel_hot_skips_zero;
+            out << ",\"parallel_cold_skips_zero\":" << layer.parallel_cold_skips_zero;
+            out << ",\"parallel_fallbacks\":" << layer.parallel_fallbacks;
+
+            if (layer.parallel_fallbacks > 0) {
+                bool first_reason = true;
+                out << ",\"parallel_fallback_reasons\":{";
+                write_fallback_reason(first_reason, "incomplete", layer.parallel_fallback_incomplete);
+                write_fallback_reason(first_reason, "count_not_prefix", layer.parallel_fallback_count_not_prefix);
+                write_fallback_reason(first_reason, "bad_split_order", layer.parallel_fallback_bad_split_order);
+                write_fallback_reason(first_reason, "same_backend", layer.parallel_fallback_same_backend);
+                write_fallback_reason(first_reason, "hot_spans_backends", layer.parallel_fallback_hot_spans_backends);
+                write_fallback_reason(first_reason, "cold_spans_backends", layer.parallel_fallback_cold_spans_backends);
+                write_fallback_reason(first_reason, "hot_not_cuda", layer.parallel_fallback_hot_not_cuda);
+                write_fallback_reason(first_reason, "cold_not_cpu", layer.parallel_fallback_cold_not_cpu);
+                write_fallback_reason(first_reason, "count_readback", layer.parallel_fallback_count_readback);
+                write_fallback_reason(first_reason, "threshold", layer.parallel_fallback_threshold);
+                write_fallback_reason(first_reason, "zero_output", layer.parallel_fallback_zero_output);
+                write_fallback_reason(first_reason, "other", layer.parallel_fallback_other);
+                out << "}";
+            }
         }
 
-        out << "\"experts\":";
+        out << ",\"experts\":";
         write_expert_counts(layer.experts);
         out << ",\"hot_experts\":";
         write_expert_counts(layer.hot_experts);

@@ -951,10 +951,6 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             ctx_arg.params.no_perf = false;
             ctx_arg.params.sampling.no_perf = false;
         }
-        if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f) {
-            ctx_arg.params.no_perf = false;
-            ctx_arg.params.sampling.no_perf = false;
-        }
         params.lr.init();
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
@@ -2395,10 +2391,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("--moe-hot-cache-update-rate must be between 0.0 and 1.0");
             }
             params.moe_hot_cache_update_rate = value;
-            if (value > 0.0f) {
-                params.no_perf = false;
-                params.sampling.no_perf = false;
-            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_HOT_CACHE_UPDATE_RATE"));
     add_opt(common_arg(

@@ -1,4 +1,5 @@
 #include "llama-moe-hot-cache.h"
+#include "llama-moe-hot-cache-perf.h"
 #include "ggml-backend-moe-hot-cache.h"
 #include "models/models.h"
 
@@ -144,18 +145,6 @@ static bool llama_qwen35moe_hot_cache_cold_first_row_input() {
         const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_COLD_FIRST_ROW_INPUT");
         return env == nullptr || env[0] == '\0' ||
                (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_perf_expert_counts() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS");
-        return env != nullptr && env[0] != '\0' &&
-               std::strcmp(env, "0") != 0 &&
-               std::strcmp(env, "off") != 0 &&
-               std::strcmp(env, "false") != 0;
     }();
 
     return enabled;
@@ -649,7 +638,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         cache.n_hot != cache.n_expert && decode_direct_merge && llama_qwen35moe_hot_cache_shared_input_row();
     const bool cold_first_row_input =
         cold_shared_input_row && llama_qwen35moe_hot_cache_cold_first_row_input();
-    const bool perf_expert_counts = llama_qwen35moe_hot_cache_perf_expert_counts();
+    const bool perf_expert_counts = llama_moe_layer_perf_needs_expert_counts(cparams.no_perf);
     const bool repeat_hot_input =
         decode_direct_merge && llama_qwen35moe_hot_cache_decode_repeat_hot_input();
 

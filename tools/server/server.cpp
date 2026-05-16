@@ -8,6 +8,7 @@
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
+#include "src/llama-moe-hot-cache-perf.h"
 #include "llama.h"
 #include "log.h"
 
@@ -24,20 +25,6 @@
 
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
-
-static void set_env_var(const char * name, const char * value) {
-#if defined(_WIN32)
-    _putenv_s(name, value);
-#else
-    setenv(name, value, 1);
-#endif
-}
-
-static void set_env_var_if_unset(const char * name, const char * value) {
-    if (std::getenv(name) == nullptr) {
-        set_env_var(name, value);
-    }
-}
 
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
@@ -98,13 +85,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (!params.moe_layer_perf_out.empty() || params.moe_hot_cache_update_rate > 0.0f) {
-        set_env_var("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS", "1");
-        params.no_perf = false;
-        params.sampling.no_perf = false;
-    } else if (!params.no_perf) {
-        set_env_var_if_unset("LLAMA_MOE_LAYER_PERF_EXPERT_COUNTS", "1");
-    }
+    llama_moe_layer_perf_set_initial_mode(params.no_perf);
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -164,6 +145,7 @@ int main(int argc, char ** argv) {
         // note: routes.get_health stays the same
         routes.get_metrics                 = models_routes->proxy_get;
         routes.get_moe_layer_perf          = models_routes->get_moe_layer_perf;
+        routes.post_moe_layer_perf         = models_routes->post_moe_layer_perf;
         routes.post_props                  = models_routes->proxy_post;
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
@@ -196,6 +178,7 @@ int main(int argc, char ** argv) {
     ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
     ctx_http.get ("/moe-layer-perf",           ex_wrapper(routes.get_moe_layer_perf));
+    ctx_http.post("/moe-layer-perf",           ex_wrapper(routes.post_moe_layer_perf));
     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
     ctx_http.post("/props",                    ex_wrapper(routes.post_props));
     ctx_http.get ("/models",                   ex_wrapper(routes.get_models)); // public endpoint (no API key check)
