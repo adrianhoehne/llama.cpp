@@ -24,6 +24,7 @@
 #include <fstream>
 #include <memory>
 #include <filesystem>
+#include <mutex>
 #include <utility>
 
 // fix problem with std::min and std::max
@@ -610,6 +611,7 @@ struct server_metrics {
 
 struct server_context_impl {
     friend struct server_context;
+    friend struct server_routes;
 
 public:
     // only use these pointers outside of this class:
@@ -645,6 +647,8 @@ private:
     common_params params_base;
 
     bool moe_hot_cache_update_pending = false;
+    mutable std::mutex moe_layer_perf_snapshot_mutex;
+    mutable std::string last_moe_layer_perf_json;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
@@ -3266,15 +3270,44 @@ private:
         return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
     }
 
+    void remember_moe_layer_perf_json(const std::string & perf_json) const {
+        std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+        last_moe_layer_perf_json = perf_json;
+    }
+
+    bool has_remembered_moe_layer_perf_json() const {
+        std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+        return !last_moe_layer_perf_json.empty();
+    }
+
+    std::string get_moe_layer_perf_json() const {
+        if (llama_moe_layer_perf_has_data()) {
+            const std::string perf_json = llama_moe_layer_perf_json(nullptr);
+            remember_moe_layer_perf_json(perf_json);
+            return perf_json;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+            if (!last_moe_layer_perf_json.empty()) {
+                return last_moe_layer_perf_json;
+            }
+        }
+
+        return llama_moe_layer_perf_json(nullptr);
+    }
+
     void write_moe_layer_perf_file() const {
         if (params_base.moe_layer_perf_out.empty()) {
             return;
         }
 
-        if (!llama_moe_layer_perf_has_data()) {
+        if (!llama_moe_layer_perf_has_data() && !has_remembered_moe_layer_perf_json()) {
             SRV_DBG("skipping MoE layer perf output file '%s': no MoE perf data collected\n", params_base.moe_layer_perf_out.c_str());
             return;
         }
+
+        const std::string perf_json = get_moe_layer_perf_json();
 
         std::ofstream file(params_base.moe_layer_perf_out, std::ios::binary | std::ios::trunc);
         if (!file) {
@@ -3282,7 +3315,7 @@ private:
             return;
         }
 
-        file << llama_moe_layer_perf_json(nullptr) << '\n';
+        file << perf_json << '\n';
         if (!file) {
             SRV_WRN("failed to write MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
         }
@@ -3299,7 +3332,7 @@ private:
             return;
         }
 
-        const std::string perf_json = llama_moe_layer_perf_json(nullptr);
+        const std::string perf_json = get_moe_layer_perf_json();
         const auto stats = llama_moe_hot_cache_update_from_perf_json(
                 *model_tgt,
                 perf_json,
@@ -3689,7 +3722,7 @@ void server_routes::init_routes() {
         auto res = std::make_unique<server_http_res>();
 
         res->status = 200;
-        res->data = llama_moe_layer_perf_json(nullptr);
+        res->data = ctx_server.get_moe_layer_perf_json();
 
         return res;
     };
