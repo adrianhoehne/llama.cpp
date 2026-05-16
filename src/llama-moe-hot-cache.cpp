@@ -22,10 +22,6 @@ namespace {
 using json = nlohmann::ordered_json;
 
 static constexpr size_t LLAMA_MOE_HOT_CACHE_MIB = 1024*1024;
-static constexpr double LLAMA_MOE_HOT_CACHE_LAYER_WEIGHT_DAMPING = 0.75;
-static constexpr double LLAMA_MOE_HOT_CACHE_LAYER_WEIGHT_MIN = 0.80;
-static constexpr double LLAMA_MOE_HOT_CACHE_LAYER_WEIGHT_MAX = 1.25;
-static constexpr double LLAMA_MOE_HOT_CACHE_HOT_STICKY_BONUS = 0.05;
 
 static bool llama_moe_hot_cache_hot_dummy_padding() {
     static const bool enabled = []() {
@@ -36,19 +32,6 @@ static bool llama_moe_hot_cache_hot_dummy_padding() {
 
     return enabled;
 }
-
-struct expert_counts {
-    uint64_t hot = 0;
-    uint64_t cold = 0;
-    uint64_t raw = 0;
-};
-
-struct layer_observation {
-    uint32_t layer = 0;
-    std::unordered_map<uint32_t, expert_counts> experts;
-    bool has_branch_counts = false;
-    double wait_per_cold_slot = 0.0;
-};
 
 static uint64_t key(uint32_t layer, uint32_t expert) {
     return (uint64_t(layer) << 32) | uint64_t(expert);
@@ -70,16 +53,6 @@ static void add_saturating(uint64_t & dst, uint64_t value) {
     } else {
         dst += value;
     }
-}
-
-static uint64_t score_to_u64(long double score) {
-    if (score <= 0.0L) {
-        return 0;
-    }
-    if (score >= (long double) std::numeric_limits<uint64_t>::max()) {
-        return std::numeric_limits<uint64_t>::max();
-    }
-    return std::max<uint64_t>(1, (uint64_t) (score + 0.5L));
 }
 
 static ggml_backend_dev_t select_gpu_dev(const llama_model * model = nullptr) {
@@ -177,6 +150,61 @@ static std::vector<uint32_t> current_hot_experts(const llama_moe_hot_cache_layer
     }
 
     result.erase(std::remove(result.begin(), result.end(), std::numeric_limits<uint32_t>::max()), result.end());
+    return result;
+}
+
+static llama_moe_hot_cache_expert_observation & find_or_add_expert_observation(
+        llama_moe_hot_cache_layer_observation & layer,
+        uint32_t expert) {
+    for (auto & existing : layer.experts) {
+        if (existing.expert == expert) {
+            return existing;
+        }
+    }
+
+    layer.experts.push_back({ expert, 0, 0, 0 });
+    return layer.experts.back();
+}
+
+static uint64_t observation_total_hits(
+        const llama_moe_hot_cache_layer_observation & layer,
+        const llama_moe_hot_cache_expert_observation & expert) {
+    uint64_t total = expert.raw;
+    if (layer.has_branch_counts) {
+        total = expert.hot;
+        add_saturating(total, expert.cold);
+    }
+
+    return total;
+}
+
+static void sort_hot_cache_entries(std::vector<llama_moe_hot_cache_entry> & entries) {
+    std::sort(entries.begin(), entries.end(), [](const auto & a, const auto & b) {
+        if (a.hit_count != b.hit_count) {
+            return a.hit_count > b.hit_count;
+        }
+        if (a.layer != b.layer) {
+            return a.layer < b.layer;
+        }
+        return a.expert < b.expert;
+    });
+}
+
+static std::vector<llama_moe_hot_cache_entry> score_observations_default(
+        const std::vector<llama_moe_hot_cache_layer_observation> & observations) {
+    std::vector<llama_moe_hot_cache_entry> result;
+    for (const auto & obs : observations) {
+        for (const auto & expert : obs.experts) {
+            const uint64_t total_hits = observation_total_hits(obs, expert);
+            if (total_hits == 0) {
+                continue;
+            }
+
+            result.push_back({ obs.layer, expert.expert, total_hits });
+        }
+    }
+
+    sort_hot_cache_entries(result);
     return result;
 }
 
@@ -303,7 +331,7 @@ static size_t auto_hot_cache_budget_bytes(
 
 } // namespace
 
-std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const std::string & json_str) {
+std::vector<llama_moe_hot_cache_layer_observation> llama_moe_hot_cache_parse_perf_json_observations(const std::string & json_str) {
     json root;
     try {
         root = json::parse(json_str);
@@ -325,16 +353,16 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
         throw std::runtime_error("--moe-hot-cache JSON must contain a layers array");
     }
 
-    std::vector<layer_observation> observations;
+    std::vector<llama_moe_hot_cache_layer_observation> observations;
     for (const auto & layer : root["layers"]) {
         if (!layer.is_object() || !layer.contains("layer") || !layer["layer"].is_number_unsigned()) {
             throw std::runtime_error("--moe-hot-cache layer entries must contain an unsigned layer id");
         }
 
-        layer_observation obs;
+        llama_moe_hot_cache_layer_observation obs;
         obs.layer = layer["layer"].get<uint32_t>();
 
-        const auto add_expert_counts = [&](const char * field_name, uint64_t expert_counts::* member) {
+        const auto add_expert_counts = [&](const char * field_name, uint64_t llama_moe_hot_cache_expert_observation::* member) {
             const auto it = layer.find(field_name);
             if (it == layer.end()) {
                 return false;
@@ -356,7 +384,8 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
                 }
 
                 const uint32_t expert_id = expert[0].get<uint32_t>();
-                add_saturating(obs.experts[expert_id].*member, hit_count);
+                auto & counts = find_or_add_expert_observation(obs, expert_id);
+                add_saturating(counts.*member, hit_count);
                 added_any = true;
             }
 
@@ -364,96 +393,54 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
         };
 
         obs.has_branch_counts =
-            add_expert_counts("hot_experts",  &expert_counts::hot) |
-            add_expert_counts("cold_experts", &expert_counts::cold);
+            add_expert_counts("hot_experts",  &llama_moe_hot_cache_expert_observation::hot) |
+            add_expert_counts("cold_experts", &llama_moe_hot_cache_expert_observation::cold);
 
-        if (!obs.has_branch_counts && !add_expert_counts("experts", &expert_counts::raw)) {
+        if (!obs.has_branch_counts && !add_expert_counts("experts", &llama_moe_hot_cache_expert_observation::raw)) {
             continue;
         }
 
-        double cold_slots_per_call = layer.value("cold_slots_per_call", 0.0);
-        if (cold_slots_per_call <= 0.0) {
+        obs.cold_slots_per_call = layer.value("cold_slots_per_call", 0.0);
+        if (obs.cold_slots_per_call <= 0.0) {
             const uint64_t calls = layer.value("calls", uint64_t(0));
             const uint64_t cold_slots_total = layer.value("cold_slots_total", uint64_t(0));
             if (calls > 0 && cold_slots_total > 0) {
-                cold_slots_per_call = (double) cold_slots_total / (double) calls;
+                obs.cold_slots_per_call = (double) cold_slots_total / (double) calls;
             }
         }
 
-        if (cold_slots_per_call > 0.0) {
-            double wait_per_call = layer.value("parallel_join_wait_time_per_call_us", 0.0);
-            if (wait_per_call <= 0.0) {
-                const double cold_lane_per_call = layer.value("parallel_cold_lane_wall_time_per_call_us", 0.0);
-                const double hot_lane_per_call  = layer.value("parallel_hot_lane_wall_time_per_call_us", 0.0);
-                wait_per_call = std::max(0.0, cold_lane_per_call - hot_lane_per_call);
-            }
+        obs.parallel_join_wait_time_per_call_us = layer.value("parallel_join_wait_time_per_call_us", 0.0);
+        obs.parallel_cold_lane_wall_time_per_call_us = layer.value("parallel_cold_lane_wall_time_per_call_us", 0.0);
+        obs.parallel_hot_lane_wall_time_per_call_us = layer.value("parallel_hot_lane_wall_time_per_call_us", 0.0);
 
-            if (wait_per_call > 0.0) {
-                obs.wait_per_cold_slot = wait_per_call / cold_slots_per_call;
-            }
+        double wait_per_call = obs.parallel_join_wait_time_per_call_us;
+        if (wait_per_call <= 0.0) {
+            wait_per_call = std::max(0.0, obs.parallel_cold_lane_wall_time_per_call_us - obs.parallel_hot_lane_wall_time_per_call_us);
         }
 
-        observations.push_back(std::move(obs));
-    }
+        if (wait_per_call > 0.0 && obs.cold_slots_per_call > 0.0) {
+            obs.wait_per_cold_slot_us = wait_per_call / obs.cold_slots_per_call;
+        }
 
-    double wait_per_cold_slot_sum = 0.0;
-    int wait_per_cold_slot_count = 0;
-    for (const auto & obs : observations) {
-        if (obs.wait_per_cold_slot > 0.0) {
-            wait_per_cold_slot_sum += obs.wait_per_cold_slot;
-            ++wait_per_cold_slot_count;
+        std::sort(obs.experts.begin(), obs.experts.end(), [](const auto & a, const auto & b) {
+            return a.expert < b.expert;
+        });
+
+        if (!obs.experts.empty()) {
+            observations.push_back(std::move(obs));
         }
     }
 
-    const double avg_wait_per_cold_slot = wait_per_cold_slot_count > 0
-        ? wait_per_cold_slot_sum / double(wait_per_cold_slot_count)
-        : 0.0;
-
-    std::vector<llama_moe_hot_cache_entry> result;
-    for (const auto & obs : observations) {
-        double layer_weight = 1.0;
-        if (avg_wait_per_cold_slot > 0.0 && obs.wait_per_cold_slot > 0.0) {
-            const double relative_wait = obs.wait_per_cold_slot / avg_wait_per_cold_slot;
-            layer_weight = 1.0 + LLAMA_MOE_HOT_CACHE_LAYER_WEIGHT_DAMPING*(relative_wait - 1.0);
-            layer_weight = std::clamp(layer_weight, LLAMA_MOE_HOT_CACHE_LAYER_WEIGHT_MIN, LLAMA_MOE_HOT_CACHE_LAYER_WEIGHT_MAX);
-        }
-
-        for (const auto & [expert, counts] : obs.experts) {
-            uint64_t total_hits = counts.raw;
-            if (obs.has_branch_counts) {
-                total_hits = counts.hot;
-                add_saturating(total_hits, counts.cold);
-            }
-            if (total_hits == 0) {
-                continue;
-            }
-
-            long double weighted = (long double) total_hits * (long double) layer_weight;
-            if (obs.has_branch_counts && counts.hot > 0) {
-                // Hot entries were useful under the current cache plan; keep a small
-                // bias so layer reweighting does not churn the cache on every run.
-                weighted += (long double) counts.hot * (long double) LLAMA_MOE_HOT_CACHE_HOT_STICKY_BONUS;
-            }
-
-            const uint64_t score = score_to_u64(weighted);
-            if (score == 0) {
-                continue;
-            }
-            result.push_back({ obs.layer, expert, score });
-        }
-    }
-
-    std::sort(result.begin(), result.end(), [](const auto & a, const auto & b) {
-        if (a.hit_count != b.hit_count) {
-            return a.hit_count > b.hit_count;
-        }
-        if (a.layer != b.layer) {
-            return a.layer < b.layer;
-        }
-        return a.expert < b.expert;
+    std::sort(observations.begin(), observations.end(), [](const auto & a, const auto & b) {
+        return a.layer < b.layer;
     });
 
-    return result;
+    return observations;
+}
+
+std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const std::string & json_str) {
+    const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
+    return score_observations_default(observations);
 }
 
 llama_moe_hot_cache_plan llama_moe_hot_cache_select(
@@ -534,7 +521,10 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
     }
 
     const std::string json_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    const auto observed = llama_moe_hot_cache_parse_perf_json(json_str);
+    const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
+    const auto observed = model.arch == LLM_ARCH_QWEN35MOE
+        ? llama_moe_hot_cache_qwen35moe_weighting::score_observations(observations)
+        : score_observations_default(observations);
     const auto sizes = collect_expert_sizes(model);
     ggml_backend_dev_t cache_dev = select_gpu_dev(&model);
     const size_t budget_bytes = params.moe_hot_cache_max_mib < 0
@@ -771,31 +761,22 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
 
     std::vector<layer_counts> counts(model.hparams.n_layer);
 
-    const auto add_counts = [](const json & layer, const char * field, std::unordered_map<uint32_t, uint64_t> & dst) {
-        const auto it = layer.find(field);
-        if (it == layer.end() || !it->is_array()) {
-            return false;
+    std::vector<llama_moe_hot_cache_entry> scored_observed;
+    try {
+        const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
+        scored_observed = model.arch == LLM_ARCH_QWEN35MOE
+            ? llama_moe_hot_cache_qwen35moe_weighting::score_observations(observations)
+            : score_observations_default(observations);
+    } catch (const std::exception & e) {
+        LLAMA_LOG_WARN("%s: failed to score MoE layer perf JSON: %s\n", __func__, e.what());
+        return stats;
+    }
+
+    for (const auto & entry : scored_observed) {
+        if (entry.layer < counts.size() && entry.hit_count > 0) {
+            add_saturating(counts[entry.layer].experts[entry.expert], entry.hit_count);
         }
-
-        bool added = false;
-        for (const auto & entry : *it) {
-            if (!entry.is_array() || entry.size() != 2 ||
-                !entry[0].is_number_unsigned() || !entry[1].is_number_unsigned()) {
-                continue;
-            }
-
-            const uint64_t hits = entry[1].get<uint64_t>();
-            if (hits == 0) {
-                continue;
-            }
-
-            const uint32_t expert = entry[0].get<uint32_t>();
-            add_saturating(dst[expert], hits);
-            added = true;
-        }
-
-        return added;
-    };
+    }
 
     for (const auto & layer : root["layers"]) {
         if (!layer.is_object() || !layer.contains("layer") || !layer["layer"].is_number_unsigned()) {
@@ -805,14 +786,6 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
         const uint32_t il = layer["layer"].get<uint32_t>();
         if (il >= counts.size()) {
             continue;
-        }
-
-        const bool has_branch_counts =
-            add_counts(layer, "hot_experts",  counts[il].experts) |
-            add_counts(layer, "cold_experts", counts[il].experts);
-
-        if (!has_branch_counts) {
-            add_counts(layer, "experts", counts[il].experts);
         }
 
         const uint64_t hot_slots = layer.value("hot_slots_total", uint64_t(0));

@@ -152,6 +152,13 @@ LLAMA_ARG_MOE_HOT_CACHE_AUTO_RESERVE_MIB=<N>
 
 Nur relevant bei `--moe-hot-cache-max-mib -1`. Der Wert gibt an, wie viele MiB nach KV-Cache und vor dem Hot-Cache frei bleiben sollen. Default ist `1024`. Hoehere Werte sind konservativer und vermeiden CUDA-OOM beim Warmup oder bei Compute-Transienten; niedrigere Werte machen den Hot-Cache groesser.
 
+```text
+--moe-hot-cache-qwen-layer-curve <N>
+LLAMA_ARG_MOE_HOT_CACHE_QWEN_LAYER_CURVE=<N>
+```
+
+Nur fuer Qwen35Moe. Steuert die Layer-Druck-Gewichtung bei der Hot-Cache-Auswahl. `0.0` nutzt flache Expert-Counts ohne Layer-Wartezeit. `0.5` ist der gedaempfte Default. `1.0` gewichtet wartende Layer aggressiv. Intern liest die Qwen-spezifische Gewichtung `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; das CLI-/INI-Argument setzt diesen Wert.
+
 ### Parallelisierung
 
 ```text
@@ -292,7 +299,7 @@ Zustaendig fuer:
 - Parsen der JSON-Datei,
 - Erkennen unterstuetzter Schemas,
 - Sammeln der Expertengroessen,
-- Scoring der Experten,
+- neutrales Scoring fuer nicht spezialisierte Modelle,
 - Auswahl innerhalb des Speicherbudgets,
 - Allokation der Hot-Cache-Tensoren,
 - Kopieren der ausgewaehlten Experten,
@@ -305,7 +312,19 @@ llama.cpp.moe_layer_perf.v1
 llama.cpp.moe_layer_opt_perf.v1
 ```
 
-Die Auswahl gewichtet nicht nur rohe Expert-Counts. Spaetere Optimierungen haben Layer-Wartezeiten und Sticky-Boni fuer bereits ausgewaehlte hot Experten beruecksichtigt, damit das Cache-Set stabiler und praxisnaeher wird.
+Die generische Auswahl bleibt absichtlich schlicht. Sie nutzt die beobachteten Expert-Counts ohne Qwen-spezifische Layer-Heuristik.
+
+### `src/models/qwen35moe-hot-cache.cpp`
+
+Enthaelt die Qwen35Moe-spezifische Gewichtung fuer die Hot-Cache-Auswahl.
+
+Die Klasse `llama_moe_hot_cache_qwen35moe_weighting` bewertet die neutral geparsten Layer-/Expert-Beobachtungen neu. Fuer Qwen35Moe zaehlt dabei nicht nur, wie oft ein Experte vorkommt, sondern auch wie stark der Layer die parallele Region aufhaelt. Die Gewichtung nutzt bevorzugt die absolute Join-Wartezeit pro Layer und faellt sonst auf Cold-/Hot-Lane-Differenz, Cold-Slots oder Wait-per-Cold-Slot zurueck.
+
+Die Staerke der Kurve ist ueber `--moe-hot-cache-qwen-layer-curve` steuerbar. Der Default `0.5` ist bewusst gedaempft: wartende Layer werden bevorzugt, andere Layer sollen aber nicht zu stark aus dem Cache gedrueckt werden.
+
+Dieselbe Gewichtung wird auch beim dynamischen Update verwendet. Dort kann sie aber nur Austausch-Kandidaten zwischen Layern priorisieren. Die Anzahl der Hot-Cache-Slots pro Layer bleibt unveraendert, weil eine echte Umverteilung Tensor-Neuallokation oder einen zweiten Cache benoetigen wuerde.
+
+Bereits hot gecachte Experten bekommen einen kleinen Sticky-Bonus. Dadurch bleibt das Cache-Set stabiler und wechselt nicht bei jedem kleinen Ausreisser.
 
 ### `src/llama-moe-hot-cache-graph.cpp`
 
@@ -751,8 +770,14 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  --moe-hot-cache-qwen-layer-curve 0.5 \
   <normale modell- und server-argumente>
 ```
+
+`--moe-hot-cache-update-rate` ist optional. `0.0` deaktiviert das dynamische Update; `0.10` tauscht nach abgeschlossenen Server-Laeufen bis zu 10 Prozent der aktuellen Hot-Cache-Eintraege aus.
+
+`--moe-hot-cache-qwen-layer-curve` ist nur fuer Qwen35Moe relevant. Die Kurve wirkt sowohl beim initialen Einlesen der JSON als auch beim dynamischen Update. `0.0` bedeutet flache Expert-Counts, `0.5` ist der gedaempfte Default, `1.0` gewichtet wartende Layer aggressiv.
 
 Fuer finale Durchsatzmessungen:
 
@@ -763,6 +788,8 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  --moe-hot-cache-qwen-layer-curve 0.5 \
   <normale modell- und server-argumente>
 ```
 
@@ -1124,13 +1151,13 @@ Mehr Experten pro Token ist deshalb kein automatischer Speed-Gewinn. Es kann die
 
 ## Bekannte Grenzen
 
-### Statischer Cache
+### Dynamischer Cache
 
-Der Hot-Cache ist aktuell statisch. Er wird beim Start aus einer JSON-Datei gebaut.
+Der Hot-Cache wird beim Start aus einer JSON-Datei gebaut. Mit `--moe-hot-cache-update-rate` kann er nach abgeschlossenen Server-Laeufen teilweise aktualisiert werden.
 
-Ein dynamisches Update nach jedem Inferenzlauf ist nicht implementiert.
+Das dynamische Update tauscht vorhandene Cache-Slots gegen besser passende Experten aus. Es veraendert nicht die Anzahl der Hot-Cache-Slots pro Layer.
 
-Ein dynamischer Cache waere moeglich, aber er waere deutlich komplexer:
+Eine echte dynamische Reallokation waere moeglich, aber deutlich komplexer:
 
 - neue Expertenauswahl waehrend Laufzeit,
 - sichere Tensor-Neuallokation oder doppelter Cache,

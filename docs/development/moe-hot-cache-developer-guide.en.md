@@ -152,6 +152,13 @@ LLAMA_ARG_MOE_HOT_CACHE_AUTO_RESERVE_MIB=<N>
 
 Only relevant with `--moe-hot-cache-max-mib -1`. The value controls how many MiB remain free after KV cache allocation and before the hot cache is allocated. The default is `1024`. Higher values are more conservative and avoid CUDA OOM during warmup or compute transients; lower values make the hot cache larger.
 
+```text
+--moe-hot-cache-qwen-layer-curve <N>
+LLAMA_ARG_MOE_HOT_CACHE_QWEN_LAYER_CURVE=<N>
+```
+
+Qwen35Moe only. Controls the layer-pressure weighting curve for hot-cache selection. `0.0` uses flat expert counts without layer wait time. `0.5` is the damped default. `1.0` weights waiting layers aggressively. Internally, the Qwen-specific weighting reads `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; the CLI/INI argument sets that value.
+
 ### Parallelization
 
 ```text
@@ -292,7 +299,7 @@ Responsible for:
 - parsing the JSON file,
 - recognizing supported schemas,
 - collecting expert sizes,
-- scoring experts,
+- neutral scoring for non-specialized models,
 - selecting experts within the memory budget,
 - allocating hot-cache tensors,
 - copying selected experts,
@@ -305,7 +312,19 @@ llama.cpp.moe_layer_perf.v1
 llama.cpp.moe_layer_opt_perf.v1
 ```
 
-The selection is not just "most frequently used experts". Later versions also account for layer wait time and a sticky bonus for already selected hot experts. That made the cache set more stable and more representative of actual bottlenecks.
+The generic selection intentionally stays simple. It uses observed expert counts without Qwen-specific layer heuristics.
+
+### `src/models/qwen35moe-hot-cache.cpp`
+
+Contains the Qwen35Moe-specific weighting for hot-cache selection.
+
+The `llama_moe_hot_cache_qwen35moe_weighting` class rescores the neutral layer/expert observations. For Qwen35Moe, the score is not only based on how often an expert appears, but also on how strongly the layer stalls the parallel region. The weighting prefers absolute join wait per layer and falls back to cold/hot lane delta, cold slots, or wait per cold slot.
+
+The curve strength is controlled by `--moe-hot-cache-qwen-layer-curve`. The default `0.5` is intentionally damped: waiting layers are favored, but other layers should not be pushed out of the cache too aggressively.
+
+The same weighting is also used by dynamic updates. During updates, it can only prioritize exchange candidates between layers. The number of hot-cache slots per layer remains unchanged, because real redistribution would require tensor reallocation or a second cache.
+
+Experts that are already hot get a small sticky bonus. This keeps the cache set more stable and avoids churn from small one-off changes.
 
 ### `src/llama-moe-hot-cache-graph.cpp`
 
@@ -749,8 +768,14 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  --moe-hot-cache-qwen-layer-curve 0.5 \
   <normal model and server arguments>
 ```
+
+`--moe-hot-cache-update-rate` is optional. `0.0` disables dynamic updates; `0.10` replaces up to 10 percent of the current hot-cache entries after completed server runs.
+
+`--moe-hot-cache-qwen-layer-curve` only affects Qwen35Moe. The curve is used both during initial JSON loading and dynamic updates. `0.0` means flat expert counts, `0.5` is the damped default, and `1.0` weights waiting layers aggressively.
 
 For final throughput measurements:
 
@@ -761,6 +786,8 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  --moe-hot-cache-qwen-layer-curve 0.5 \
   <normal model and server arguments>
 ```
 
@@ -1120,13 +1147,13 @@ More experts per token is not an automatic speed improvement. It may change mode
 
 ## Known Limits
 
-### Static Cache
+### Dynamic Cache
 
-The hot cache is currently static. It is built once at startup from a JSON file.
+The hot cache is built at startup from a JSON file. With `--moe-hot-cache-update-rate`, it can be partially updated after completed server runs.
 
-Dynamic updates after each inference run are not implemented.
+The dynamic update replaces existing cache slots with better matching experts. It does not change the number of hot-cache slots per layer.
 
-A dynamic cache is possible but significantly more complex:
+True dynamic reallocation is possible but significantly more complex:
 
 - new expert selection during runtime,
 - safe tensor reallocation or double-buffered cache,

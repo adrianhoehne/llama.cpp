@@ -10,7 +10,7 @@ Large MoE models often do not fit fully into VRAM. In that case, part of the mod
 
 MoE models only use a subset of all experts for each token. If we know which experts are commonly used for a specific workload, we can keep those "hot" experts in a GPU cache and let the remaining "cold" expert work run on the CPU. The hot and cold paths can then run in parallel.
 
-The difficult part is knowing which experts are hot. This fork adds a `/moe-layer-perf` endpoint that can collect layer and expert usage data. That JSON can then be used on the next run to prefill the static expert cache.
+The difficult part is knowing which experts are hot. This fork adds a `/moe-layer-perf` endpoint that can collect layer and expert usage data. That JSON can then be used on the next run to prefill the expert cache. The cache can also update a configurable fraction of its entries after completed server runs.
 
 Detailed developer documentation:
 
@@ -55,10 +55,16 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache moe-hot-cache.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  --moe-hot-cache-qwen-layer-curve 0.5 \
   <your normal model, device, context and server arguments>
 ```
 
 `--moe-hot-cache-auto-reserve-mib` is only used with `--moe-hot-cache-max-mib -1`. It keeps that many MiB free for compute buffers, warmup, and CUDA transient allocations. Increase it if startup or warmup hits CUDA OOM; decrease it if the run is stable and VRAM is still unused.
+
+`--moe-hot-cache-update-rate` controls dynamic replacement after completed server runs. `0.0` disables it; `0.10` replaces up to 10 percent of current hot-cache entries.
+
+`--moe-hot-cache-qwen-layer-curve` is Qwen3.5/Qwen3.6 MoE specific. `0.0` uses flat expert counts, `0.5` is the damped default, and `1.0` aggressively favors layers that show more join/wait time in the performance JSON. The same curve is used for the initial cache selection and for dynamic update candidate ranking.
 
 ### 4. Measure performance
 
@@ -73,6 +79,8 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache moe-hot-cache.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  --moe-hot-cache-qwen-layer-curve 0.5 \
   <your normal model, device, context and server arguments>
 ```
 
@@ -84,7 +92,7 @@ Optional: enable periodic per-slot TG progress logging:
 
 ### 5. Iterate
 
-If the workload changes, collect a new `/moe-layer-perf` JSON and restart with the new cache profile. A hot cache built from coding prompts can be worse for simple chat prompts, and the other way around.
+For small workload shifts, dynamic updates can adapt the cache entries within the existing per-layer slot layout. For larger workload changes, collect a new `/moe-layer-perf` JSON and restart with the new cache profile. A hot cache built from coding prompts can be worse for simple chat prompts, and the other way around.
 
 ## Next steps
 

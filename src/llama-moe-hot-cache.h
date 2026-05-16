@@ -17,6 +17,24 @@ struct llama_moe_hot_cache_entry {
     uint64_t hit_count = 0;
 };
 
+struct llama_moe_hot_cache_expert_observation {
+    uint32_t expert = 0;
+    uint64_t hot = 0;
+    uint64_t cold = 0;
+    uint64_t raw = 0;
+};
+
+struct llama_moe_hot_cache_layer_observation {
+    uint32_t layer = 0;
+    std::vector<llama_moe_hot_cache_expert_observation> experts;
+    bool has_branch_counts = false;
+    double cold_slots_per_call = 0.0;
+    double parallel_join_wait_time_per_call_us = 0.0;
+    double parallel_cold_lane_wall_time_per_call_us = 0.0;
+    double parallel_hot_lane_wall_time_per_call_us = 0.0;
+    double wait_per_cold_slot_us = 0.0;
+};
+
 struct llama_moe_hot_cache_expert_size {
     uint32_t layer = 0;
     uint32_t expert = 0;
@@ -96,6 +114,14 @@ struct llama_moe_hot_cache {
         return false;
     }
 };
+
+struct llama_moe_hot_cache_qwen35moe_weighting {
+    static std::vector<llama_moe_hot_cache_entry> score_observations(
+            const std::vector<llama_moe_hot_cache_layer_observation> & observations);
+};
+
+std::vector<llama_moe_hot_cache_layer_observation> llama_moe_hot_cache_parse_perf_json_observations(
+        const std::string & json_str);
 
 std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const std::string & json_str);
 
