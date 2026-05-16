@@ -538,9 +538,18 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
 
     const auto plan = llama_moe_hot_cache_select(observed, sizes, budget_bytes);
 
-    LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache (%zu/%zu MiB)\n",
-            __func__, plan.selected.size(), plan.observed.size(),
-            plan.used_bytes/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
+    const uint32_t n_expert_per_layer = model.hparams.n_expert;
+    if (n_expert_per_layer > 0) {
+        const double cpu_moe_layer_equiv = (double) plan.selected.size() / (double) n_expert_per_layer;
+        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache (n-cpu-moe equivalent = %.1f layers @ %u experts/layer, %zu/%zu MiB)\n",
+                __func__, plan.selected.size(), plan.observed.size(),
+                cpu_moe_layer_equiv, n_expert_per_layer,
+                plan.used_bytes/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
+    } else {
+        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache (%zu/%zu MiB)\n",
+                __func__, plan.selected.size(), plan.observed.size(),
+                plan.used_bytes/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
+    }
 
     if (plan.selected.empty()) {
         LLAMA_LOG_WARN("%s: no experts selected; disabling hot-cache\n", __func__);
