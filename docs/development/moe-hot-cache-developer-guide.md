@@ -171,7 +171,7 @@ Nur fuer Gemma4. Steuert die gleiche Layer-Druck-Gewichtung fuer initiale Hot-Ca
 LLAMA_MOE_HOT_CACHE_PARALLEL=1
 ```
 
-Aktiviert Hot/Cold-Parallelisierung im Auto-Modus.
+Aktiviert Hot/Cold-Parallelisierung im Auto-Modus. Das ist auch der Default, wenn `LLAMA_MOE_HOT_CACHE_PARALLEL` nicht gesetzt ist.
 
 ```text
 LLAMA_MOE_HOT_CACHE_PARALLEL=force
@@ -900,7 +900,6 @@ Der empfohlene First-Run-Workflow ist `--moe-layer-perf-out <datei.json>`. Fuer 
 Diese JSON kann danach als Input fuer den Hot-Cache verwendet werden:
 
 ```bash
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
@@ -925,7 +924,6 @@ Gemma4 nutzt ausserdem standardmaessig Branch-Reduce-Merge. Zum Gegencheck kann 
 Fuer finale Durchsatzmessungen:
 
 ```bash
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --no-perf \
   --moe-hot-cache performance.json \
@@ -1233,7 +1231,6 @@ Wichtig: Kein `--moe-hot-cache-max-mib` setzen.
 ### Server mit Hot-Cache und Perf
 
 ```bash
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --perf \
   --moe-hot-cache performance.json \
@@ -1245,7 +1242,6 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ### Server mit Hot-Cache ohne Perf
 
 ```bash
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --no-perf \
   --moe-hot-cache performance.json \
@@ -1369,7 +1365,7 @@ Moegliche Ursachen:
 
 Debug-Reihenfolge:
 
-1. ohne `LLAMA_MOE_HOT_CACHE_PARALLEL` testen,
+1. mit `LLAMA_MOE_HOT_CACHE_PARALLEL=0` testen,
 2. Auto-Modus statt `force`,
 3. `LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS` erhoehen,
 4. `--no-perf` testen,

@@ -37,7 +37,10 @@ class llama_moe_hot_cache_graph_tweaks {
 public:
     static int parallel_mode() {
         const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL");
-        if (env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0) {
+        if (env == nullptr || env[0] == '\0') {
+            return 1;
+        }
+        if (std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0 || std::strcmp(env, "false") == 0) {
             return 0;
         }
         if (std::strcmp(env, "force") == 0) {

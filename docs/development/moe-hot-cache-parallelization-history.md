@@ -252,8 +252,9 @@ Der Parallelmodus wird gesteuert ueber:
 - `LLAMA_MOE_HOT_CACHE_PARALLEL=force`: erzwingen
 - `LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS`: Mindestanzahl Slots
 
-Wichtig: Im Code ist Parallel ohne Env aus. Das lokale `start-server` setzt es
-standardmaessig auf `1` und `LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS=0`.
+Wichtig: Im Code ist Parallel ohne Env inzwischen Auto. Das lokale `start-server`
+setzt weiterhin `LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS=0`, damit die
+Parallelregion auch bei kleinen Decode-Regionen versucht wird.
 
 ### Warum
 
@@ -584,7 +585,7 @@ gemessenen Perf-Daten beziehen sich auf diesen Top-K-Wert.
 Das lokale `start-server` setzt Defaults, damit nicht jedes Mal Env-Variablen
 manuell exportiert werden muessen:
 
-- `LLAMA_MOE_HOT_CACHE_PARALLEL=1`
+- Hot/Cold-Parallelisierung nutzt den Code-Default `auto`
 - `LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS=0`
 - `LLAMA_MOE_HOT_CACHE_JSON=/home/adrian/models/heatmap-data.json`
 - `LLAMA_MOE_HOT_CACHE_MAX_MIB=8000`

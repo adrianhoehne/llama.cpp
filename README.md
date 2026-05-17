@@ -59,8 +59,9 @@ When the server starts with `--no-perf`, the dropdown starts in `Off`. The same 
 
 Restart the server with the collected JSON and a memory budget. Use a positive value for a fixed budget, or use `-1` to auto-size the hot cache from remaining VRAM after the model and KV cache are allocated.
 
+Hot/cold parallelization runs in auto mode by default. Set `LLAMA_MOE_HOT_CACHE_PARALLEL=0` to disable it, or `LLAMA_MOE_HOT_CACHE_PARALLEL=force` for scheduler debugging.
+
 ```bash
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --moe-hot-cache moe-hot-cache.json \
   --moe-hot-cache-max-mib -1 \
@@ -100,7 +101,6 @@ Do not add all timing cards together. Some values are nested or overlapping meas
 For final throughput measurements, disable the performance counters. With `--no-perf`, the MoE perf mode starts as `Off`; dynamic cache replacement needs `Update` or `Full`, so leave it off only when you want to measure raw throughput without adaptation.
 
 ```bash
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --no-perf \
   --moe-hot-cache moe-hot-cache.json \
