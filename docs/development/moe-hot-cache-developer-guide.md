@@ -189,7 +189,7 @@ Deaktiviert die Parallelisierung.
 LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS=<N>
 ```
 
-Mindestanzahl Slots, ab der der Scheduler die Hot/Cold-Parallelregion startet. Default: `64`.
+Mindestanzahl Slots, ab der der Scheduler die Hot/Cold-Parallelregion startet. Default: `2`.
 
 Ziel: Fuer sehr kleine Arbeitspakete ist Thread-/Scheduler-Overhead teurer als parallele Ausfuehrung.
 

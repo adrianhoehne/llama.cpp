@@ -53,13 +53,13 @@ public:
         static const int64_t value = []() {
             const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS");
             if (env == nullptr || env[0] == '\0') {
-                return int64_t(64);
+                return int64_t(2);
             }
 
             char * end = nullptr;
             const long long parsed = std::strtoll(env, &end, 10);
             if (end == env || parsed < 0) {
-                return int64_t(64);
+                return int64_t(2);
             }
 
             return (int64_t) parsed;

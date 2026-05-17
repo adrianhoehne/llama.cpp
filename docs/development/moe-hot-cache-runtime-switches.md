@@ -26,7 +26,7 @@ Hinweise:
 |---|---|---|---|---|
 | `LLAMA_MOE_LAYER_PERF` | Kein direktes CLI-Argument. Laufzeitwechsel via `POST /moe-layer-perf` mit `{"mode":"full"}`, `{"mode":"update"}` oder `{"mode":"off"}`. `--no-perf` startet initial in `off`. | `full`, `update`, `off`; Aliase: `1`/`on`/`true` fuer `full`, `0`/`false` fuer `off` | `full`, ausser bei `--no-perf`: `off` | Steuert, welche MoE-Perf-Zaehler aktiv sind. `full` sammelt alle Timing- und Expertendaten, `update` nur die fuer dynamisches Update/Hitrate noetigen Daten, `off` schaltet den Pfad aus. |
 | `LLAMA_MOE_HOT_CACHE_PARALLEL` | Kein Argument | unset/leer/`1`/`on`/`true`/`auto` = Auto, `0`/`off`/`false` = aus, `force` = erzwingen | Auto | Aktiviert die Hot/Cold-Fork-Join-Region im Scheduler. Auto faellt bei unguenstigen Regionen seriell zurueck, `force` macht daraus einen Fehler und ist fuer Debugging gedacht. |
-| `LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS` | Kein Argument | Ganzzahl `>= 0` | `64` | Mindestanzahl Hot+Cold-Slots, ab der Auto-Parallelisierung gestartet wird. `0` bedeutet: Parallelregion immer versuchen. |
+| `LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS` | Kein Argument | Ganzzahl `>= 0` | `2` | Mindestanzahl Hot+Cold-Slots, ab der Auto-Parallelisierung gestartet wird. `0` bedeutet: Parallelregion immer versuchen. |
 | `LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE` | Kein Argument | Float `0.0` bis `1.0` | `0.5` | Gemma4-spezifische Layer-Druck-Gewichtung fuer initiale Auswahl und dynamisches Update. Entspricht konzeptionell der Qwen-Kurve, hat aber noch kein CLI-/INI-Argument. |
 | `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE` | Kein Argument | Boolean | on | Aktiviert den Branch-Reduce-Merge-Pfad. Effektiv aktuell fuer Gemma4: Hot- und Cold-Lane reduzieren ihre Slot-Ausgaben vor dem finalen Join. Qwen35Moe setzt diesen Profil-Schalter explizit aus. |
 | `LLAMA_MOE_HOT_CACHE_MERGE_SUM_ROWS` | Kein Argument | Boolean | on | Nutzt einen optimierten Summenpfad, um mehrere MoE-Slot-Ausgaben in das finale Token-Ergebnis zu reduzieren. |
@@ -50,4 +50,3 @@ Diese Namen tauchen in alten Notizen oder verworfenen Experimenten auf, haben im
 | `LLAMA_MOE_HOT_CACHE_MAX_MIB` | Ersetzt durch `--moe-hot-cache-max-mib` bzw. `LLAMA_ARG_MOE_HOT_CACHE_MAX_MIB` | Alter lokaler Starter-Name fuer das Cache-Budget. |
 | `LLAMA_MOE_HOT_CACHE_QWEN_GPU_COLD_MERGE` | Verworfen | Experiment verschob Merge-Arbeit auf GPU, erhoehe aber Cold-Lane-/Sync-Druck und war langsamer. |
 | `LLAMA_MOE_HOT_CACHE_QWEN_COLD_PREFIX_TASKS` | Verworfen | Experiment teilte die CPU-Prefix-Summe in mehrere Tasks. 2 und 4 Tasks waren langsamer als der Single-Task-Default. |
-

@@ -189,7 +189,7 @@ Disables hot/cold parallelization.
 LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS=<N>
 ```
 
-Minimum number of slots required before the scheduler launches the hot/cold parallel region. Default: `64`.
+Minimum number of slots required before the scheduler launches the hot/cold parallel region. Default: `2`.
 
 This avoids paying thread and scheduler overhead for tiny work packets.
 
