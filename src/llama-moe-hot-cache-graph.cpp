@@ -33,183 +33,155 @@ struct llama_moe_hot_cache_graph_profile {
     bool branch_reduce_merge = false;
 };
 
-static int llama_qwen35moe_hot_cache_parallel_mode() {
-    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL");
-    if (env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0) {
-        return 0;
-    }
-    if (std::strcmp(env, "force") == 0) {
-        return 2;
-    }
-    return 1;
-}
-
-static int64_t llama_qwen35moe_hot_cache_parallel_min_slots() {
-    static const int64_t value = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS");
-        if (env == nullptr || env[0] == '\0') {
-            return int64_t(64);
+class llama_moe_hot_cache_graph_tweaks {
+public:
+    static int parallel_mode() {
+        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL");
+        if (env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0) {
+            return 0;
         }
-
-        char * end = nullptr;
-        const long long parsed = std::strtoll(env, &end, 10);
-        if (end == env || parsed < 0) {
-            return int64_t(64);
+        if (std::strcmp(env, "force") == 0) {
+            return 2;
         }
-
-        return (int64_t) parsed;
-    }();
-
-    return value;
-}
-
-static bool llama_qwen35moe_hot_cache_merge_sum_rows() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_MERGE_SUM_ROWS");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_cpu_decode_routing() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_decode_direct_merge() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_DECODE_DIRECT_MERGE");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_decode_strided_sum_rows() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_DECODE_STRIDED_SUM_ROWS");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_hot_dummy_padding() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_HOT_DUMMY_PADDING");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_shared_input_row() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_SHARED_INPUT_ROW");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_cold_prefix_sum() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_COLD_PREFIX_SUM");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_cold_prefix_weighted_sum() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_COLD_PREFIX_WEIGHTED_SUM");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_decode_repeat_hot_input() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_DECODE_REPEAT_HOT_INPUT");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_qwen35moe_hot_cache_cold_first_row_input() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_COLD_FIRST_ROW_INPUT");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static bool llama_moe_hot_cache_branch_reduce_merge() {
-    static const bool enabled = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE");
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }();
-
-    return enabled;
-}
-
-static llama_moe_hot_cache_graph_profile llama_moe_hot_cache_graph_profile_for_arch(llm_arch arch) {
-    switch (arch) {
-        case LLM_ARCH_QWEN35MOE:
-            return {
-                /* cpu_decode_routing      = */ llama_qwen35moe_hot_cache_cpu_decode_routing(),
-                /* decode_direct_merge     = */ llama_qwen35moe_hot_cache_decode_direct_merge(),
-                /* decode_strided_sum_rows = */ llama_qwen35moe_hot_cache_decode_strided_sum_rows(),
-                /* shared_input_row        = */ llama_qwen35moe_hot_cache_shared_input_row(),
-                /* cold_prefix_sum         = */ llama_qwen35moe_hot_cache_cold_prefix_sum(),
-                /* cold_prefix_weighted_sum= */ llama_qwen35moe_hot_cache_cold_prefix_weighted_sum(),
-                /* decode_repeat_hot_input = */ llama_qwen35moe_hot_cache_decode_repeat_hot_input(),
-                /* cold_first_row_input    = */ llama_qwen35moe_hot_cache_cold_first_row_input(),
-                /* merge_sum_rows          = */ llama_qwen35moe_hot_cache_merge_sum_rows(),
-                /* branch_reduce_merge     = */ false,
-            };
-        case LLM_ARCH_GEMMA4:
-            // Gemma starts with the stable hot -> cold -> join graph shape.
-            // The final slot reduction is graph-order neutral and avoids the expensive
-            // view/add chain in the conservative path.
-            return {
-                /* cpu_decode_routing      = */ llama_qwen35moe_hot_cache_cpu_decode_routing(),
-                /* decode_direct_merge     = */ false,
-                /* decode_strided_sum_rows = */ llama_qwen35moe_hot_cache_decode_strided_sum_rows(),
-                /* shared_input_row        = */ llama_qwen35moe_hot_cache_shared_input_row(),
-                /* cold_prefix_sum         = */ false,
-                /* cold_prefix_weighted_sum= */ false,
-                /* decode_repeat_hot_input = */ llama_qwen35moe_hot_cache_decode_repeat_hot_input(),
-                /* cold_first_row_input    = */ llama_qwen35moe_hot_cache_cold_first_row_input(),
-                /* merge_sum_rows          = */ llama_qwen35moe_hot_cache_merge_sum_rows(),
-                /* branch_reduce_merge     = */ llama_moe_hot_cache_branch_reduce_merge(),
-            };
-        default:
-            // New MoE architectures must explicitly opt into shortcuts after their graph
-            // split order and numerical behavior have been checked.
-            return {};
+        return 1;
     }
-}
+
+    static int64_t parallel_min_slots() {
+        static const int64_t value = []() {
+            const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS");
+            if (env == nullptr || env[0] == '\0') {
+                return int64_t(64);
+            }
+
+            char * end = nullptr;
+            const long long parsed = std::strtoll(env, &end, 10);
+            if (end == env || parsed < 0) {
+                return int64_t(64);
+            }
+
+            return (int64_t) parsed;
+        }();
+
+        return value;
+    }
+
+    static bool merge_sum_rows() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_MERGE_SUM_ROWS");
+        return enabled;
+    }
+
+    static bool cpu_decode_routing() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING");
+        return enabled;
+    }
+
+    static bool decode_direct_merge() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_DECODE_DIRECT_MERGE");
+        return enabled;
+    }
+
+    static bool decode_strided_sum_rows() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_DECODE_STRIDED_SUM_ROWS");
+        return enabled;
+    }
+
+    static bool hot_dummy_padding() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_HOT_DUMMY_PADDING");
+        return enabled;
+    }
+
+    static bool shared_input_row() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_SHARED_INPUT_ROW");
+        return enabled;
+    }
+
+    static bool cold_prefix_sum() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_COLD_PREFIX_SUM");
+        return enabled;
+    }
+
+    static bool cold_prefix_weighted_sum() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_COLD_PREFIX_WEIGHTED_SUM");
+        return enabled;
+    }
+
+    static bool decode_repeat_hot_input() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_DECODE_REPEAT_HOT_INPUT");
+        return enabled;
+    }
+
+    static bool cold_first_row_input() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_COLD_FIRST_ROW_INPUT");
+        return enabled;
+    }
+
+    static bool branch_reduce_merge() {
+        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE");
+        return enabled;
+    }
+
+private:
+    static bool env_enabled_by_default(const char * name) {
+        const char * env = std::getenv(name);
+        return env == nullptr || env[0] == '\0' ||
+               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
+    }
+};
+
+class llama_qwen35moe_hot_cache_graph_tweaks {
+public:
+    static llama_moe_hot_cache_graph_profile get_profile() {
+        return {
+            /* cpu_decode_routing      = */ llama_moe_hot_cache_graph_tweaks::cpu_decode_routing(),
+            /* decode_direct_merge     = */ llama_moe_hot_cache_graph_tweaks::decode_direct_merge(),
+            /* decode_strided_sum_rows = */ llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows(),
+            /* shared_input_row        = */ llama_moe_hot_cache_graph_tweaks::shared_input_row(),
+            /* cold_prefix_sum         = */ llama_moe_hot_cache_graph_tweaks::cold_prefix_sum(),
+            /* cold_prefix_weighted_sum= */ llama_moe_hot_cache_graph_tweaks::cold_prefix_weighted_sum(),
+            /* decode_repeat_hot_input = */ llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input(),
+            /* cold_first_row_input    = */ llama_moe_hot_cache_graph_tweaks::cold_first_row_input(),
+            /* merge_sum_rows          = */ llama_moe_hot_cache_graph_tweaks::merge_sum_rows(),
+            /* branch_reduce_merge     = */ false,
+        };
+    }
+};
+
+class llama_gemma4_hot_cache_graph_tweaks {
+public:
+    static llama_moe_hot_cache_graph_profile get_profile() {
+        // Gemma starts with the stable hot -> cold -> join graph shape.
+        // The final slot reduction is graph-order neutral and avoids the expensive
+        // view/add chain in the conservative path.
+        return {
+            /* cpu_decode_routing      = */ llama_moe_hot_cache_graph_tweaks::cpu_decode_routing(),
+            /* decode_direct_merge     = */ false,
+            /* decode_strided_sum_rows = */ llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows(),
+            /* shared_input_row        = */ llama_moe_hot_cache_graph_tweaks::shared_input_row(),
+            /* cold_prefix_sum         = */ false,
+            /* cold_prefix_weighted_sum= */ false,
+            /* decode_repeat_hot_input = */ llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input(),
+            /* cold_first_row_input    = */ llama_moe_hot_cache_graph_tweaks::cold_first_row_input(),
+            /* merge_sum_rows          = */ llama_moe_hot_cache_graph_tweaks::merge_sum_rows(),
+            /* branch_reduce_merge     = */ llama_moe_hot_cache_graph_tweaks::branch_reduce_merge(),
+        };
+    }
+};
+
+class llama_moe_hot_cache_graph_profiles {
+public:
+    static llama_moe_hot_cache_graph_profile profile_for_arch(llm_arch arch) {
+        switch (arch) {
+            case LLM_ARCH_QWEN35MOE:
+                return llama_qwen35moe_hot_cache_graph_tweaks::get_profile();
+            case LLM_ARCH_GEMMA4:
+                return llama_gemma4_hot_cache_graph_tweaks::get_profile();
+            default:
+                // New MoE architectures must explicitly opt into shortcuts after their graph
+                // split order and numerical behavior have been checked.
+                return {};
+        }
+    }
+};
 
 static void llama_qwen35moe_hot_cache_build_worklist_op(
         ggml_tensor * dst,
@@ -637,7 +609,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
     const int64_t n_moe_slots = cparams.warmup ? hparams.n_expert_used : n_expert_used;
     const auto & layer = model.layers[il];
     const auto & cache = model.moe_hot_cache->layers[il];
-    const llama_moe_hot_cache_graph_profile profile = llama_moe_hot_cache_graph_profile_for_arch(graph.arch);
+    const llama_moe_hot_cache_graph_profile profile = llama_moe_hot_cache_graph_profiles::profile_for_arch(graph.arch);
 
     GGML_ASSERT(!cache.hot_id_map_host.empty());
     GGML_ASSERT(n_moe_slots > 0);
@@ -695,8 +667,8 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
         return ggml_view_1d(ctx0, worklist, capacity, field*worklist->nb[1]);
     };
 
-    const int parallel_mode = llama_qwen35moe_hot_cache_parallel_mode();
-    const int64_t parallel_min_slots = llama_qwen35moe_hot_cache_parallel_min_slots();
+    const int parallel_mode = llama_moe_hot_cache_graph_tweaks::parallel_mode();
+    const int64_t parallel_min_slots = llama_moe_hot_cache_graph_tweaks::parallel_min_slots();
     const bool annotate_parallel_region =
         parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
     const bool decode_direct_merge =
@@ -819,7 +791,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
         : ggml_get_rows(ctx0, cur, hot_token_ids);
     graph.cb(hot_inputs, "ffn_moe_hot_inputs", il);
 
-    const uint32_t hot_mul_mat_id_flags = llama_qwen35moe_hot_cache_hot_dummy_padding()
+    const uint32_t hot_mul_mat_id_flags = llama_moe_hot_cache_graph_tweaks::hot_dummy_padding()
         ? LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE
         : LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS;
 
@@ -1116,7 +1088,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
 
     ggml_tensor * worklist_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
     ggml_tensor * worklist = nullptr;
-    if (!cparams.warmup && n_tokens == 1 && llama_qwen35moe_hot_cache_cpu_decode_routing()) {
+    if (!cparams.warmup && n_tokens == 1 && llama_moe_hot_cache_graph_tweaks::cpu_decode_routing()) {
         worklist = ggml_map_custom2(
                 ctx0,
                 worklist_shape,
@@ -1166,25 +1138,25 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         return ggml_view_1d(ctx0, worklist, capacity, field*worklist->nb[1]);
     };
 
-    const int parallel_mode = llama_qwen35moe_hot_cache_parallel_mode();
-    const int64_t parallel_min_slots = llama_qwen35moe_hot_cache_parallel_min_slots();
+    const int parallel_mode = llama_moe_hot_cache_graph_tweaks::parallel_mode();
+    const int64_t parallel_min_slots = llama_moe_hot_cache_graph_tweaks::parallel_min_slots();
     const bool annotate_parallel_region =
         parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
     const bool decode_direct_merge =
-        !cparams.warmup && n_tokens == 1 && llama_qwen35moe_hot_cache_decode_direct_merge();
+        !cparams.warmup && n_tokens == 1 && llama_moe_hot_cache_graph_tweaks::decode_direct_merge();
     const bool cold_prefix_merge =
-        cache.n_hot != cache.n_expert && decode_direct_merge && llama_qwen35moe_hot_cache_cold_prefix_sum();
+        cache.n_hot != cache.n_expert && decode_direct_merge && llama_moe_hot_cache_graph_tweaks::cold_prefix_sum();
     const bool cold_prefix_weighted_sum =
-        cold_prefix_merge && llama_qwen35moe_hot_cache_cold_prefix_weighted_sum();
+        cold_prefix_merge && llama_moe_hot_cache_graph_tweaks::cold_prefix_weighted_sum();
     const bool cold_shared_input_row =
-        cache.n_hot != cache.n_expert && decode_direct_merge && llama_qwen35moe_hot_cache_shared_input_row();
+        cache.n_hot != cache.n_expert && decode_direct_merge && llama_moe_hot_cache_graph_tweaks::shared_input_row();
     const bool cold_first_row_input =
-        cold_shared_input_row && llama_qwen35moe_hot_cache_cold_first_row_input();
+        cold_shared_input_row && llama_moe_hot_cache_graph_tweaks::cold_first_row_input();
     const bool perf_expert_counts = llama_moe_layer_perf_needs_expert_counts(cparams.no_perf);
     const bool perf_or_parallel_counts =
         !cparams.warmup && (perf_expert_counts || (parallel_mode != 0 && annotate_parallel_region));
     const bool repeat_hot_input =
-        decode_direct_merge && llama_qwen35moe_hot_cache_decode_repeat_hot_input();
+        decode_direct_merge && llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input();
 
     ggml_tensor * hot_count = nullptr;
     ggml_tensor * cold_count = nullptr;
@@ -1287,7 +1259,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         : ggml_get_rows(ctx0, cur, hot_token_ids);
     cb(hot_inputs, "ffn_moe_hot_inputs", il);
 
-    const uint32_t hot_mul_mat_id_flags = llama_qwen35moe_hot_cache_hot_dummy_padding()
+    const uint32_t hot_mul_mat_id_flags = llama_moe_hot_cache_graph_tweaks::hot_dummy_padding()
         ? LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE
         : LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS;
 
@@ -1299,7 +1271,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
             bool prefix_weighted,
             const char * name) {
         if (prefix_count != nullptr && branch_backend != nullptr && n_tokens == 1 &&
-                llama_qwen35moe_hot_cache_cold_prefix_sum()) {
+                llama_moe_hot_cache_graph_tweaks::cold_prefix_sum()) {
             ggml_tensor * merged_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
             ggml_backend_sched_set_tensor_backend(sched, merged_shape, branch_backend);
 
@@ -1327,7 +1299,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         if (branch_backend != nullptr) {
             ggml_backend_sched_set_tensor_backend(sched, merged, branch_backend);
         }
-        if (!llama_qwen35moe_hot_cache_decode_strided_sum_rows()) {
+        if (!llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows()) {
             merged = ggml_cont(ctx0, merged);
             if (branch_backend != nullptr) {
                 ggml_backend_sched_set_tensor_backend(sched, merged, branch_backend);
@@ -1490,7 +1462,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         return out;
     }
 
-    if (n_moe_slots > 1 && llama_qwen35moe_hot_cache_merge_sum_rows()) {
+    if (n_moe_slots > 1 && llama_moe_hot_cache_graph_tweaks::merge_sum_rows()) {
         out = ggml_permute(ctx0, out_slots, 1, 0, 2, 3);
         out = ggml_cont(ctx0, out);
         out = ggml_sum_rows(ctx0, out);
