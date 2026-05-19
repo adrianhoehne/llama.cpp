@@ -1490,6 +1490,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.moe_hot_cache_auto_offload_kqv = !params.no_kv_offload;
     mparams.moe_hot_cache_auto_swa_full = params.swa_full;
     mparams.moe_hot_cache_auto_kv_unified = params.kv_unified;
+    mparams.moe_hot_cache_layer_curve = params.moe_hot_cache_layer_curve;
+    mparams.moe_hot_cache_weighting = params.moe_hot_cache_weighting.empty() ? nullptr : params.moe_hot_cache_weighting.c_str();
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;

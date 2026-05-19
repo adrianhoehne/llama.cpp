@@ -549,7 +549,8 @@ struct common_params {
     uint64_t moe_hot_cache_auto_reserve_mib = 1024; // MiB kept free when auto-sizing the MoE hot expert cache
     std::string moe_hot_cache;           // path to /moe-layer-perf JSON
     float moe_hot_cache_update_rate = 0.0f; // fraction of hot-cache entries to update after each completed server run
-    float moe_hot_cache_qwen_layer_curve = 0.5f; // Qwen35Moe layer-pressure weighting curve, 0 = flat, 1 = aggressive
+    float moe_hot_cache_layer_curve = 0.5f; // MoE hot-cache layer-pressure weighting curve, 0 = flat, 1 = aggressive
+    std::string moe_hot_cache_weighting; // MoE hot-cache weighting mode
 
     bool single_turn       = false; // single turn chat conversation
 

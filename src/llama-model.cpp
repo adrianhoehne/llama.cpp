@@ -2116,6 +2116,8 @@ llama_model_params llama_model_default_params() {
         /*.moe_hot_cache_auto_offload_kqv =*/ true,
         /*.moe_hot_cache_auto_swa_full =*/ true,
         /*.moe_hot_cache_auto_kv_unified =*/ false,
+        /*.moe_hot_cache_layer_curve     =*/ 0.5f,
+        /*.moe_hot_cache_weighting       =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,

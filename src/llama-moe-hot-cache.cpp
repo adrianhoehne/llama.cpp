@@ -208,16 +208,44 @@ static std::vector<llama_moe_hot_cache_entry> score_observations_default(
     return result;
 }
 
+static llama_moe_hot_cache_weighting_config weighting_config_from_params(
+        const llama_model_params * params) {
+    auto config = llama_moe_hot_cache_weighting::default_config();
+    if (params == nullptr) {
+        return config;
+    }
+
+    const char * curve_env = std::getenv("LLAMA_MOE_HOT_CACHE_LAYER_CURVE");
+    if (curve_env == nullptr || curve_env[0] == '\0') {
+        curve_env = std::getenv("LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE");
+    }
+    if (curve_env == nullptr || curve_env[0] == '\0') {
+        curve_env = std::getenv("LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE");
+    }
+    if (curve_env == nullptr || curve_env[0] == '\0') {
+        config.layer_curve = params->moe_hot_cache_layer_curve;
+    }
+    if (params->moe_hot_cache_weighting != nullptr && params->moe_hot_cache_weighting[0] != '\0' &&
+        !llama_moe_hot_cache_weighting::parse_mode(params->moe_hot_cache_weighting, config.mode)) {
+        LLAMA_LOG_WARN("%s: unknown MoE hot-cache weighting '%s', using %s\n",
+                __func__, params->moe_hot_cache_weighting,
+                llama_moe_hot_cache_weighting::mode_name(config.mode));
+    }
+
+    return config;
+}
+
 static std::vector<llama_moe_hot_cache_entry> score_observations_for_arch(
         llm_arch arch,
-        const std::vector<llama_moe_hot_cache_layer_observation> & observations) {
+        const std::vector<llama_moe_hot_cache_layer_observation> & observations,
+        const llama_model_params * params = nullptr) {
     switch (arch) {
         case LLM_ARCH_QWEN35MOE:
-            return llama_moe_hot_cache_qwen35moe_weighting::score_observations(observations);
         case LLM_ARCH_GEMMA4:
-            return llama_moe_hot_cache_gemma4_weighting::score_observations(observations);
-        default:
-            return score_observations_default(observations);
+        default: {
+            const auto config = weighting_config_from_params(params);
+            return llama_moe_hot_cache_weighting::score_observations(observations, config);
+        }
     }
 }
 
@@ -425,6 +453,7 @@ std::vector<llama_moe_hot_cache_layer_observation> llama_moe_hot_cache_parse_per
         obs.parallel_join_wait_time_per_call_us = layer.value("parallel_join_wait_time_per_call_us", 0.0);
         obs.parallel_cold_lane_wall_time_per_call_us = layer.value("parallel_cold_lane_wall_time_per_call_us", 0.0);
         obs.parallel_hot_lane_wall_time_per_call_us = layer.value("parallel_hot_lane_wall_time_per_call_us", 0.0);
+        obs.total_moe_time_per_call_us = layer.value("total_moe_time_per_call_us", 0.0);
 
         double wait_per_call = obs.parallel_join_wait_time_per_call_us;
         if (wait_per_call <= 0.0) {
@@ -535,7 +564,12 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
 
     const std::string json_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
-    const auto observed = score_observations_for_arch(model.arch, observations);
+    const auto config = weighting_config_from_params(&params);
+    LLAMA_LOG_WARN("%s: MoE hot-cache weighting = %s, layer_curve = %.2f\n",
+            __func__,
+            llama_moe_hot_cache_weighting::mode_name(config.mode),
+            config.layer_curve);
+    const auto observed = score_observations_for_arch(model.arch, observations, &params);
     const auto sizes = collect_expert_sizes(model);
     ggml_backend_dev_t cache_dev = select_gpu_dev(&model);
     const size_t budget_bytes = params.moe_hot_cache_max_mib < 0
@@ -784,7 +818,7 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
     std::vector<llama_moe_hot_cache_entry> scored_observed;
     try {
         const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
-        scored_observed = score_observations_for_arch(model.arch, observations);
+        scored_observed = score_observations_for_arch(model.arch, observations, &model.get_params());
     } catch (const std::exception & e) {
         LLAMA_LOG_WARN("%s: failed to score MoE layer perf JSON: %s\n", __func__, e.what());
         return stats;

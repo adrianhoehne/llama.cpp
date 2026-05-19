@@ -32,6 +32,7 @@ struct llama_moe_hot_cache_layer_observation {
     double parallel_join_wait_time_per_call_us = 0.0;
     double parallel_cold_lane_wall_time_per_call_us = 0.0;
     double parallel_hot_lane_wall_time_per_call_us = 0.0;
+    double total_moe_time_per_call_us = 0.0;
     double wait_per_cold_slot_us = 0.0;
 };
 
@@ -60,6 +61,21 @@ struct llama_moe_hot_cache_update_stats {
     size_t exchanged = 0;
     size_t layers_changed = 0;
 };
+
+enum class llama_moe_hot_cache_weighting_mode {
+    pressure,
+    smooth_pressure,
+    time,
+    balanced,
+};
+
+struct llama_moe_hot_cache_weighting_config {
+    llama_moe_hot_cache_weighting_mode mode = llama_moe_hot_cache_weighting_mode::pressure;
+    double layer_curve = 0.5;
+};
+
+using llama_moe_hot_cache_qwen35moe_weighting_mode = llama_moe_hot_cache_weighting_mode;
+using llama_moe_hot_cache_qwen35moe_weighting_config = llama_moe_hot_cache_weighting_config;
 
 struct llama_moe_hot_cache_layer {
     ggml_tensor * ffn_gate_up_exps = nullptr;
@@ -115,9 +131,28 @@ struct llama_moe_hot_cache {
     }
 };
 
-struct llama_moe_hot_cache_qwen35moe_weighting {
+struct llama_moe_hot_cache_weighting {
+    static bool parse_mode(const std::string & name, llama_moe_hot_cache_weighting_mode & mode);
+    static const char * mode_name(llama_moe_hot_cache_weighting_mode mode);
+    static llama_moe_hot_cache_weighting_config default_config();
+
     static std::vector<llama_moe_hot_cache_entry> score_observations(
             const std::vector<llama_moe_hot_cache_layer_observation> & observations);
+    static std::vector<llama_moe_hot_cache_entry> score_observations(
+            const std::vector<llama_moe_hot_cache_layer_observation> & observations,
+            const llama_moe_hot_cache_weighting_config & config);
+};
+
+struct llama_moe_hot_cache_qwen35moe_weighting {
+    static bool parse_mode(const std::string & name, llama_moe_hot_cache_qwen35moe_weighting_mode & mode);
+    static const char * mode_name(llama_moe_hot_cache_qwen35moe_weighting_mode mode);
+    static llama_moe_hot_cache_qwen35moe_weighting_config default_config();
+
+    static std::vector<llama_moe_hot_cache_entry> score_observations(
+            const std::vector<llama_moe_hot_cache_layer_observation> & observations);
+    static std::vector<llama_moe_hot_cache_entry> score_observations(
+            const std::vector<llama_moe_hot_cache_layer_observation> & observations,
+            const llama_moe_hot_cache_qwen35moe_weighting_config & config);
 };
 
 struct llama_moe_hot_cache_gemma4_weighting {

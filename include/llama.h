@@ -312,6 +312,8 @@ extern "C" {
         bool moe_hot_cache_auto_offload_kqv;
         bool moe_hot_cache_auto_swa_full;
         bool moe_hot_cache_auto_kv_unified;
+        float moe_hot_cache_layer_curve;
+        const char * moe_hot_cache_weighting;
 
         // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
         // If the provided progress_callback returns true, model loading continues.
