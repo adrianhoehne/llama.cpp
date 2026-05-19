@@ -625,7 +625,7 @@
 	<main class="min-h-0 flex-1 overflow-auto px-4 py-4 md:px-6">
 		<div class="mx-auto flex w-full max-w-7xl flex-col gap-4">
 			<section class="rounded-md border bg-muted-foreground/5 p-4">
-				<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
+				<div class="space-y-4">
 					<div class="min-w-0">
 						<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
 							<div>

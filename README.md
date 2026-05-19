@@ -53,7 +53,7 @@ The Web UI also has a live MoE layer performance page at `#/moe-layer-perf`. Ope
 - `Update`: only the counters required for dynamic hot-cache updates and hit-rate visualization.
 - `Off`: MoE perf counters are disabled.
 
-When the server starts with `--no-perf`, the dropdown starts in `Off`. The same mode switch is available through `POST /moe-layer-perf` with `{"mode":"full"}`, `{"mode":"update"}`, or `{"mode":"off"}`. The page shows the per-layer hit-rate graph, hot/cold expert heatmaps, and timing groups ordered by the MoE execution flow.
+When the server starts with `--no-perf`, the dropdown starts in `Off`. The same mode switch is available through `POST /moe-layer-perf` with `{"mode":"full"}`, `{"mode":"update"}`, or `{"mode":"off"}`. The page shows the per-layer hit-rate graph, timing groups ordered by the MoE execution flow, and hot/cold expert heatmaps.
 
 ![MoE layer performance UI](docs/development/assets/moe-layer-perf-overview.png)
 
