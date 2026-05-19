@@ -22,8 +22,10 @@ Detailed developer documentation:
 ### 1. Build
 
 ```bash
-cmake --build build -j8 --target llama-server
+cmake --build build -j8
 ```
+
+This builds the default llama.cpp targets, including `llama-server`, `llama-cli`, tools, examples, and tests.
 
 ### 2. Collect a representative profile
 

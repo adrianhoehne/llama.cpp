@@ -1,12 +1,14 @@
 # MoE Hot-Cache: Entwicklerdokumentation
 
-Stand: 2026-05-16
+Stand: 2026-05-19
 Branch: `cached-experts-v2`  
-Letzter betrachteter Commit: `e3ace0d3b Separate moe hot cache feature pt5.`
+Aktueller Arbeitsstand: `flat` ist der Default fuer die Hot-Cache-Gewichtung.
 
 Diese Dokumentation beschreibt die experimentelle MoE-Hot-Cache-Parallelisierung in diesem Fork: was geaendert wurde, warum es geaendert wurde, wie der Code zur Laufzeit arbeitet, welche Schalter relevant sind und wie die bisherigen Performance-Ergebnisse einzuordnen sind.
 
 Der Fokus liegt auf Qwen3.5/Qwen3.6 MoE, insbesondere auf dem Ziel, Decode/TG durch eine Aufteilung der Expertenarbeit auf GPU und CPU schneller zu machen. Zusaetzlich gibt es einen getrennten experimentellen Hot-Graph-Hook fuer Gemma 4 26B-A4B.
+
+Wichtig zur Gemma4-Namensgebung: `gemma-4-E4B` ist nach den lokalen GGUF-Metadaten ein dichtes Gemma4-Modell mit 42 Transformer-Layern und kein MoE-Modell. Fuer den MoE-Hot-Cache ist die relevante Gemma-Variante `gemma-4-26B-A4B`, also 26B total mit ca. 4B aktiven Parametern.
 
 ## Kurzfassung
 
@@ -57,6 +59,7 @@ Die Zahlen sind keine formalen Benchmarks, sondern Entwicklungslaeufe aus diesem
 | `performance54` | ca. 27.1 tk/s |
 | `performance55` | ca. 27.76 tk/s |
 | `performance56` | ca. 28.09 tk/s |
+| `flat`-Kontrolllauf mit normalem `qwen36`-Profil, 1024 Tokens | ca. 24.13 tk/s bei 53.27 Prozent Hitrate; praktisch gleichauf mit `pressure` im selben Kurzlauf |
 
 Der groesste qualitative Fortschritt war nicht ein einzelner Patch, sondern die Kombination aus:
 
@@ -67,6 +70,8 @@ Der groesste qualitative Fortschritt war nicht ein einzelner Patch, sondern die 
 - Hot/Cold-Regionen im Scheduler,
 - reduzierter Perf-Messlast,
 - sauberem Gating, damit der normale Pfad unberuehrt bleibt.
+
+Die aktuelle Standardauswahl fuer neue Hot-Cache-Laeufe ist `--moe-hot-cache-weighting flat`. Dieser Modus verteilt das Budget moeglichst gleichmaessig ueber die beobachteten Layer. Der vorherige druckgewichtete Modus bleibt mit `--moe-hot-cache-weighting pressure` verfuegbar.
 
 ## Wichtige Begriffe
 
@@ -918,15 +923,15 @@ Diese JSON kann danach als Input fuer den Hot-Cache verwendet werden:
 
 `--moe-hot-cache-update-rate` ist optional. `0.0` deaktiviert das dynamische Update; `0.10` tauscht nach abgeschlossenen Server-Laeufen bis zu 10 Prozent der aktuellen Hot-Cache-Eintraege aus.
 
-`--moe-hot-cache-qwen-layer-curve` ist nur fuer Qwen35Moe relevant. Die Kurve wirkt sowohl beim initialen Einlesen der JSON als auch beim dynamischen Update. `0.0` bedeutet keine Layer-Druck-Gewichtung, `0.5` ist der gedaempfte Default, `1.0` gewichtet wartende Layer aggressiv.
+`--moe-hot-cache-qwen-layer-curve` ist nur fuer Qwen35Moe relevant. Die Kurve wirkt sowohl beim initialen Einlesen der JSON als auch beim dynamischen Update. `0.0` bedeutet keine Layer-Druck-Gewichtung, `0.5` ist der gedaempfte Default, `1.0` gewichtet wartende Layer aggressiv. Im Default-Modus `flat` wird diese Kurve ignoriert.
 
-Fuer eine gleichmaessige Layer-Verteilung gibt es den separaten Modus:
+Die gleichmaessige Layer-Verteilung ist inzwischen der Default:
 
 ```bash
 --moe-hot-cache-weighting flat
 ```
 
-`flat` sortiert Experten je Layer nach Hits und mischt dann gleiche Raenge ueber die Layer. Dadurch bekommt jeder beobachtete Layer bei gleichem Budget ungefaehr gleich viele Experten. Die Layer-Curve wird in diesem Modus ignoriert.
+`flat` sortiert Experten je Layer nach Hits und mischt dann gleiche Raenge ueber die Layer. Dadurch bekommt jeder beobachtete Layer bei gleichem Budget ungefaehr gleich viele Experten. Der Parameter kann weggelassen werden, weil `flat` der Default ist. Fuer das vorherige Verhalten setzt man `--moe-hot-cache-weighting pressure`.
 
 Fuer Gemma4 ist derselbe Mechanismus als Env-Variable angebunden:
 
@@ -1220,13 +1225,6 @@ Der bevorzugte Build-Befehl in diesem Projekt ist:
 cmake --build build -j8
 ```
 
-Fuer schnellere Pruefung einzelner Targets:
-
-```bash
-cmake --build build -j8 --target llama
-cmake --build build -j8 --target test-moe-hot-cache
-```
-
 ### Unit Test
 
 ```bash
@@ -1466,8 +1464,7 @@ Ein Teil des Overheads liegt in `MUL_MAT_ID`-Spezialfaellen. Hier koennte noch P
 Vor einem Commit:
 
 ```bash
-cmake --build build -j8 --target llama
-cmake --build build -j8 --target test-moe-hot-cache
+cmake --build build -j8
 ./build/bin/test-moe-hot-cache
 ```
 

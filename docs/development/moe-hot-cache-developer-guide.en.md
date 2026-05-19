@@ -1,12 +1,14 @@
 # MoE Hot Cache: Developer Guide
 
-Status: 2026-05-16
+Status: 2026-05-19
 Branch: `cached-experts-v2`  
-Last referenced commit: `e3ace0d3b Separate moe hot cache feature pt5.`
+Current working state: `flat` is the default hot-cache weighting mode.
 
 This document is the English developer guide for the experimental MoE hot-cache work in this fork. It explains what was changed, why it was changed, how the runtime path works, which switches matter, how to interpret the performance data, and where the remaining maintenance risks are.
 
 The implementation targets Qwen3.5/Qwen3.6 MoE decode throughput. The core idea is to cache frequently used experts on the GPU and run the remaining cold expert work on the CPU in parallel. There is also a separate experimental hot-graph hook for Gemma 4 26B-A4B.
+
+Important Gemma4 naming note: according to the local GGUF metadata, `gemma-4-E4B` is a dense Gemma4 model with 42 transformer layers, not an MoE model. The relevant Gemma variant for MoE hot-cache work is `gemma-4-26B-A4B`, meaning 26B total parameters with roughly 4B active parameters.
 
 ## Summary
 
@@ -57,6 +59,7 @@ These numbers are development observations, not formal benchmarks. They are stil
 | `performance54` | about 27.1 tok/s |
 | `performance55` | about 27.76 tok/s |
 | `performance56` | about 28.09 tok/s |
+| `flat` control run with the normal `qwen36` profile, 1024 tokens | about 24.13 tok/s at 53.27 percent hit rate; practically tied with `pressure` in the same short run |
 
 The main gain did not come from one single patch. It came from the combination of:
 
@@ -67,6 +70,8 @@ The main gain did not come from one single patch. It came from the combination o
 - explicit scheduler regions for hot/cold work,
 - reduced performance counter overhead,
 - strict gating so the normal path remains intact.
+
+The current default for new hot-cache runs is `--moe-hot-cache-weighting flat`. This mode spreads the budget as evenly as possible across observed layers. The previous pressure-weighted mode remains available with `--moe-hot-cache-weighting pressure`.
 
 ## Terminology
 
@@ -916,15 +921,15 @@ That JSON can then be used as input for the hot cache:
 
 `--moe-hot-cache-update-rate` is optional. `0.0` disables dynamic updates; `0.10` replaces up to 10 percent of the current hot-cache entries after completed server runs.
 
-`--moe-hot-cache-qwen-layer-curve` only affects Qwen35Moe. The curve is used both during initial JSON loading and dynamic updates. `0.0` means no layer-pressure weighting, `0.5` is the damped default, and `1.0` weights waiting layers aggressively.
+`--moe-hot-cache-qwen-layer-curve` only affects Qwen35Moe. The curve is used both during initial JSON loading and dynamic updates. `0.0` means no layer-pressure weighting, `0.5` is the damped default, and `1.0` weights waiting layers aggressively. In the default `flat` mode, this curve is ignored.
 
-For an even layer distribution, use the separate mode:
+The even layer distribution is now the default:
 
 ```bash
 --moe-hot-cache-weighting flat
 ```
 
-`flat` sorts experts by hits within each layer and then interleaves equal ranks across layers. This gives each observed layer roughly the same number of experts for the same budget. The layer curve is ignored in this mode.
+`flat` sorts experts by hits within each layer and then interleaves equal ranks across layers. This gives each observed layer roughly the same number of experts for the same budget. The argument can be omitted because `flat` is the default. Use `--moe-hot-cache-weighting pressure` to restore the previous behavior.
 
 For Gemma4, the same mechanism is exposed as an environment variable:
 
@@ -1216,13 +1221,6 @@ Preferred build command in this repository:
 cmake --build build -j8
 ```
 
-For faster checks of individual targets:
-
-```bash
-cmake --build build -j8 --target llama
-cmake --build build -j8 --target test-moe-hot-cache
-```
-
 ### Unit Test
 
 ```bash
@@ -1460,8 +1458,7 @@ Some overhead remains in `MUL_MAT_ID` special cases. There may still be performa
 Before committing:
 
 ```bash
-cmake --build build -j8 --target llama
-cmake --build build -j8 --target test-moe-hot-cache
+cmake --build build -j8
 ./build/bin/test-moe-hot-cache
 ```
 
