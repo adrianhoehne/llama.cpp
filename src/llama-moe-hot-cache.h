@@ -67,10 +67,11 @@ enum class llama_moe_hot_cache_weighting_mode {
     smooth_pressure,
     time,
     balanced,
+    flat,
 };
 
 struct llama_moe_hot_cache_weighting_config {
-    llama_moe_hot_cache_weighting_mode mode = llama_moe_hot_cache_weighting_mode::pressure;
+    llama_moe_hot_cache_weighting_mode mode = llama_moe_hot_cache_weighting_mode::flat;
     double layer_curve = 0.5;
 };
 

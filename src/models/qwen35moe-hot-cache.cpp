@@ -405,11 +405,62 @@ public:
     }
 };
 
+class qwen35moe_flat_weighting : public qwen35moe_hot_cache_weighting_strategy {
+public:
+    std::vector<llama_moe_hot_cache_entry> score(
+            const std::vector<llama_moe_hot_cache_layer_observation> & observations,
+            double layer_curve) const override {
+        GGML_UNUSED(layer_curve);
+
+        std::vector<std::vector<llama_moe_hot_cache_entry>> ranked_by_layer;
+        ranked_by_layer.reserve(observations.size());
+
+        size_t max_rank = 0;
+        size_t total_entries = 0;
+        for (const auto & layer : observations) {
+            std::vector<llama_moe_hot_cache_entry> ranked;
+            ranked.reserve(layer.experts.size());
+
+            for (const auto & expert : layer.experts) {
+                const uint64_t hits = total_hits(layer, expert);
+                if (hits > 0) {
+                    ranked.push_back({ layer.layer, expert.expert, hits });
+                }
+            }
+
+            sort_entries(ranked);
+            max_rank = std::max(max_rank, ranked.size());
+            total_entries += ranked.size();
+            ranked_by_layer.push_back(std::move(ranked));
+        }
+
+        std::vector<llama_moe_hot_cache_entry> result;
+        result.reserve(total_entries);
+
+        for (size_t rank = 0; rank < max_rank; ++rank) {
+            for (const auto & ranked : ranked_by_layer) {
+                if (rank >= ranked.size()) {
+                    continue;
+                }
+
+                llama_moe_hot_cache_entry entry = ranked[rank];
+                const uint64_t rank_score = (uint64_t) (max_rank - rank);
+                entry.hit_count = rank_score*1000000ULL + std::min<uint64_t>(entry.hit_count, 999999ULL);
+                result.push_back(entry);
+            }
+        }
+
+        sort_entries(result);
+        return result;
+    }
+};
+
 static const qwen35moe_hot_cache_weighting_strategy & weighting_strategy(qwen35moe_weighting_mode mode) {
     static const qwen35moe_pressure_weighting pressure;
     static const qwen35moe_smooth_pressure_weighting smooth_pressure;
     static const qwen35moe_time_weighting time;
     static const qwen35moe_balanced_weighting balanced;
+    static const qwen35moe_flat_weighting flat;
 
     switch (mode) {
         case qwen35moe_weighting_mode::smooth_pressure:
@@ -418,6 +469,8 @@ static const qwen35moe_hot_cache_weighting_strategy & weighting_strategy(qwen35m
             return time;
         case qwen35moe_weighting_mode::balanced:
             return balanced;
+        case qwen35moe_weighting_mode::flat:
+            return flat;
         case qwen35moe_weighting_mode::pressure:
         default:
             return pressure;
@@ -451,6 +504,11 @@ bool llama_moe_hot_cache_weighting::parse_mode(
         return true;
     }
 
+    if (str_is(value, "flat")) {
+        mode = qwen35moe_weighting_mode::flat;
+        return true;
+    }
+
     return false;
 }
 
@@ -463,6 +521,8 @@ const char * llama_moe_hot_cache_weighting::mode_name(
             return "time";
         case qwen35moe_weighting_mode::balanced:
             return "balanced";
+        case qwen35moe_weighting_mode::flat:
+            return "flat";
         case qwen35moe_weighting_mode::pressure:
         default:
             return "pressure";

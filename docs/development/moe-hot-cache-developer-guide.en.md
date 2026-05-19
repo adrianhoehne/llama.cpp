@@ -157,13 +157,20 @@ Only relevant with `--moe-hot-cache-max-mib -1`. The value controls how many MiB
 LLAMA_ARG_MOE_HOT_CACHE_QWEN_LAYER_CURVE=<N>
 ```
 
-Qwen35Moe only. Controls the layer-pressure weighting curve for hot-cache selection. `0.0` uses flat expert counts without layer wait time. `0.5` is the damped default. `1.0` weights waiting layers aggressively. Internally, the Qwen-specific weighting reads `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; the CLI/INI argument sets that value.
+Qwen35Moe only. Controls the layer-pressure weighting curve for hot-cache selection. `0.0` uses the normal expert ranking without layer wait time. `0.5` is the damped default. `1.0` weights waiting layers aggressively. Internally, the Qwen-specific weighting reads `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; the CLI/INI argument sets that value.
+
+```text
+--moe-hot-cache-weighting <MODE>
+LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING=<MODE>
+```
+
+Controls the ranking mode for initial hot-cache selection and dynamic updates. Supported values are `flat`, `pressure`, `smooth`, `time`, and `balanced`; the default is `flat`. `flat` spreads the budget as evenly as possible over the observed layers: experts are ranked by hits inside each layer, then equal ranks are interleaved across layers. The layer curve has no effect in `flat` mode. Use `pressure` to restore the previous pressure-weighted default.
 
 ```text
 LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<N>
 ```
 
-Gemma4 only. Controls the same layer-pressure weighting for initial hot-cache selection and dynamic updates. `0.0` uses flat expert counts, `0.5` is the default, and `1.0` weights waiting layers aggressively. This switch is currently environment-variable only.
+Gemma4 only. Controls the same layer-pressure weighting for initial hot-cache selection and dynamic updates. `0.0` uses the normal expert ranking without layer pressure, `0.5` is the default, and `1.0` weights waiting layers aggressively. This switch is currently environment-variable only.
 
 ### Parallelization
 
@@ -909,7 +916,15 @@ That JSON can then be used as input for the hot cache:
 
 `--moe-hot-cache-update-rate` is optional. `0.0` disables dynamic updates; `0.10` replaces up to 10 percent of the current hot-cache entries after completed server runs.
 
-`--moe-hot-cache-qwen-layer-curve` only affects Qwen35Moe. The curve is used both during initial JSON loading and dynamic updates. `0.0` means flat expert counts, `0.5` is the damped default, and `1.0` weights waiting layers aggressively.
+`--moe-hot-cache-qwen-layer-curve` only affects Qwen35Moe. The curve is used both during initial JSON loading and dynamic updates. `0.0` means no layer-pressure weighting, `0.5` is the damped default, and `1.0` weights waiting layers aggressively.
+
+For an even layer distribution, use the separate mode:
+
+```bash
+--moe-hot-cache-weighting flat
+```
+
+`flat` sorts experts by hits within each layer and then interleaves equal ranks across layers. This gives each observed layer roughly the same number of experts for the same budget. The layer curve is ignored in this mode.
 
 For Gemma4, the same mechanism is exposed as an environment variable:
 

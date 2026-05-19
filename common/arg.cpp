@@ -72,7 +72,8 @@ static bool llama_moe_hot_cache_weighting_valid(const std::string & value) {
     return value == "pressure" || value == "smooth" || value == "smooth-pressure" ||
            value == "capped" || value == "capped-pressure" || value == "soft-pressure" ||
            value == "time" || value == "moe-time" || value == "decode-time" ||
-           value == "balanced" || value == "rank" || value == "layer-rank";
+           value == "balanced" || value == "rank" || value == "layer-rank" ||
+           value == "flat";
 }
 
 static void llama_moe_hot_cache_set_weighting_env(const std::string & value) {
@@ -2410,7 +2411,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_HOT_CACHE_UPDATE_RATE"));
     add_opt(common_arg(
         {"--moe-hot-cache-layer-curve", "--moe-hot-cache-qwen-layer-curve"}, "N",
-        string_format("experimental: MoE hot-cache layer-pressure weighting curve, 0.0 = flat expert counts, 1.0 = aggressive wait-layer weighting (default: %.2f)", params.moe_hot_cache_layer_curve),
+        string_format("experimental: MoE hot-cache layer-pressure weighting curve, 0.0 = no layer-pressure weighting, 1.0 = aggressive wait-layer weighting (default: %.2f)", params.moe_hot_cache_layer_curve),
         [](common_params & params, const std::string & value_str) {
             const float value = std::stof(value_str);
             if (value < 0.0f || value > 1.0f) {
@@ -2422,10 +2423,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE_LAYER_CURVE"));
     add_opt(common_arg(
         {"--moe-hot-cache-weighting", "--moe-hot-cache-qwen-weighting"}, "MODE",
-        "experimental: MoE hot-cache weighting mode: pressure, smooth, time, or balanced (default: pressure)",
+        "experimental: MoE hot-cache weighting mode: flat, pressure, smooth, time, or balanced (default: flat)",
         [](common_params & params, const std::string & value) {
             if (!llama_moe_hot_cache_weighting_valid(value)) {
-                throw std::invalid_argument("--moe-hot-cache-weighting must be one of: pressure, smooth, time, balanced");
+                throw std::invalid_argument("--moe-hot-cache-weighting must be one of: pressure, smooth, time, balanced, flat");
             }
             params.moe_hot_cache_weighting = value;
             llama_moe_hot_cache_set_weighting_env(value);

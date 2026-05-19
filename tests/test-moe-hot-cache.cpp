@@ -15,6 +15,47 @@ static void require_impl(bool condition, int line) {
 
 #define require(condition) require_impl((condition), __LINE__)
 
+static void set_env_var(const char * name, const char * value) {
+#if defined(_WIN32)
+    _putenv_s(name, value == nullptr ? "" : value);
+#else
+    if (value == nullptr) {
+        unsetenv(name);
+    } else {
+        setenv(name, value, 1);
+    }
+#endif
+}
+
+class scoped_env_var {
+public:
+    scoped_env_var(const char * name, const char * value) : name(name) {
+        const char * current = std::getenv(name);
+        if (current != nullptr) {
+            had_value = true;
+            old_value = current;
+        }
+        set_env_var(name, value);
+    }
+
+    ~scoped_env_var() {
+        set_env_var(name, had_value ? old_value.c_str() : nullptr);
+    }
+
+private:
+    const char * name;
+    bool had_value = false;
+    std::string old_value;
+};
+
+static void test_default_weighting_is_flat() {
+    scoped_env_var weighting("LLAMA_MOE_HOT_CACHE_WEIGHTING", nullptr);
+    scoped_env_var qwen_weighting("LLAMA_MOE_HOT_CACHE_QWEN_WEIGHTING", nullptr);
+
+    const auto config = llama_moe_hot_cache_weighting::default_config();
+    require(config.mode == llama_moe_hot_cache_weighting_mode::flat);
+}
+
 static bool hot_dummy_padding_enabled() {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_HOT_DUMMY_PADDING");
     return env == nullptr || env[0] == '\0' ||
@@ -67,8 +108,11 @@ static void test_parse_branch_counts_and_layer_weight() {
         ]
     })";
 
+    llama_moe_hot_cache_qwen35moe_weighting_config config;
+    config.mode = llama_moe_hot_cache_weighting_mode::pressure;
+
     const auto entries = llama_moe_hot_cache_qwen35moe_weighting::score_observations(
-            llama_moe_hot_cache_parse_perf_json_observations(json));
+            llama_moe_hot_cache_parse_perf_json_observations(json), config);
     require(entries.size() == 3);
     require(entries[0].layer == 0 && entries[0].expert == 1 && entries[0].hit_count == 12);
     require(entries[1].layer == 0 && entries[1].expert == 2 && entries[1].hit_count == 12);
@@ -97,8 +141,11 @@ static void test_qwen_layer_pressure_uses_total_wait() {
         ]
     })";
 
+    llama_moe_hot_cache_qwen35moe_weighting_config config;
+    config.mode = llama_moe_hot_cache_weighting_mode::pressure;
+
     const auto entries = llama_moe_hot_cache_qwen35moe_weighting::score_observations(
-            llama_moe_hot_cache_parse_perf_json_observations(json));
+            llama_moe_hot_cache_parse_perf_json_observations(json), config);
     require(entries.size() == 2);
     require(entries[0].layer == 0 && entries[0].expert == 1 && entries[0].hit_count == 12);
     require(entries[1].layer == 1 && entries[1].expert == 2 && entries[1].hit_count == 8);
@@ -126,11 +173,60 @@ static void test_gemma4_layer_pressure_uses_total_wait() {
         ]
     })";
 
+    scoped_env_var weighting("LLAMA_MOE_HOT_CACHE_WEIGHTING", "pressure");
+
     const auto entries = llama_moe_hot_cache_gemma4_weighting::score_observations(
             llama_moe_hot_cache_parse_perf_json_observations(json));
     require(entries.size() == 2);
     require(entries[0].layer == 0 && entries[0].expert == 1 && entries[0].hit_count == 12);
     require(entries[1].layer == 1 && entries[1].expert == 2 && entries[1].hit_count == 8);
+}
+
+static void test_flat_weighting_spreads_budget_over_layers() {
+    const std::string json = R"({
+        "enabled": true,
+        "schema": "llama.cpp.moe_layer_perf.v1",
+        "n_expert": 4,
+        "n_expert_used": 2,
+        "layers": [
+            { "layer": 0, "experts": [[0, 100], [1, 90], [2, 80]] },
+            { "layer": 1, "experts": [[0, 50],  [1, 40], [2, 30]] },
+            { "layer": 2, "experts": [[0, 20],  [1, 10], [2, 5]] }
+        ]
+    })";
+
+    llama_moe_hot_cache_weighting_config config;
+    config.mode = llama_moe_hot_cache_weighting_mode::flat;
+    config.layer_curve = 1.0;
+
+    const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json);
+    const auto entries = llama_moe_hot_cache_weighting::score_observations(observations, config);
+    require(entries.size() == 9);
+    require(entries[0].layer == 0 && entries[0].expert == 0);
+    require(entries[1].layer == 1 && entries[1].expert == 0);
+    require(entries[2].layer == 2 && entries[2].expert == 0);
+    require(entries[3].layer == 0 && entries[3].expert == 1);
+    require(entries[4].layer == 1 && entries[4].expert == 1);
+    require(entries[5].layer == 2 && entries[5].expert == 1);
+
+    std::vector<llama_moe_hot_cache_expert_size> sizes;
+    sizes.reserve(entries.size());
+    for (const auto & entry : entries) {
+        sizes.push_back({ entry.layer, entry.expert, 1 });
+    }
+
+    const auto plan = llama_moe_hot_cache_select(entries, sizes, 9);
+    require(plan.selected.size() == 6);
+
+    int per_layer[3] = {};
+    for (const auto & selected : plan.selected) {
+        require(selected.layer < 3);
+        per_layer[selected.layer]++;
+    }
+
+    require(per_layer[0] == 2);
+    require(per_layer[1] == 2);
+    require(per_layer[2] == 2);
 }
 
 static void test_parse_raw_opt_schema() {
@@ -387,10 +483,12 @@ static void test_build_worklist_from_logits() {
 }
 
 int main() {
+    test_default_weighting_is_flat();
     test_parse_and_sort();
     test_parse_branch_counts_and_layer_weight();
     test_qwen_layer_pressure_uses_total_wait();
     test_gemma4_layer_pressure_uses_total_wait();
+    test_flat_weighting_spreads_budget_over_layers();
     test_parse_raw_opt_schema();
     test_select_budget();
     test_bad_schema();

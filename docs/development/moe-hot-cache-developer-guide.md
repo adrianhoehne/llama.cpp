@@ -157,13 +157,20 @@ Nur relevant bei `--moe-hot-cache-max-mib -1`. Der Wert gibt an, wie viele MiB n
 LLAMA_ARG_MOE_HOT_CACHE_QWEN_LAYER_CURVE=<N>
 ```
 
-Nur fuer Qwen35Moe. Steuert die Layer-Druck-Gewichtung bei der Hot-Cache-Auswahl. `0.0` nutzt flache Expert-Counts ohne Layer-Wartezeit. `0.5` ist der gedaempfte Default. `1.0` gewichtet wartende Layer aggressiv. Intern liest die Qwen-spezifische Gewichtung `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; das CLI-/INI-Argument setzt diesen Wert.
+Nur fuer Qwen35Moe. Steuert die Layer-Druck-Gewichtung bei der Hot-Cache-Auswahl. `0.0` nutzt die normale Expert-Rangfolge ohne Layer-Wartezeit. `0.5` ist der gedaempfte Default. `1.0` gewichtet wartende Layer aggressiv. Intern liest die Qwen-spezifische Gewichtung `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; das CLI-/INI-Argument setzt diesen Wert.
+
+```text
+--moe-hot-cache-weighting <MODE>
+LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING=<MODE>
+```
+
+Steuert den Ranking-Modus fuer die Hot-Cache-Auswahl und das dynamische Update. Unterstuetzt werden `flat`, `pressure`, `smooth`, `time` und `balanced`; Default ist `flat`. `flat` verteilt das Budget moeglichst gleichmaessig ueber die beobachteten Layer: erst werden Experten innerhalb jedes Layers nach Hits sortiert, danach werden gleiche Raenge ueber alle Layer interleaved. Die Layer-Curve hat auf `flat` keinen Einfluss. `pressure` stellt den vorherigen druckgewichteten Default wieder her.
 
 ```text
 LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<N>
 ```
 
-Nur fuer Gemma4. Steuert die gleiche Layer-Druck-Gewichtung fuer initiale Hot-Cache-Auswahl und dynamisches Update. `0.0` nutzt flache Expert-Counts, `0.5` ist der Default, `1.0` gewichtet wartende Layer aggressiv. Dieser Schalter ist aktuell nur als Env-Variable vorhanden.
+Nur fuer Gemma4. Steuert die gleiche Layer-Druck-Gewichtung fuer initiale Hot-Cache-Auswahl und dynamisches Update. `0.0` nutzt die normale Expert-Rangfolge ohne Layer-Druck, `0.5` ist der Default, `1.0` gewichtet wartende Layer aggressiv. Dieser Schalter ist aktuell nur als Env-Variable vorhanden.
 
 ### Parallelisierung
 
@@ -911,7 +918,15 @@ Diese JSON kann danach als Input fuer den Hot-Cache verwendet werden:
 
 `--moe-hot-cache-update-rate` ist optional. `0.0` deaktiviert das dynamische Update; `0.10` tauscht nach abgeschlossenen Server-Laeufen bis zu 10 Prozent der aktuellen Hot-Cache-Eintraege aus.
 
-`--moe-hot-cache-qwen-layer-curve` ist nur fuer Qwen35Moe relevant. Die Kurve wirkt sowohl beim initialen Einlesen der JSON als auch beim dynamischen Update. `0.0` bedeutet flache Expert-Counts, `0.5` ist der gedaempfte Default, `1.0` gewichtet wartende Layer aggressiv.
+`--moe-hot-cache-qwen-layer-curve` ist nur fuer Qwen35Moe relevant. Die Kurve wirkt sowohl beim initialen Einlesen der JSON als auch beim dynamischen Update. `0.0` bedeutet keine Layer-Druck-Gewichtung, `0.5` ist der gedaempfte Default, `1.0` gewichtet wartende Layer aggressiv.
+
+Fuer eine gleichmaessige Layer-Verteilung gibt es den separaten Modus:
+
+```bash
+--moe-hot-cache-weighting flat
+```
+
+`flat` sortiert Experten je Layer nach Hits und mischt dann gleiche Raenge ueber die Layer. Dadurch bekommt jeder beobachtete Layer bei gleichem Budget ungefaehr gleich viele Experten. Die Layer-Curve wird in diesem Modus ignoriert.
 
 Fuer Gemma4 ist derselbe Mechanismus als Env-Variable angebunden:
 

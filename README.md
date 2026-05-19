@@ -75,7 +75,9 @@ Hot/cold parallelization runs in auto mode by default. Set `LLAMA_MOE_HOT_CACHE_
 
 `--moe-hot-cache-update-rate` controls dynamic replacement after completed server runs. `0.0` disables it; `0.10` replaces up to 10 percent of current hot-cache entries.
 
-`--moe-hot-cache-qwen-layer-curve` is Qwen3.5/Qwen3.6 MoE specific. `0.0` uses flat expert counts, `0.5` is the damped default, and `1.0` aggressively favors layers that show more join/wait time in the performance JSON. The same curve is used for the initial cache selection and for dynamic update candidate ranking.
+`--moe-hot-cache-qwen-layer-curve` is Qwen3.5/Qwen3.6 MoE specific. It controls how strongly layer wait/pressure timings influence the ranking. `0.0` disables this layer pressure, `0.5` is the damped default, and `1.0` aggressively favors layers that show more join/wait time in the performance JSON. The same curve is used for the initial cache selection and for dynamic update candidate ranking.
+
+`--moe-hot-cache-weighting` selects the expert ranking mode. The default is `flat`. `flat` reproduces the even-distribution experiment: experts are ranked by hits inside each layer, then equal ranks are interleaved across layers, so a fixed budget is spread as evenly as possible over the observed layers. `flat` ignores the layer curve. Use `pressure` to restore the previous pressure-weighted default.
 
 Gemma 4 26B-A4B has a separate experimental weighting class. It uses the same idea of layer-pressure scoring, defaults to a curve strength of `0.5`, and can be overridden with `LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<0.0..1.0>`. Gemma4 also enables Branch-Reduce-Merge by default, which reduces hot and cold branch outputs before the final join; set `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE=0` to disable that Gemma4-specific path. Qwen does not use Branch-Reduce-Merge.
 
