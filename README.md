@@ -17,6 +17,35 @@ Detailed developer documentation:
 - [German guide](docs/development/moe-hot-cache-developer-guide.md)
 - [English guide](docs/development/moe-hot-cache-developer-guide.en.md)
 
+## TL:DR QuickStart
+
+Builds llama.cpp completely, including `llama-server`, `llama-cli`, and the embedded Web UI.
+
+```bash
+cmake --build build -j8
+```
+
+> [!WARNING]
+> The first profiling run can take a long time because no hot cache is active yet and all MoE experts stay in RAM.
+
+First profiling run: collects expert statistics from representative prompts and writes them to `moe-hot-cache.json`.
+
+```bash
+./build/bin/llama-server --moe-layer-perf-out moe-hot-cache.json <your normal start arguments>
+```
+
+Normal hot-cache start: loads the expert list, automatically fills free VRAM, and dynamically exchanges 10% of cache entries after requests. `--moe-hot-cache-auto-reserve-mib 1024` reserves 1024 MiB of VRAM for KV/compute/warmup buffers so warmup does not hit OOM.
+
+```bash
+./build/bin/llama-server --moe-hot-cache moe-hot-cache.json --moe-hot-cache-max-mib -1 --moe-hot-cache-auto-reserve-mib 1024 --moe-hot-cache-update-rate 0.10 <your normal start arguments>
+```
+
+Final speed test without perf counters, for the least distorted tokens/s measurement.
+
+```bash
+./build/bin/llama-server --no-perf --moe-hot-cache moe-hot-cache.json --moe-hot-cache-max-mib -1 --moe-hot-cache-auto-reserve-mib 1024 <your normal start arguments>
+```
+
 ## Workflow
 
 ### 1. Build
