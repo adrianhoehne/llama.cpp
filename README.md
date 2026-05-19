@@ -127,6 +127,36 @@ For small workload shifts, dynamic updates can adapt the cache entries within th
 - Support more MoE model families.
 - Support multiple workload-specific cache profiles.
 
+## Measured Qwen3.6 results
+
+The following measurements used `unsloth/Qwen3.6-35B-A3B-GGUF:Q6_K_XL` with a `100000` token context and the coding prompt `Erstelle mir ein Snake Spiel in HTML und Java Script`.
+
+The standard llama.cpp router setup averaged `22.2 t/s`. With MoE hot-cache enabled, auto-sizing selected `2367/10172` observed experts, using `6554 MiB` of VRAM, equivalent to about `9.2` full MoE layers.
+
+Measured break-even was about `45.89%` real hot-cache hitrate.
+
+```mermaid
+xychart
+    title "Qwen3.6 hot-cache hitrate vs throughput"
+    x-axis "Hot-cache hitrate (%)" [22.63, 28.21, 35.31, 41.90, 48.33, 54.54, 60.76, 62.51]
+    y-axis "Decode throughput (t/s)" 18 --> 27
+    line "Hot-cache" [18.35, 19.07, 20.05, 21.23, 22.80, 24.34, 25.77, 26.12]
+    line "Standard llama baseline" [22.20, 22.20, 22.20, 22.20, 22.20, 22.20, 22.20, 22.20]
+```
+
+| Real hot-cache hitrate | Decode throughput |
+|---:|---:|
+| 22.63% | 18.35 t/s |
+| 28.21% | 19.07 t/s |
+| 35.31% | 20.05 t/s |
+| 41.90% | 21.23 t/s |
+| 48.33% | 22.80 t/s |
+| 54.54% | 24.34 t/s |
+| 60.76% | 25.77 t/s |
+| 62.51% | 26.12 t/s |
+
+A separate experiment placed the four weakest MoE layers (`2,0,3,6`) and all router gates on `CUDA0`, then filled the remaining VRAM with hot experts. This did not improve throughput. The performance request timed out after 30 minutes at 1949 tokens with `41.33%` hitrate. The hot-cache shrank to `1389/10185` experts (`3877 MiB`, about `5.4` full MoE layers), and the overridden layers showed about `222 ms` MoE time per call. This hybrid approach needs a separate graph path that bypasses the hot/cold split for fully GPU-resident MoE layers.
+
 
 # llama.cpp
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
