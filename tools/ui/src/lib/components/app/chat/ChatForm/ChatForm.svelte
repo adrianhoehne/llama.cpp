@@ -542,6 +542,7 @@
 				{disabled}
 				{isLoading}
 				{isRecording}
+				moePerfModel={activeModelId}
 				{showAddButton}
 				{showModelSelector}
 				{uploadedFiles}

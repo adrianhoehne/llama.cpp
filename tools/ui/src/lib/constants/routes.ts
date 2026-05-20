@@ -22,6 +22,8 @@ export const ROUTES = {
 	CHAT: '#/chat',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
+	/** MoE layer performance visualization. */
+	MOE_LAYER_PERF: '#/moe-layer-perf',
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings'
 } as const;
