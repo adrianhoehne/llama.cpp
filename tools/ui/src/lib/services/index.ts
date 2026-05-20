@@ -138,6 +138,8 @@ export { DatabaseService } from './database.service';
  */
 export { ModelsService } from './models.service';
 
+export { MoeLayerPerfService } from './moe-layer-perf.service';
+
 /**
  * **PropsService** - Server properties and capabilities retrieval
  *

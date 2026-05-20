@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { Square, SkipForward } from '@lucide/svelte';
+	import { Activity, Square, SkipForward } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatService } from '$lib/services';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		ChatFormActionsAdd,
 		ChatFormActionModels,
@@ -16,6 +16,9 @@
 	import { getFileTypeCategory } from '$lib/utils';
 	import { goto } from '$app/navigation';
 	import { ROUTES } from '$lib/constants/routes';
+	import { ChatService, MoeLayerPerfService } from '$lib/services';
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import type { ApiMoeLayerPerfMode } from '$lib/types/api';
 
 	interface Props {
 		canSend?: boolean;
@@ -25,6 +28,7 @@
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
+		moePerfModel?: string | null;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
@@ -44,6 +48,7 @@
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
+		moePerfModel = null,
 		showAddButton = true,
 		showModelSelector = true,
 		uploadedFiles = [],
@@ -84,15 +89,77 @@
 	);
 
 	let selectorModelRef: ChatFormActionModels | undefined = $state(undefined);
+	let moePerfMode = $state<ApiMoeLayerPerfMode>('full');
+	let moePerfModeLoading = $state(false);
+	let moePerfModeError = $state<string | null>(null);
+	let lastMoePerfTarget = $state<string | null>(null);
+
+	let isRouter = $derived(isRouterMode());
+	let moePerfTargetModel = $derived(isRouter ? moePerfModel : null);
+	let moePerfTargetKey = $derived(`${isRouter ? 'router' : 'model'}:${moePerfTargetModel ?? ''}`);
 
 	export function openModelSelector() {
 		selectorModelRef?.open();
 	}
+
 	// the streaming assistant message carries both the completion id and the model that
 	// produced it, targeting reasoning control from the same source keeps them consistent
 	let activeMessage = $derived(
 		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
+
+	function modeFromResponse(data: { enabled: boolean; mode?: ApiMoeLayerPerfMode }): ApiMoeLayerPerfMode {
+		return data.mode ?? (data.enabled ? 'full' : 'off');
+	}
+
+	async function refreshMoePerfMode() {
+		if (isRouter && !moePerfTargetModel) {
+			return;
+		}
+
+		moePerfModeLoading = true;
+		try {
+			const data = await MoeLayerPerfService.get(moePerfTargetModel);
+			moePerfMode = modeFromResponse(data);
+			moePerfModeError = null;
+		} catch (cause) {
+			moePerfModeError =
+				cause instanceof Error ? cause.message : 'Failed to load MoE perf mode';
+		} finally {
+			moePerfModeLoading = false;
+		}
+	}
+
+	async function handleMoePerfModeChange(event: Event) {
+		const select = event.currentTarget as HTMLSelectElement;
+		const nextMode = select.value as ApiMoeLayerPerfMode;
+		const previousMode = moePerfMode;
+
+		moePerfMode = nextMode;
+		moePerfModeLoading = true;
+
+		try {
+			const data = await MoeLayerPerfService.setMode(nextMode, moePerfTargetModel);
+			moePerfMode = modeFromResponse(data);
+			moePerfModeError = null;
+		} catch (cause) {
+			moePerfMode = previousMode;
+			select.value = previousMode;
+			moePerfModeError =
+				cause instanceof Error ? cause.message : 'Failed to update MoE perf mode';
+		} finally {
+			moePerfModeLoading = false;
+		}
+	}
+
+	$effect(() => {
+		if (lastMoePerfTarget === moePerfTargetKey) {
+			return;
+		}
+
+		lastMoePerfTarget = moePerfTargetKey;
+		void refreshMoePerfMode();
+	});
 </script>
 
 <div
@@ -114,6 +181,37 @@
 				{onMcpResourcesClick}
 				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
 			/>
+
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<Button
+						href={ROUTES.MOE_LAYER_PERF}
+						variant="ghost"
+						size="icon"
+						class="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+					>
+						<Activity class="h-4 w-4" />
+						<span class="sr-only">MoE layer performance</span>
+					</Button>
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>MoE layer performance</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+
+			<select
+				value={moePerfMode}
+				disabled={disabled || moePerfModeLoading || (isRouter && !moePerfTargetModel)}
+				onchange={handleMoePerfModeChange}
+				class="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="MoE performance mode"
+				title={moePerfModeError ?? 'MoE performance counters'}
+			>
+				<option value="full">Full</option>
+				<option value="update">Update</option>
+				<option value="off">Off</option>
+			</select>
 		</div>
 	{/if}
 

@@ -544,6 +544,7 @@
 				{isLoading}
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
+				moePerfModel={activeModelId}
 				{showAddButton}
 				{showModelSelector}
 				{uploadedFiles}
