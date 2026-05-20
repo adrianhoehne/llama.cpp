@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include "llama-moe-hot-cache.h"
+
 void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer);
@@ -290,21 +292,25 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
             cb(logits, "ffn_moe_logits", il);
 
-            cur_moe = build_moe_ffn(cur_moe,
-                    nullptr, // gate_inp
-                    model.layers[il].ffn_up_exps,
-                    model.layers[il].ffn_gate_exps,
-                    model.layers[il].ffn_down_exps,
-                    nullptr, // exp_probs_b (not used for gemma4)
-                    n_expert, n_expert_used,
-                    LLM_FFN_GELU, true,
-                    1.0f,
-                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il, logits,
-                    model.layers[il].ffn_gate_up_exps,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+            if (llama_moe_hot_cache_layer_active(model, il)) {
+                cur_moe = build_layer_moe_hot(cur_moe, logits, il);
+            } else {
+                cur_moe = build_moe_ffn(cur_moe,
+                        nullptr, // gate_inp
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        nullptr, // exp_probs_b (not used for gemma4)
+                        n_expert, n_expert_used,
+                        LLM_FFN_GELU, true,
+                        1.0f,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il, logits,
+                        model.layers[il].ffn_gate_up_exps,
+                        model.layers[il].ffn_up_exps_s,
+                        model.layers[il].ffn_gate_exps_s,
+                        model.layers[il].ffn_down_exps_s);
+            }
             cur_moe = build_norm(cur_moe,
                     model.layers[il].ffn_post_norm_2, nullptr,
                     LLM_NORM_RMS, il);
