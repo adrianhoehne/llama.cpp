@@ -22,7 +22,10 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(src0->nb[0] % sizeof(float) == 0);
+    GGML_ASSERT(src0->nb[1] % sizeof(float) == 0);
+    GGML_ASSERT(src0->nb[2] % sizeof(float) == 0);
+    GGML_ASSERT(src0->nb[3] % sizeof(float) == 0);
 
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
@@ -31,13 +34,27 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const int id  = ggml_cuda_get_device();
     const int nsm = ggml_cuda_info().devices[id].nsm;
+    const bool contiguous = ggml_is_contiguous(src0);
+
     if ((nrows / nsm) < 2) {
         // Increase num threads to 512 for small nrows to better hide the latency
         const dim3 block_dims(512, 1, 1);
-        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+        if (contiguous) {
+            reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+        } else {
+            reduce_rows_f32_strided</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(
+                    src0_d, dst_d, ncols, src0->ne[1], src0->ne[2],
+                    src0->nb[0]/sizeof(float), src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float), src0->nb[3]/sizeof(float));
+        }
     } else {
         // Enough active SMs to hide latency, use smaller blocks to allow better scheduling
         const dim3 block_dims(ncols < 1024 ? 32 : 128, 1, 1);
-        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+        if (contiguous) {
+            reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+        } else {
+            reduce_rows_f32_strided</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(
+                    src0_d, dst_d, ncols, src0->ne[1], src0->ne[2],
+                    src0->nb[0]/sizeof(float), src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float), src0->nb[3]/sizeof(float));
+        }
     }
 }

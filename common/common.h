@@ -555,6 +555,13 @@ struct common_params {
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
 
+    int64_t moe_hot_cache_max_mib = 0;   // max MiB for experimental MoE hot expert cache, 0 = disabled, -1 = auto
+    uint64_t moe_hot_cache_auto_reserve_mib = 1024; // MiB kept free when auto-sizing the MoE hot expert cache
+    std::string moe_hot_cache;           // path to /moe-layer-perf JSON
+    float moe_hot_cache_update_rate = 0.0f; // fraction of hot-cache entries to update after each completed server run
+    float moe_hot_cache_layer_curve = 0.5f; // MoE hot-cache layer-pressure weighting curve, 0 = flat, 1 = aggressive
+    std::string moe_hot_cache_weighting; // MoE hot-cache weighting mode
+
     bool single_turn       = false; // single turn chat conversation
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
@@ -594,6 +601,8 @@ struct common_params {
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
     int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    bool    log_tg_progress     = false; // periodically log token generation throughput per slot
+    std::string moe_layer_perf_out;       // write /moe-layer-perf JSON to this file after requests
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT

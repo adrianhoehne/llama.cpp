@@ -9,6 +9,8 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-moe-hot-cache.h"
+#include "llama-moe-hot-cache-perf.h"
 #include "llama-ext.h"
 #include "llama.h"
 
@@ -17,6 +19,12 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <vector>
+#include <string>
+#include <cstdlib>
+#include <cstdint>
+#include <algorithm>
+
 
 //
 // llama_context
@@ -304,6 +312,8 @@ llama_context::llama_context(
 
         memory.reset(model.create_memory(params_mem, cparams));
     }
+
+    llama_moe_hot_cache_init_after_context_memory(model);
 
     // init backends
     if (!hparams.vocab_only) {
@@ -684,6 +694,7 @@ void llama_context::synchronize() {
     n_queued_tokens = 0;
     t_compute_start_us = 0;
 }
+
 
 const llama_model & llama_context::get_model() const {
     return model;
@@ -2193,7 +2204,13 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
-        return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        uint32_t res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        // Qwen35Moe hot path (MoE expert cache) adds extra graph nodes per layer
+        // for worklist construction plus gather/scatter around the compact hot/cold branches.
+        if (model.arch == LLM_ARCH_QWEN35MOE) {
+            res += 40u * model.hparams.n_layer;
+        }
+        return res;
     }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     for (const auto & lora : model.loras) {
@@ -2310,9 +2327,18 @@ ggml_status llama_context::graph_compute(
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
 
-    auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+    ggml_status status;
+    const bool moe_layer_perf_enabled = llama_moe_layer_perf_graph_compute_begin(this, sched.get());
+    if (moe_layer_perf_enabled) {
+        status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+        ggml_backend_sched_synchronize(sched.get());
+        llama_moe_layer_perf_graph_compute_end(this, sched.get());
+    } else {
+        status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+    }
+
     if (status != GGML_STATUS_SUCCESS) {
-        LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
+        LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
     }
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));

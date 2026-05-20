@@ -14,13 +14,17 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "src/llama-moe-hot-cache.h"
+#include "src/llama-moe-hot-cache-perf.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <filesystem>
+#include <mutex>
 #include <utility>
 
 // fix problem with std::min and std::max
@@ -429,7 +433,11 @@ struct server_slot {
         return stop_pos;
     }
 
-    void print_timings_tg() {
+    void print_timings_tg(bool enabled) {
+        if (!enabled) {
+            return;
+        }
+
         if (n_decoded < 100) {
             return;
         }
@@ -620,6 +628,7 @@ struct server_metrics {
 
 struct server_context_impl {
     friend struct server_context;
+    friend struct server_routes;
 
 public:
     // only use these pointers outside of this class:
@@ -653,6 +662,10 @@ private:
     // use server_context methods instead
 
     common_params params_base;
+
+    bool moe_hot_cache_update_pending = false;
+    mutable std::mutex moe_layer_perf_snapshot_mutex;
+    mutable std::string last_moe_layer_perf_json;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
@@ -1708,6 +1721,8 @@ private:
         res->generation_params = slot.task->params; // copy the parameters
 
         queue_results.send(std::move(res));
+        write_moe_layer_perf_file();
+        moe_hot_cache_update_pending = true;
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
@@ -2189,6 +2204,7 @@ private:
             }
 
             if (all_idle) {
+                update_moe_hot_cache_if_pending();
                 SRV_INF("%s", "all slots are idle\n");
 
                 return;
@@ -3180,7 +3196,7 @@ private:
                     continue;
                 }
 
-                slot.print_timings_tg();
+                slot.print_timings_tg(params_base.log_tg_progress);
             }
 
             // speculative decoding - main model sample and accept
@@ -3295,7 +3311,7 @@ private:
                     }
                 }
 
-                slot.print_timings_tg();
+                slot.print_timings_tg(params_base.log_tg_progress);
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
             }
@@ -3310,6 +3326,105 @@ private:
 
     server_response_reader get_response_reader() {
         return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
+    }
+
+    void remember_moe_layer_perf_json(const std::string & perf_json) const {
+        std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+        last_moe_layer_perf_json = perf_json;
+    }
+
+    void forget_moe_layer_perf_json() const {
+        std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+        last_moe_layer_perf_json.clear();
+    }
+
+    bool has_remembered_moe_layer_perf_json() const {
+        std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+        return !last_moe_layer_perf_json.empty();
+    }
+
+    std::string get_moe_layer_perf_json() const {
+        if (llama_moe_layer_perf_has_data()) {
+            const std::string perf_json = llama_moe_layer_perf_json(nullptr);
+            remember_moe_layer_perf_json(perf_json);
+            return perf_json;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(moe_layer_perf_snapshot_mutex);
+            if (!last_moe_layer_perf_json.empty()) {
+                return last_moe_layer_perf_json;
+            }
+        }
+
+        return llama_moe_layer_perf_json(nullptr);
+    }
+
+    void write_moe_layer_perf_file() const {
+        if (params_base.moe_layer_perf_out.empty()) {
+            return;
+        }
+
+        if (!llama_moe_layer_perf_has_data() && !has_remembered_moe_layer_perf_json()) {
+            SRV_DBG("skipping MoE layer perf output file '%s': no MoE perf data collected\n", params_base.moe_layer_perf_out.c_str());
+            return;
+        }
+
+        const std::string perf_json = get_moe_layer_perf_json();
+
+        std::ofstream file(params_base.moe_layer_perf_out, std::ios::binary | std::ios::trunc);
+        if (!file) {
+            SRV_WRN("failed to open MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
+            return;
+        }
+
+        file << perf_json << '\n';
+        if (!file) {
+            SRV_WRN("failed to write MoE layer perf output file '%s'\n", params_base.moe_layer_perf_out.c_str());
+        }
+    }
+
+    void set_moe_layer_perf_mode(llama_moe_layer_perf_mode mode) const {
+        llama_moe_layer_perf_set_mode(mode);
+        forget_moe_layer_perf_json();
+    }
+
+    void update_moe_hot_cache_if_pending() {
+        if (!moe_hot_cache_update_pending) {
+            return;
+        }
+
+        moe_hot_cache_update_pending = false;
+
+        if (model_tgt == nullptr) {
+            return;
+        }
+
+        const std::string perf_json = get_moe_layer_perf_json();
+        const auto stats = llama_moe_hot_cache_update_from_perf_json(
+                *model_tgt,
+                perf_json,
+                params_base.moe_hot_cache_update_rate);
+
+        if (!stats.active || stats.hot_slots + stats.cold_slots == 0) {
+            return;
+        }
+
+        SRV_INF("MoE hot-cache hit rate: %.2f%% (%" PRIu64 "/%" PRIu64 " slots)\n",
+                100.0*stats.hit_rate,
+                stats.hot_slots,
+                stats.hot_slots + stats.cold_slots);
+
+        if (params_base.moe_hot_cache_update_rate > 0.0f) {
+            SRV_INF("MoE hot-cache update: rate = %.2f%%, exchanged = %zu/%zu candidates, budget = %zu/%zu hot experts, layers changed = %zu\n",
+                    100.0*stats.update_rate,
+                    stats.exchanged,
+                    stats.candidates,
+                    stats.max_exchange,
+                    stats.hot_experts,
+                    stats.layers_changed);
+            llama_moe_layer_perf_reset();
+        }
     }
 };
 
@@ -3331,6 +3446,14 @@ void server_context::start_loop() {
 
 void server_context::terminate() {
     impl->queue_tasks.terminate();
+}
+
+void server_context::write_moe_layer_perf_file() const {
+    impl->write_moe_layer_perf_file();
+}
+
+void server_context::set_moe_layer_perf_mode(llama_moe_layer_perf_mode mode) const {
+    impl->set_moe_layer_perf_mode(mode);
 }
 
 llama_context * server_context::get_llama_context() const {
@@ -3664,6 +3787,33 @@ void server_routes::init_routes() {
         GGML_UNUSED(ctx_server);
 
         res->ok({{"status", "ok"}});
+        return res;
+    };
+
+    this->get_moe_layer_perf = [this](const server_http_req &) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+
+        res->status = 200;
+        res->data = ctx_server.get_moe_layer_perf_json();
+
+        return res;
+    };
+
+    this->post_moe_layer_perf = [this](const server_http_req & req) -> server_http_res_ptr {
+        const json body = json::parse(req.body);
+        const std::string mode_value = json_value(body, "mode", std::string());
+
+        llama_moe_layer_perf_mode mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
+        if (!llama_moe_layer_perf_parse_mode(mode_value.c_str(), mode)) {
+            throw std::invalid_argument("invalid MoE layer perf mode; expected one of: full, update, off");
+        }
+
+        ctx_server.set_moe_layer_perf_mode(mode);
+        SRV_INF("MoE layer perf mode set to %s\n", llama_moe_layer_perf_mode_name(mode));
+
+        auto res = std::make_unique<server_http_res>();
+        res->status = 200;
+        res->data = ctx_server.get_moe_layer_perf_json();
         return res;
     };
 
