@@ -193,6 +193,7 @@ add_library(ggml-base
             ../include/ggml.h
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
+            ../include/ggml-backend-moe-hot-cache.h
             ../include/ggml-cpp.h
             ../include/ggml-opt.h
             ../include/gguf.h

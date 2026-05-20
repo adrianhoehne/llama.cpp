@@ -9,6 +9,7 @@
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
+#include "llama-moe-hot-cache.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -331,6 +332,8 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             return {-2, nullptr};
         }
 
+        llama_moe_hot_cache_init_after_model_load(*model, params);
+
         return {0, model_ptr.release()};
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
@@ -578,4 +581,3 @@ const char * llama_print_system_info(void) {
 
     return s.c_str();
 }
-

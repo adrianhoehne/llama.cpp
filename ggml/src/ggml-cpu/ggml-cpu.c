@@ -1465,6 +1465,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
     const struct mmid_row_mapping * matrix_rows,
     const size_t row_size,
     const bool src1_cont,
+    const bool shared_input_row,
     const void * wdata) {
 
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -1497,10 +1498,11 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
                 //       the original src1 data pointer, so we should index using the indices directly
                 // TODO: this is a bit of a hack, we should probably have a better way to handle this
+                const int64_t src1_i12 = shared_input_row ? 0 : i12;
                 const char * src1_col = (const char *) wdata +
                     (src1_cont || src1->type != vec_dot_type
-                    ? (i11      + i12*ne11)*row_size
-                    : (i11*nb11 + i12*nb12));
+                    ? (i11      + src1_i12*ne11)*row_size
+                    : (i11*nb11 + src1_i12*nb12));
 
                 float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
 
@@ -1555,8 +1557,20 @@ static void ggml_compute_forward_mul_mat_id(
     // row groups
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
+    int32_t flags = 0;
+    memcpy(&flags, dst->op_params, sizeof(flags));
+    const bool allow_negative_ids              = (flags & (1 << 1)) != 0;
+    const bool skip_negative_id_output_zeroing = (flags & (1 << 2)) != 0;
+    const bool shared_input_row                = (flags & (1 << 3)) != 0;
+
+    GGML_ASSERT(!shared_input_row || (allow_negative_ids && n_ids == 1 && ne13 == 1));
 
     void * wdata_cur = params->wdata;
+
+    const bool convert_valid_rows_only =
+        src1->type != vec_dot_type && allow_negative_ids && n_ids == 1 && ne13 == 1;
+    const bool zero_invalid_rows_only =
+        allow_negative_ids && !skip_negative_id_output_zeroing && n_ids == 1 && ne13 == 1;
 
     if (src1->type != vec_dot_type) {
         incr_ptr_aligned(&wdata_cur, ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
@@ -1568,12 +1582,18 @@ static void ggml_compute_forward_mul_mat_id(
     struct mmid_row_mapping * matrix_rows = // [n_as][ids->ne[0]*ids->ne[1]]
         incr_ptr_aligned(&wdata_cur, n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping), sizeof(int64_t));
 
+    int64_t * active_matrix_count = // [1]
+        incr_ptr_aligned(&wdata_cur, sizeof(int64_t), sizeof(int64_t));
+
+    int64_t * active_matrices = // [n_as]
+        incr_ptr_aligned(&wdata_cur, n_as*sizeof(int64_t), sizeof(int64_t));
+
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
         incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
 
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
 
-    if (src1->type != vec_dot_type) {
+    if (src1->type != vec_dot_type && !convert_valid_rows_only) {
         char * wdata = params->wdata;
 
         const size_t nbw0 = ggml_type_size(vec_dot_type);
@@ -1611,15 +1631,29 @@ static void ggml_compute_forward_mul_mat_id(
     }
 
     if (ith == 0) {
+        if (allow_negative_ids && !skip_negative_id_output_zeroing && !zero_invalid_rows_only) {
+            memset(dst->data, 0, ggml_nbytes(dst));
+        }
+
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
+        *active_matrix_count = 0;
 
         // group rows by src0 matrix
         for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
             for (int id = 0; id < n_ids; ++id) {
                 const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
 
+                if (allow_negative_ids && i02 < 0) {
+                    continue;
+                }
+
                 assert(i02 >= 0 && i02 < n_as);
+
+                if (matrix_row_counts[i02] == 0) {
+                    active_matrices[*active_matrix_count] = i02;
+                    *active_matrix_count += 1;
+                }
 
                 MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
                 matrix_row_counts[i02] += 1;
@@ -1627,20 +1661,81 @@ static void ggml_compute_forward_mul_mat_id(
         }
     }
 
+    if (zero_invalid_rows_only) {
+        const int64_t nr = ids->ne[1];
+        const int64_t dr = (nr + nth - 1)/nth;
+        const int64_t ir0 = dr*ith;
+        const int64_t ir1 = MIN(ir0 + dr, nr);
+
+        for (int64_t i = ir0; i < ir1; ++i) {
+            const int32_t id = *(const int32_t *) ((const char *) ids->data + i*ids->nb[1]);
+            if (id < 0) {
+                memset((char *) dst->data + i*nb2, 0, ne0*sizeof(float));
+            }
+        }
+    }
+
+    if (convert_valid_rows_only) {
+        ggml_barrier(params->threadpool);
+
+        char * wdata = params->wdata;
+
+        const size_t nbw0 = ggml_type_size(vec_dot_type);
+        const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
+        const size_t nbw2 = nbw1*ne11;
+
+        assert(params->wsize >= ne13*nbw2*ne12);
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+
+        const size_t bs = ggml_blck_size(vec_dot_type);
+        const int64_t ne10_block_start = (ith * ne10/bs) / nth;
+        const int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
+
+        if (shared_input_row) {
+            if (*active_matrix_count > 0) {
+                from_float((float *)((char *) src1->data + ne10_block_start*bs*nb10),
+                           (void *)               (wdata + ne10_block_start*nbw0),
+                           (ne10_block_end - ne10_block_start) * bs);
+            }
+        } else {
+            for (int64_t ia = 0; ia < *active_matrix_count; ++ia) {
+                const int64_t cur_a = active_matrices[ia];
+                const int64_t cne1 = matrix_row_counts[cur_a];
+
+                for (int64_t ir1 = 0; ir1 < cne1; ++ir1) {
+                    const struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
+                    const int64_t i11 = row_mapping.i1 % ne11;
+                    const int64_t i12 = row_mapping.i2;
+
+                    from_float((float *)((char *) src1->data + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
+                               (void *)               (wdata + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
+                               (ne10_block_end - ne10_block_start) * bs);
+                }
+            }
+        }
+    }
+
     // reset current_chunk
-    for (int cur_a = ith; cur_a < n_as; cur_a += nth) {
-        atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + cur_a);
-        *current_chunk_ctr = nth;
+    if (convert_valid_rows_only) {
+        for (int64_t ia = ith; ia < *active_matrix_count; ia += nth) {
+            const int64_t cur_a = active_matrices[ia];
+            atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + cur_a);
+            *current_chunk_ctr = nth;
+        }
+    } else {
+        for (int cur_a = ith; cur_a < n_as; cur_a += nth) {
+            atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + cur_a);
+            *current_chunk_ctr = nth;
+        }
     }
 
     ggml_barrier(params->threadpool);
 
-    for (int cur_a = 0; cur_a < n_as; ++cur_a) {
+    for (int64_t ia = 0; ia < *active_matrix_count; ++ia) {
+        const int64_t cur_a = active_matrices[ia];
         const int64_t cne1 = matrix_row_counts[cur_a];
 
-        if (cne1 == 0) {
-            continue;
-        }
+        GGML_ASSERT(cne1 > 0);
 
         const char * src0_cur = (const char *) src0->data + cur_a * nb02;
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
@@ -1685,7 +1780,7 @@ static void ggml_compute_forward_mul_mat_id(
             ggml_compute_forward_mul_mat_id_one_chunk(
                 dst, src0, src1, ids, cur_a,
                 ir0_start, ir0_end, ir1_start, ir1_end,
-                src0_cur, matrix_rows, row_size, src1_cont, wdata
+                src0_cur, matrix_rows, row_size, src1_cont, shared_input_row, wdata
             );
 
             if (nth >= nchunk0 * nchunk1) {
@@ -2222,11 +2317,21 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SIN:
         case GGML_OP_COS:
         case GGML_OP_SUM:
-        case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
             {
                 n_tasks = 1;
+            } break;
+        case GGML_OP_SUM_ROWS:
+            {
+                const struct ggml_tensor * src0 = node->src[0];
+                const bool can_parallelize =
+                    src0->type == GGML_TYPE_F32 &&
+                    src0->nb[1] == (int64_t) sizeof(float) &&
+                    node->nb[1] == (int64_t) sizeof(float);
+                const int64_t work = ggml_nelements(src0);
+
+                n_tasks = can_parallelize && work >= 32768 ? n_threads : 1;
             } break;
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_SOLVE_TRI:
@@ -2840,6 +2945,10 @@ struct ggml_cplan ggml_graph_plan(
                         cur += n_as * sizeof(int64_t) + sizeof(int64_t);
                         // matrix_rows
                         cur += n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping) + sizeof(int64_t);
+                        // active_matrix_count
+                        cur += sizeof(int64_t) + sizeof(int64_t);
+                        // active_matrices
+                        cur += n_as*sizeof(int64_t) + sizeof(int64_t);
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
                     } break;

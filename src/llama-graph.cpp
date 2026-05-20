@@ -14,6 +14,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -917,7 +918,11 @@ void llm_graph_result::reset() {
 
     inputs.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    // Add safety margin for internal ggml bookkeeping beyond ggml_tensor_overhead()
+    // (hash map entries, linked-list pointers, tensor metadata padding, etc.)
+    static constexpr size_t EXTRA_OVERHEAD_PER_NODE = 128;
+    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + EXTRA_OVERHEAD_PER_NODE*max_nodes
+                          + ggml_graph_overhead_custom(max_nodes, false));
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),

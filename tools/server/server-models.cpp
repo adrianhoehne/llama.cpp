@@ -1455,6 +1455,93 @@ static bool is_autoload(const common_params & params, const server_http_req & re
 }
 
 void server_models_routes::init_routes() {
+    this->get_moe_layer_perf = [this](const server_http_req & req) {
+        std::string name = req.get_param("model");
+        auto error_res = std::make_unique<server_http_res>();
+
+        if (!name.empty()) {
+            bool autoload = is_autoload(params, req);
+            if (!router_validate_model(name, models, autoload, error_res)) {
+                return error_res;
+            }
+            return models.proxy_request(req, "GET", name, false);
+        }
+
+        std::vector<server_model_meta> all_models = models.get_all_meta();
+
+        std::string selected_name;
+        size_t selected_count = 0;
+
+        for (const auto & meta : all_models) {
+            if (meta.is_running()) {
+                selected_name = meta.name;
+                selected_count++;
+            }
+        }
+
+        if (selected_count == 0) {
+            res_err(error_res, format_error_response(
+                "no running model found for /moe-layer-perf",
+                ERROR_TYPE_INVALID_REQUEST));
+            return error_res;
+        }
+
+        if (selected_count > 1) {
+            res_err(error_res, format_error_response(
+                "multiple running models found for /moe-layer-perf; pass ?model=<name>",
+                ERROR_TYPE_INVALID_REQUEST));
+            return error_res;
+        }
+
+        return models.proxy_request(req, "GET", selected_name, false);
+    };
+
+    this->post_moe_layer_perf = [this](const server_http_req & req) {
+        std::string name = req.get_param("model");
+        auto error_res = std::make_unique<server_http_res>();
+
+        if (name.empty() && !req.body.empty()) {
+            const json body = json::parse(req.body);
+            name = json_value(body, "model", std::string());
+        }
+
+        if (!name.empty()) {
+            bool autoload = is_autoload(params, req);
+            if (!router_validate_model(name, models, autoload, error_res)) {
+                return error_res;
+            }
+            return models.proxy_request(req, "POST", name, false);
+        }
+
+        std::vector<server_model_meta> all_models = models.get_all_meta();
+
+        std::string selected_name;
+        size_t selected_count = 0;
+
+        for (const auto & meta : all_models) {
+            if (meta.is_running()) {
+                selected_name = meta.name;
+                selected_count++;
+            }
+        }
+
+        if (selected_count == 0) {
+            res_err(error_res, format_error_response(
+                "no running model found for /moe-layer-perf",
+                ERROR_TYPE_INVALID_REQUEST));
+            return error_res;
+        }
+
+        if (selected_count > 1) {
+            res_err(error_res, format_error_response(
+                "multiple running models found for /moe-layer-perf; pass ?model=<name>",
+                ERROR_TYPE_INVALID_REQUEST));
+            return error_res;
+        }
+
+        return models.proxy_request(req, "POST", selected_name, false);
+    };
+
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
         if (name.empty()) {
