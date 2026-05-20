@@ -1535,6 +1535,20 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
+    mparams.moe_hot_cache_max_mib = params.moe_hot_cache_max_mib;
+    mparams.moe_hot_cache_path    = params.moe_hot_cache.empty() ? nullptr : params.moe_hot_cache.c_str();
+    mparams.moe_hot_cache_auto_n_ctx = params.n_ctx > 0 ? uint32_t(params.n_ctx) : 0;
+    mparams.moe_hot_cache_auto_n_seq_max = params.n_parallel > 0 ? uint32_t(params.n_parallel) : 1;
+    mparams.moe_hot_cache_auto_n_ubatch = params.n_ubatch > 0 ? uint32_t(params.n_ubatch) : uint32_t(params.n_batch);
+    mparams.moe_hot_cache_auto_reserve_mib = params.moe_hot_cache_auto_reserve_mib;
+    mparams.moe_hot_cache_auto_type_k = params.cache_type_k;
+    mparams.moe_hot_cache_auto_type_v = params.cache_type_v;
+    mparams.moe_hot_cache_auto_flash_attn_type = params.flash_attn_type;
+    mparams.moe_hot_cache_auto_offload_kqv = !params.no_kv_offload;
+    mparams.moe_hot_cache_auto_swa_full = params.swa_full;
+    mparams.moe_hot_cache_auto_kv_unified = params.kv_unified;
+    mparams.moe_hot_cache_layer_curve = params.moe_hot_cache_layer_curve;
+    mparams.moe_hot_cache_weighting = params.moe_hot_cache_weighting.empty() ? nullptr : params.moe_hot_cache_weighting.c_str();
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
