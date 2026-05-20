@@ -26,6 +26,8 @@
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <list>
 #include <regex>
@@ -54,6 +56,32 @@ extern const char * LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
+
+static void llama_moe_hot_cache_set_layer_curve_env(float value) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.6g", (double) value);
+#if defined(_WIN32)
+    _putenv_s("LLAMA_MOE_HOT_CACHE_LAYER_CURVE", buf);
+#else
+    setenv("LLAMA_MOE_HOT_CACHE_LAYER_CURVE", buf, 1);
+#endif
+}
+
+static bool llama_moe_hot_cache_weighting_valid(const std::string & value) {
+    return value == "pressure" || value == "smooth" || value == "smooth-pressure" ||
+           value == "capped" || value == "capped-pressure" || value == "soft-pressure" ||
+           value == "time" || value == "moe-time" || value == "decode-time" ||
+           value == "balanced" || value == "rank" || value == "layer-rank" ||
+           value == "flat";
+}
+
+static void llama_moe_hot_cache_set_weighting_env(const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s("LLAMA_MOE_HOT_CACHE_WEIGHTING", value.c_str());
+#else
+    setenv("LLAMA_MOE_HOT_CACHE_WEIGHTING", value.c_str(), 1);
+#endif
+}
 
 static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
@@ -944,6 +972,22 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         if (ctx_arg.params.completion) {
             common_params_print_completion(ctx_arg);
             exit(0);
+        }
+        if (ctx_arg.params.moe_hot_cache_max_mib != 0 && ctx_arg.params.moe_hot_cache.empty()) {
+            throw std::invalid_argument("--moe-hot-cache is required when --moe-hot-cache-max-mib is not 0");
+        }
+        if (ctx_arg.params.moe_hot_cache_max_mib < -1) {
+            throw std::invalid_argument("--moe-hot-cache-max-mib must be -1 or greater");
+        }
+        if (ctx_arg.params.moe_hot_cache_max_mib == -1 && ctx_arg.params.n_ctx <= 0) {
+            throw std::invalid_argument("--moe-hot-cache-max-mib -1 requires an explicit --ctx-size");
+        }
+        if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f && ctx_arg.params.moe_hot_cache_max_mib == 0) {
+            throw std::invalid_argument("--moe-hot-cache-update-rate requires --moe-hot-cache-max-mib");
+        }
+        if (!ctx_arg.params.moe_layer_perf_out.empty()) {
+            ctx_arg.params.no_perf = false;
+            ctx_arg.params.sampling.no_perf = false;
         }
         params.lr.init();
     } catch (const std::invalid_argument & ex) {
@@ -2350,6 +2394,69 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-max-mib"}, "N",
+        "experimental: max MiB for static MoE hot expert cache (0 = disabled, -1 = auto from remaining VRAM after model and KV cache allocation)",
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < -1) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_hot_cache_max_mib = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_MAX_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-auto-reserve-mib"}, "N",
+        string_format("experimental: MiB to keep free when --moe-hot-cache-max-mib -1 auto-sizes the hot cache (default: %zu)", (size_t) params.moe_hot_cache_auto_reserve_mib),
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_hot_cache_auto_reserve_mib = uint64_t(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_AUTO_RESERVE_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache"}, "FNAME",
+        "experimental: path to /moe-layer-perf JSON used by --moe-hot-cache-max-mib",
+        [](common_params & params, const std::string & value) {
+            params.moe_hot_cache = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-update-rate"}, "N",
+        string_format("experimental: fraction of hot-cache entries to replace after each completed server run, 0.0-1.0 (default: %.2f)", params.moe_hot_cache_update_rate),
+        [](common_params & params, const std::string & value_str) {
+            const float value = std::stof(value_str);
+            if (value < 0.0f || value > 1.0f) {
+                throw std::invalid_argument("--moe-hot-cache-update-rate must be between 0.0 and 1.0");
+            }
+            params.moe_hot_cache_update_rate = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_HOT_CACHE_UPDATE_RATE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-layer-curve", "--moe-hot-cache-qwen-layer-curve"}, "N",
+        string_format("experimental: MoE hot-cache layer-pressure weighting curve, 0.0 = no layer-pressure weighting, 1.0 = aggressive wait-layer weighting (default: %.2f)", params.moe_hot_cache_layer_curve),
+        [](common_params & params, const std::string & value_str) {
+            const float value = std::stof(value_str);
+            if (value < 0.0f || value > 1.0f) {
+                throw std::invalid_argument("--moe-hot-cache-layer-curve must be between 0.0 and 1.0");
+            }
+            params.moe_hot_cache_layer_curve = value;
+            llama_moe_hot_cache_set_layer_curve_env(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_LAYER_CURVE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-weighting", "--moe-hot-cache-qwen-weighting"}, "MODE",
+        "experimental: MoE hot-cache weighting mode: flat, pressure, smooth, time, or balanced (default: flat)",
+        [](common_params & params, const std::string & value) {
+            if (!llama_moe_hot_cache_weighting_valid(value)) {
+                throw std::invalid_argument("--moe-hot-cache-weighting must be one of: pressure, smooth, time, balanced, flat");
+            }
+            params.moe_hot_cache_weighting = value;
+            llama_moe_hot_cache_set_weighting_env(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
@@ -3060,6 +3167,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE"));
+    add_opt(common_arg(
+        {"--moe-layer-perf-out"}, "FNAME",
+        "experimental: write /moe-layer-perf JSON to this file after each completed request; enables perf for hot-cache profiling",
+        [](common_params & params, const std::string & value) {
+            params.moe_layer_perf_out = value;
+            params.no_perf = false;
+            params.sampling.no_perf = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_LAYER_PERF_OUT"));
+    add_opt(common_arg(
+        {"--log-tg-progress"},
+        {"--no-log-tg-progress"},
+        string_format("periodically log per-slot token generation throughput while requests are running (default: %s)",
+            params.log_tg_progress ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.log_tg_progress = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_LOG_TG_PROGRESS"));
     add_opt(common_arg(
         {"--metrics"},
         string_format("enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled"),
