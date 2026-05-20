@@ -4,6 +4,8 @@
 #include "server-task.h"
 #include "server-queue.h"
 
+#include "src/llama-moe-hot-cache-perf.h"
+
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
@@ -68,6 +70,12 @@ struct server_context {
     // terminate main loop (will unblock start_loop)
     void terminate();
 
+    // write current MoE layer performance JSON to the configured output file, if enabled
+    void write_moe_layer_perf_file() const;
+
+    // change MoE layer performance collection mode at runtime
+    void set_moe_layer_perf_mode(llama_moe_layer_perf_mode mode) const;
+
     // get the underlaying llama_context, can return nullptr if sleeping
     // not thread-safe, should only be used from the main thread
     llama_context * get_llama_context() const;
@@ -102,6 +110,8 @@ struct server_routes {
     // they won't be called until ctx_http.is_ready is set to true
     server_http_context::handler_t get_health;
     server_http_context::handler_t get_metrics;
+    server_http_context::handler_t get_moe_layer_perf;
+    server_http_context::handler_t post_moe_layer_perf;
     server_http_context::handler_t get_slots;
     server_http_context::handler_t post_slots;
     server_http_context::handler_t get_props;

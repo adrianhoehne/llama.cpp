@@ -8,11 +8,13 @@
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
+#include "src/llama-moe-hot-cache-perf.h"
 #include "llama.h"
 #include "log.h"
 
 #include <atomic>
 #include <clocale>
+#include <cstdlib>
 #include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
@@ -86,6 +88,8 @@ int llama_server(int argc, char ** argv) {
         return 1;
     }
 
+    llama_moe_layer_perf_set_initial_mode(params.no_perf);
+
     llama_backend_init();
     llama_numa_init(params.numa);
 
@@ -145,6 +149,8 @@ int llama_server(int argc, char ** argv) {
         // proxy handlers
         // note: routes.get_health stays the same
         routes.get_metrics                 = models_routes->proxy_get;
+        routes.get_moe_layer_perf          = models_routes->get_moe_layer_perf;
+        routes.post_moe_layer_perf         = models_routes->post_moe_layer_perf;
         routes.post_props                  = models_routes->proxy_post;
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
@@ -177,6 +183,8 @@ int llama_server(int argc, char ** argv) {
     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
+    ctx_http.get ("/moe-layer-perf",           ex_wrapper(routes.get_moe_layer_perf));
+    ctx_http.post("/moe-layer-perf",           ex_wrapper(routes.post_moe_layer_perf));
     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
     ctx_http.post("/props",                    ex_wrapper(routes.post_props));
     ctx_http.get ("/models",                   ex_wrapper(routes.get_models)); // public endpoint (no API key check)
@@ -272,6 +280,7 @@ int llama_server(int argc, char ** argv) {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            ctx_server.write_moe_layer_perf_file();
             ctx_http.stop();
             ctx_server.terminate();
             llama_backend_free();
