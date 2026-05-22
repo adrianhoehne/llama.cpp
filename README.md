@@ -28,22 +28,24 @@ cmake --build build -j8
 > [!WARNING]
 > The first profiling run can take a long time because no hot cache is active yet and all MoE experts stay in RAM.
 
+MoE hot-cache mode requires `--cpu-moe`. The regular expert weights must stay on the CPU/RAM path so the hot cache can add only the selected hot experts in VRAM and merge them with the cold CPU path.
+
 First profiling run: collects expert statistics from representative prompts and writes them to `moe-hot-cache.json`.
 
 ```bash
-./build/bin/llama-server --moe-layer-perf-out moe-hot-cache.json <your normal start arguments>
+./build/bin/llama-server --cpu-moe --moe-layer-perf-out moe-hot-cache.json <your normal start arguments>
 ```
 
-Normal hot-cache start: loads the expert list, automatically fills free VRAM, and dynamically exchanges 10% of cache entries after requests. `--moe-hot-cache-auto-reserve-mib 1024` reserves 1024 MiB of VRAM for KV/compute/warmup buffers so warmup does not hit OOM.
+Normal hot-cache start: loads the expert list, keeps the cold experts on the CPU via `--cpu-moe`, automatically fills free VRAM, and dynamically exchanges 10% of cache entries after requests. `--moe-hot-cache-auto-reserve-mib 1024` reserves 1024 MiB of VRAM for KV/compute/warmup buffers so warmup does not hit OOM.
 
 ```bash
-./build/bin/llama-server --moe-hot-cache moe-hot-cache.json --moe-hot-cache-max-mib -1 --moe-hot-cache-auto-reserve-mib 1024 --moe-hot-cache-update-rate 0.10 <your normal start arguments>
+./build/bin/llama-server --cpu-moe --moe-hot-cache moe-hot-cache.json --moe-hot-cache-max-mib -1 --moe-hot-cache-auto-reserve-mib 1024 --moe-hot-cache-update-rate 0.10 <your normal start arguments>
 ```
 
 Final speed test without perf counters, for the least distorted tokens/s measurement.
 
 ```bash
-./build/bin/llama-server --no-perf --moe-hot-cache moe-hot-cache.json --moe-hot-cache-max-mib -1 --moe-hot-cache-auto-reserve-mib 1024 <your normal start arguments>
+./build/bin/llama-server --no-perf --cpu-moe --moe-hot-cache moe-hot-cache.json --moe-hot-cache-max-mib -1 --moe-hot-cache-auto-reserve-mib 1024 <your normal start arguments>
 ```
 
 ## Workflow
@@ -58,12 +60,13 @@ This builds the default llama.cpp targets, including `llama-server`, `llama-cli`
 
 ### 2. Collect a representative profile
 
-Start the server without `--moe-hot-cache-max-mib`. This is the special first-run profiling mode: `--moe-layer-perf-out` enables expert counts and writes the collected `/moe-layer-perf` JSON to the given file. This file contains the raw per-layer `experts` lists used to build the initial cache.
+Start the server with `--cpu-moe` and without `--moe-hot-cache-max-mib`. This is the special first-run profiling mode: `--moe-layer-perf-out` enables expert counts and writes the collected `/moe-layer-perf` JSON to the given file. This file contains the raw per-layer `experts` lists used to build the initial cache.
 
 `--moe-layer-perf-out` is only needed to create the initial profile. Do not use it for normal speed measurements.
 
 ```bash
 ./build/bin/llama-server \
+  --cpu-moe \
   --moe-layer-perf-out moe-hot-cache.json \
   <your normal model, device, context and server arguments>
 ```
@@ -88,12 +91,15 @@ When the server starts with `--no-perf`, the dropdown starts in `Off`. The same 
 
 ### 3. Start with the hot cache
 
-Restart the server with the collected JSON and a memory budget. Use a positive value for a fixed budget, or use `-1` to auto-size the hot cache from remaining VRAM after the model and KV cache are allocated.
+Restart the server with `--cpu-moe`, the collected JSON, and a memory budget. Use a positive value for a fixed budget, or use `-1` to auto-size the hot cache from remaining VRAM after the model and KV cache are allocated.
+
+`--cpu-moe` is required for the intended hot-cache graph path. It keeps the normal MoE expert tensors on the CPU/RAM path, while `--moe-hot-cache` adds a selected GPU-resident copy for hot experts.
 
 Hot/cold parallelization runs in auto mode by default. Set `LLAMA_MOE_HOT_CACHE_PARALLEL=0` to disable it, or `LLAMA_MOE_HOT_CACHE_PARALLEL=force` for scheduler debugging.
 
 ```bash
 ./build/bin/llama-server \
+  --cpu-moe \
   --moe-hot-cache moe-hot-cache.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
@@ -110,7 +116,7 @@ Hot/cold parallelization runs in auto mode by default. Set `LLAMA_MOE_HOT_CACHE_
 
 `--moe-hot-cache-weighting` selects the expert ranking mode. The default is `flat`. `flat` reproduces the even-distribution experiment: experts are ranked by hits inside each layer, then equal ranks are interleaved across layers, so a fixed budget is spread as evenly as possible over the observed layers. `flat` ignores the layer curve. Use `pressure` to restore the previous pressure-weighted default.
 
-Gemma 4 26B-A4B has a separate experimental weighting class. It uses the same idea of layer-pressure scoring, defaults to a curve strength of `0.5`, and can be overridden with `LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<0.0..1.0>`. Gemma4 also enables Branch-Reduce-Merge by default, which reduces hot and cold branch outputs before the final join; set `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE=0` to disable that Gemma4-specific path. Qwen does not use Branch-Reduce-Merge.
+Gemma 4 26B-A4B has a separate experimental weighting class. It uses the same idea of layer-pressure scoring, defaults to a curve strength of `0.5`, and can be overridden with `LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<0.0..1.0>`. Gemma4 currently uses direct decode merge with a compact cold prefix as the primary path. Branch-Reduce-Merge remains available as a Gemma4-specific comparison path when direct decode merge is disabled. Qwen does not use Branch-Reduce-Merge.
 
 ### 4. Measure performance
 
@@ -136,6 +142,7 @@ For final throughput measurements, disable the performance counters. With `--no-
 ```bash
 ./build/bin/llama-server \
   --no-perf \
+  --cpu-moe \
   --moe-hot-cache moe-hot-cache.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
