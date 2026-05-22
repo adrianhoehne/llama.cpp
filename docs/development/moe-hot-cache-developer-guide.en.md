@@ -1,8 +1,8 @@
 # MoE Hot Cache: Developer Guide
 
-Status: 2026-05-19
+Status: 2026-05-22
 Branch: `cached-experts-v2`  
-Current working state: `flat` is the default hot-cache weighting mode.
+Current working state: `flat` is the default hot-cache weighting mode; the hot-cache path expects `--cpu-moe`.
 
 This document is the English developer guide for the experimental MoE hot-cache work in this fork. It explains what was changed, why it was changed, how the runtime path works, which switches matter, how to interpret the performance data, and where the remaining maintenance risks are.
 
@@ -14,7 +14,7 @@ Important Gemma4 naming note: according to the local GGUF metadata, `gemma-4-E4B
 
 The change adds an optional hot cache for MoE experts.
 
-Without the hot cache, the server should behave like the previous llama.cpp path. The experimental path only becomes active when a non-zero hot-cache budget is configured:
+Without the hot cache, the server should behave like the previous llama.cpp path. The hot-cache path is designed for `--cpu-moe`: normal MoE expert tensors stay on the CPU/RAM path, while only selected hot experts are copied into the GPU cache. The experimental path only becomes active when a non-zero hot-cache budget is configured:
 
 ```text
 --moe-hot-cache-max-mib != 0
@@ -60,6 +60,10 @@ These numbers are development observations, not formal benchmarks. They are stil
 | `performance55` | about 27.76 tok/s |
 | `performance56` | about 28.09 tok/s |
 | `flat` control run with the normal `qwen36` profile, 1024 tokens | about 24.13 tok/s at 53.27 percent hit rate; practically tied with `pressure` in the same short run |
+| Qwen3.6 break-even series | standard llama in router mode was about 22.2 tok/s; hot cache crossed it at about 45.9 percent real hit rate |
+| Qwen3.6 with MTP | no benefit on the local setup; one MTP run reached about 25.33 tok/s despite about 94 percent draft acceptance, below good non-MTP hot-cache runs |
+| Gemma4 26B-A4B after decode/merge changes | more stable than the first Gemma4 hot graph; direct decode merge and cold-prefix paths gave a visible speedup without touching the Qwen path |
+| Quadro M1200 as secondary warm lane | no stable gain; the best measured setup was hot on CUDA0 plus cold on CPU, without the warm lane |
 
 The main gain did not come from one single patch. It came from the combination of:
 
@@ -72,6 +76,50 @@ The main gain did not come from one single patch. It came from the combination o
 - strict gating so the normal path remains intact.
 
 The current default for new hot-cache runs is `--moe-hot-cache-weighting flat`. This mode spreads the budget as evenly as possible across observed layers. The previous pressure-weighted mode remains available with `--moe-hot-cache-weighting pressure`.
+
+## Current Experimental Learnings
+
+### `--cpu-moe` Is Part Of The Hot-Cache Model
+
+The hot cache does not optimize an arbitrary GPU offload layout. It optimizes this specific split:
+
+```text
+hot experts  -> GPU hot cache
+cold experts -> normal CPU MoE path
+```
+
+Therefore `--cpu-moe` belongs in the learning run, the normal hot-cache start, and final `--no-perf` measurements. Without `--cpu-moe`, llama.cpp offload rules may already place experts on the GPU; then the controlled cold path expected by the hot/cold graph is missing.
+
+### Full Layer Overrides Were Not Automatically Better
+
+Several Qwen experiments placed weak or early full layers on the GPU with `override-tensor`, then filled the remaining VRAM with hot experts. This looked plausible but was worse than the pure hot-cache approach:
+
+- the hot cache shrinks because full layers consume a lot of VRAM,
+- the hit rate of the remaining layers drops,
+- fully GPU-resident layers still pass through the hot/cold graph unless a dedicated bypass exists,
+- merge and scheduler overhead therefore remain partly visible.
+
+The consequence: full-layer overrides become interesting again only when there is a separate graph path that handles fully GPU-resident MoE layers without the hot/cold split.
+
+### MTP Was Not A Default Win Locally
+
+Qwen3.6 MTP reached high draft acceptance but created additional context, graph, and compute memory pressure. In the observed runs, hot cache without MTP was faster. MTP may be worth retesting with more VRAM or a different llama.cpp MTP implementation, but it is not the recommended default for this branch. Details are in `docs/development/moe-hot-cache-mtp-learnings.en.md`.
+
+### A Second Slow GPU Is Not A Free Cold Replacement
+
+The Quadro M1200 warm-lane experiment showed that CUDA1 does not simply replace CPU work. The warm lane adds synchronization, bridge work, and transfer pressure back to CUDA0, where the final join/merge happens. The best measured Gemma4 setup for this hardware was therefore:
+
+```text
+CUDA0: hot cache
+CPU:   cold branch
+CUDA1: no warm lane
+```
+
+Detailed numbers are in `docs/development/moe-hot-cache-warm-lane-analysis.md`.
+
+### Larger RAM-Heavy Models Need Cold-Path Work
+
+In the 122B Qwen test, expert lists changed more strongly and the model lived much more in RAM. In that situation, a finer static expert list is less useful than reducing overhead and cold-path cost. For very large MoE models, the key question is not only "which experts are hot?", but "how cheap is the unavoidable CPU fraction?".
 
 ## Terminology
 
@@ -114,13 +162,14 @@ In that case:
 The new path is active when both are provided:
 
 ```text
+--cpu-moe
 --moe-hot-cache-max-mib <N>
 --moe-hot-cache <file.json>
 ```
 
 `N > 0` builds a cache with a fixed MiB budget. `N = -1` enables auto-sizing: the cache is built later, after the real KV cache allocation in `llama_context`, and uses the then remaining VRAM minus `--moe-hot-cache-auto-reserve-mib`.
 
-If a budget is set but no JSON file is provided, that is intentionally treated as an error. Otherwise the runtime would not know which experts should be cached.
+If a budget is set but no JSON file is provided, that is intentionally treated as an error. Otherwise the runtime would not know which experts should be cached. `--cpu-moe` is not a hard parser dependency, but it is a functional requirement for the intended hot/cold path.
 
 The model-specific hot path is built per layer only when:
 
@@ -133,6 +182,17 @@ returns true.
 This allows some layers to use the hot path while other layers still use the normal path.
 
 ## Runtime Switches
+
+### MoE Placement
+
+```text
+--cpu-moe
+LLAMA_ARG_CPU_MOE=true
+```
+
+Keeps all MoE expert weights on the CPU/RAM path. For the hot cache this is the recommended and practically required starting state: cold experts remain on the CPU, while hot experts are copied into the GPU hot cache as an additional copy.
+
+`--n-cpu-moe` is not equivalent. It only moves the first N MoE layers to the CPU and does not create a clean full cold path for the hot cache.
 
 ### Hot Cache Selection
 
@@ -159,17 +219,18 @@ Only relevant with `--moe-hot-cache-max-mib -1`. The value controls how many MiB
 
 ```text
 --moe-hot-cache-qwen-layer-curve <N>
-LLAMA_ARG_MOE_HOT_CACHE_QWEN_LAYER_CURVE=<N>
+LLAMA_ARG_MOE_HOT_CACHE_LAYER_CURVE=<N>
+LLAMA_MOE_HOT_CACHE_LAYER_CURVE=<N>
 ```
 
-Qwen35Moe only. Controls the layer-pressure weighting curve for hot-cache selection. `0.0` uses the normal expert ranking without layer wait time. `0.5` is the damped default. `1.0` weights waiting layers aggressively. Internally, the Qwen-specific weighting reads `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE`; the CLI/INI argument sets that value.
+Primarily Qwen35Moe. Controls the layer-pressure weighting curve for hot-cache selection. `0.0` uses the normal expert ranking without layer wait time. `0.5` is the damped default. `1.0` weights waiting layers aggressively. Internally the weighting first reads `LLAMA_MOE_HOT_CACHE_LAYER_CURVE`; older specific aliases such as `LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE` are still accepted as fallbacks.
 
 ```text
 --moe-hot-cache-weighting <MODE>
 LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING=<MODE>
 ```
 
-Controls the ranking mode for initial hot-cache selection and dynamic updates. Supported values are `flat`, `pressure`, `smooth`, `time`, and `balanced`; the default is `flat`. `flat` spreads the budget as evenly as possible over the observed layers: experts are ranked by hits inside each layer, then equal ranks are interleaved across layers. The layer curve has no effect in `flat` mode. Use `pressure` to restore the previous pressure-weighted default.
+Controls the ranking mode for initial hot-cache selection and dynamic updates. The most relevant values are `flat`, `pressure`, `smooth`, `time`, and `balanced`; additional development variants include `smooth-pressure`, `capped`, `capped-pressure`, `soft-pressure`, `moe-time`, `decode-time`, `rank`, and `layer-rank`. The default is `flat`. `flat` spreads the budget as evenly as possible over the observed layers: experts are ranked by hits inside each layer, then equal ranks are interleaved across layers. The layer curve has no effect in `flat` mode. Use `pressure` to restore the previous pressure-weighted default.
 
 ```text
 LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<N>
@@ -209,7 +270,7 @@ This avoids paying thread and scheduler overhead for tiny work packets.
 LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE=0
 ```
 
-Disables the Gemma4 Branch-Reduce-Merge path. The path is enabled by default for Gemma4: the hot and cold lanes reduce their slot outputs before the final join, so the merge has less work to do. Qwen35Moe explicitly disables this profile switch.
+Disables the Gemma4 Branch-Reduce-Merge comparison path. The primary Gemma4 decode path is now direct decode merge with a compact cold prefix. Branch-Reduce-Merge remains useful for comparison runs or when `LLAMA_MOE_HOT_CACHE_DECODE_DIRECT_MERGE=0` is set. Qwen35Moe explicitly disables this profile switch.
 
 ### Decode And Merge Optimizations
 
@@ -534,7 +595,7 @@ Responsibilities:
 - collect errors and fallback reasons,
 - collect scheduler performance data.
 
-The bridge split is allowed through `GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE`. This matters for Gemma4 Branch-Reduce-Merge, where a small serial split can sit between the hot/cold lanes and the join. Without the flag, validation stays strict at hot-then-cold-then-join.
+The bridge split is allowed through `GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE`. This matters for Gemma4 because cold-prefix merge or Branch-Reduce-Merge can create a small serial split between the hot/cold lanes and the join. Without the flag, validation stays strict at hot-then-cold-then-join.
 
 ### `ggml/src/ggml-backend.cpp`
 
@@ -899,6 +960,7 @@ If no hot-cache JSON exists yet, start without the hot cache but with expert cou
 
 ```bash
 ./build/bin/llama-server \
+  --cpu-moe \
   --moe-layer-perf-out moe-hot-cache.json \
   <normal model and server arguments>
 ```
@@ -911,6 +973,7 @@ That JSON can then be used as input for the hot cache:
 
 ```bash
 ./build/bin/llama-server \
+  --cpu-moe \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
@@ -937,13 +1000,14 @@ For Gemma4, the same mechanism is exposed as an environment variable:
 LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=0.5
 ```
 
-Gemma4 also uses Branch-Reduce-Merge by default. For comparison runs, disable it with `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE=0`. Qwen35Moe does not use this path.
+Gemma4 currently primarily uses direct decode merge with a compact cold prefix. `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE` remains available as a Gemma4-specific comparison/fallback lever, but during decode it only matters when direct decode merge is disabled. Qwen35Moe does not use Branch-Reduce-Merge.
 
 For final throughput measurements:
 
 ```bash
 ./build/bin/llama-server \
   --no-perf \
+  --cpu-moe \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
@@ -1036,13 +1100,29 @@ Because the hot hit rate cannot reach 100 percent, the cold path remains importa
 
 Cold-path improvements were especially valuable because the join waits for CPU work when the cold path is too slow.
 
-### 5. Minimal Performance Path
+### 5. Stabilized Gemma4 Decode
+
+Gemma4 needed its own profile class even though many building blocks are shared with Qwen. The reason is not only expert selection; it is graph shape. Gemma4 builds the MoE path from router logits and has different split and merge behavior than Qwen35Moe.
+
+The useful recent Gemma4 levers were:
+
+- a small hook in `src/models/gemma4.cpp`, with the real logic extracted to `src/llama-moe-hot-cache-graph.cpp`,
+- separate weighting in `src/models/gemma4-hot-cache.cpp`,
+- direct decode merge as the primary path,
+- cold-prefix sum and weighted cold-prefix sum so only valid cold slots are reduced,
+- `merge_sum_rows` and strided sum rows for compact slot reduction,
+- Branch-Reduce-Merge as a separate Gemma4 lever for comparison runs,
+- the scheduler bridge flag for cases where cold-prefix or Branch-Reduce creates a small serial bridge split before the join.
+
+The most important debugging lesson: when Gemma4 fallbacks increase, the problem is usually not hit rate, but graph split shape or an optimization that violates the expected hot-then-cold-then-join region. This is why Gemma4 shortcuts stay in a separate profile instead of being folded into the Qwen path.
+
+### 6. Minimal Performance Path
 
 The performance output was changed from visualization-oriented data to optimization-oriented data.
 
 It remains useful in development mode but causes less overhead. For final measurements it can be disabled completely.
 
-### 6. Refactor For Isolation
+### 7. Refactor For Isolation
 
 Experimental code was moved into dedicated files. This does not directly improve tok/s, but it makes future optimization work safer and easier to maintain.
 
@@ -1242,6 +1322,7 @@ Important: do not set `--moe-hot-cache-max-mib`.
 ```bash
 ./build/bin/llama-server \
   --perf \
+  --cpu-moe \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
@@ -1253,6 +1334,7 @@ Important: do not set `--moe-hot-cache-max-mib`.
 ```bash
 ./build/bin/llama-server \
   --no-perf \
+  --cpu-moe \
   --moe-hot-cache performance.json \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
