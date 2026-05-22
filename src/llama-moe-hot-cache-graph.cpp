@@ -152,16 +152,16 @@ public:
 class llama_gemma4_hot_cache_graph_tweaks {
 public:
     static llama_moe_hot_cache_graph_profile get_profile() {
-        // Gemma starts with the stable hot -> cold -> join graph shape.
-        // The final slot reduction is graph-order neutral and avoids the expensive
-        // view/add chain in the conservative path.
+        // Gemma's cold lane is usually sparse during decode. Use the direct merge
+        // path so the CPU lane reduces only the compact cold prefix before joining
+        // the hot lane, instead of materializing and reducing the full slot tensor.
         return {
             /* cpu_decode_routing      = */ llama_moe_hot_cache_graph_tweaks::cpu_decode_routing(),
-            /* decode_direct_merge     = */ false,
+            /* decode_direct_merge     = */ llama_moe_hot_cache_graph_tweaks::decode_direct_merge(),
             /* decode_strided_sum_rows = */ llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows(),
             /* shared_input_row        = */ llama_moe_hot_cache_graph_tweaks::shared_input_row(),
-            /* cold_prefix_sum         = */ false,
-            /* cold_prefix_weighted_sum= */ false,
+            /* cold_prefix_sum         = */ llama_moe_hot_cache_graph_tweaks::cold_prefix_sum(),
+            /* cold_prefix_weighted_sum= */ llama_moe_hot_cache_graph_tweaks::cold_prefix_weighted_sum(),
             /* decode_repeat_hot_input = */ llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input(),
             /* cold_first_row_input    = */ llama_moe_hot_cache_graph_tweaks::cold_first_row_input(),
             /* merge_sum_rows          = */ llama_moe_hot_cache_graph_tweaks::merge_sum_rows(),
@@ -810,6 +810,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
             ggml_tensor * merged_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
             ggml_backend_sched_set_tensor_backend(sched, merged_shape, branch_backend);
 
+            const int prefix_reduce_tasks = std::max<int>(1, std::min<int>(4, cparams.n_threads));
             ggml_tensor * merged = ggml_map_custom3(
                     ctx0,
                     merged_shape,
@@ -818,7 +819,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
                     prefix_weighted
                         ? llama_qwen35moe_hot_cache_sum_weighted_prefix_rows_op
                         : llama_qwen35moe_hot_cache_sum_prefix_rows_op,
-                    1,
+                    prefix_reduce_tasks,
                     nullptr);
             ggml_backend_sched_set_tensor_backend(sched, merged, branch_backend);
             graph.cb(merged, name, il);
@@ -1009,7 +1010,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
         graph.cb(out_slots, "ffn_moe_hot_cold_slots", il);
 
         if (parallel_mode != 0 && !cparams.warmup && annotate_parallel_region && hot_count != nullptr && cold_count != nullptr) {
-            const uint32_t parallel_flags = branch_reduce_merge
+            const uint32_t parallel_flags = (branch_reduce_merge || cold_prefix_merge)
                 ? GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE
                 : GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_NONE;
             ggml_backend_sched_moe_hot_cache_parallel_region(
