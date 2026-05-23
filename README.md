@@ -42,6 +42,8 @@ Normal hot-cache start: loads the expert list, keeps the cold experts on the CPU
 ./build/bin/llama-server --cpu-moe --moe-hot-cache moe-hot-cache.json --moe-hot-cache-max-mib -1 --moe-hot-cache-auto-reserve-mib 1024 --moe-hot-cache-update-rate 0.10 <your normal start arguments>
 ```
 
+For large prompt-processing batches, add `--moe-hot-cache-pp-reduce-merge auto`. This reduces hot and cold MoE branch outputs before the final merge, which avoids carrying the full expert-slot tensor through the PP merge. Decode is unchanged.
+
 Final speed test without perf counters, for the least distorted tokens/s measurement.
 
 ```bash
@@ -117,6 +119,8 @@ Hot/cold parallelization runs in auto mode by default. Set `LLAMA_MOE_HOT_CACHE_
 `--moe-hot-cache-weighting` selects the expert ranking mode. The default is `flat`. `flat` reproduces the even-distribution experiment: experts are ranked by hits inside each layer, then equal ranks are interleaved across layers, so a fixed budget is spread as evenly as possible over the observed layers. `flat` ignores the layer curve. Use `pressure` to restore the previous pressure-weighted default.
 
 Gemma 4 26B-A4B has a separate experimental weighting class. It uses the same idea of layer-pressure scoring, defaults to a curve strength of `0.5`, and can be overridden with `LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<0.0..1.0>`. Gemma4 currently uses direct decode merge with a compact cold prefix as the primary path. Branch-Reduce-Merge remains available as a Gemma4-specific comparison path when direct decode merge is disabled. Qwen does not use Branch-Reduce-Merge.
+
+`--moe-hot-cache-pp-reduce-merge auto` is an experimental prompt-processing optimization for hot-cache runs. During PP, each physical `ubatch` can contain hundreds of tokens; without this option the graph merges hot and cold outputs while they are still shaped as expert slots. With `auto`, large PP batches reduce each branch first to `[n_embd, n_tokens]` and merge the smaller tensors afterward. This is mathematically equivalent to summing all expert-slot outputs at the end, but it changes the floating-point addition order and can slightly affect sampled text. Leave it off when validating numerical drift; use `auto` when long prompts make PP relevant.
 
 ### 4. Measure performance
 

@@ -35,6 +35,12 @@ struct llama_moe_hot_cache_graph_profile {
 
 class llama_moe_hot_cache_graph_tweaks {
 public:
+    enum pp_reduce_merge_mode {
+        PP_REDUCE_MERGE_OFF,
+        PP_REDUCE_MERGE_ON,
+        PP_REDUCE_MERGE_AUTO,
+    };
+
     static int parallel_mode() {
         const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL");
         if (env == nullptr || env[0] == '\0') {
@@ -123,7 +129,38 @@ public:
         return enabled;
     }
 
+    static bool pp_reduce_merge(int64_t n_tokens, int64_t capacity) {
+        switch (pp_reduce_merge_mode_value()) {
+            case PP_REDUCE_MERGE_OFF:
+                return false;
+            case PP_REDUCE_MERGE_ON:
+                return true;
+            case PP_REDUCE_MERGE_AUTO:
+                return n_tokens >= 32 && capacity >= 64;
+        }
+
+        return false;
+    }
+
 private:
+    static pp_reduce_merge_mode pp_reduce_merge_mode_value() {
+        static const pp_reduce_merge_mode mode = []() {
+            const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE");
+            if (env == nullptr || env[0] == '\0' ||
+                    std::strcmp(env, "0") == 0 ||
+                    std::strcmp(env, "off") == 0 ||
+                    std::strcmp(env, "false") == 0) {
+                return PP_REDUCE_MERGE_OFF;
+            }
+            if (std::strcmp(env, "auto") == 0) {
+                return PP_REDUCE_MERGE_AUTO;
+            }
+            return PP_REDUCE_MERGE_ON;
+        }();
+
+        return mode;
+    }
+
     static bool env_enabled_by_default(const char * name) {
         const char * env = std::getenv(name);
         return env == nullptr || env[0] == '\0' ||
@@ -690,8 +727,9 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
     const bool repeat_hot_input =
         !cparams.warmup && n_tokens == 1 && profile.decode_repeat_hot_input;
     const bool branch_reduce_merge =
-        !cparams.warmup && n_tokens == 1 && cache.n_hot != cache.n_expert &&
-        !decode_direct_merge && n_moe_slots > 1 && profile.branch_reduce_merge;
+        !cparams.warmup && cache.n_hot != cache.n_expert && !decode_direct_merge && n_moe_slots > 1 &&
+        ((n_tokens == 1 && profile.branch_reduce_merge) ||
+         (n_tokens > 1 && llama_moe_hot_cache_graph_tweaks::pp_reduce_merge(n_tokens, capacity)));
 
     ggml_tensor * hot_count = nullptr;
     ggml_tensor * cold_count = nullptr;
@@ -1161,6 +1199,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         !cparams.warmup && (perf_expert_counts || (parallel_mode != 0 && annotate_parallel_region));
     const bool repeat_hot_input =
         decode_direct_merge && llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input();
+    const bool branch_reduce_merge =
+        !cparams.warmup && n_tokens > 1 && cache.n_hot != cache.n_expert && n_moe_slots > 1 &&
+        llama_moe_hot_cache_graph_tweaks::pp_reduce_merge(n_tokens, capacity);
 
     ggml_tensor * hot_count = nullptr;
     ggml_tensor * cold_count = nullptr;
@@ -1322,6 +1363,33 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         return merged;
     };
 
+    const auto reduce_slots_in_branch = [&](
+            ggml_tensor * slots,
+            ggml_backend_t branch_backend,
+            const char * name) {
+        ggml_tensor * reduced = ggml_permute(ctx0, slots, 1, 0, 2, 3);
+        if (branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, reduced, branch_backend);
+        }
+        if (!llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows()) {
+            reduced = ggml_cont(ctx0, reduced);
+            if (branch_backend != nullptr) {
+                ggml_backend_sched_set_tensor_backend(sched, reduced, branch_backend);
+            }
+        }
+        reduced = ggml_sum_rows(ctx0, reduced);
+        if (branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, reduced, branch_backend);
+        }
+        reduced = ggml_reshape_2d(ctx0, reduced, n_embd, n_tokens);
+        if (branch_backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, reduced, branch_backend);
+        }
+        cb(reduced, name, il);
+        ggml_build_forward_expand(gf, reduced);
+        return reduced;
+    };
+
     ggml_tensor * hot_out = llama_moe_hot_cache_build_moe_ffn_with_ids(*this,
             hot_inputs,
             hot_ids,
@@ -1352,6 +1420,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         hot_slots = ggml_reshape_3d(ctx0, hot_slots, n_embd, n_moe_slots, n_tokens);
         cb(hot_slots, "ffn_moe_hot_slots", il);
         ggml_build_forward_expand(gf, hot_slots);
+    }
+    ggml_tensor * hot_parallel_output = hot_slots;
+    if (branch_reduce_merge) {
+        hot_parallel_output = reduce_slots_in_branch(hot_slots, nullptr, "ffn_moe_hot_slots_reduced");
     }
 
     ggml_tensor * out_slots = hot_slots;
@@ -1437,10 +1509,20 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
             ggml_build_forward_expand(gf, cold_slots);
         }
 
-        out_slots = ggml_add(ctx0, hot_slots, cold_slots);
+        ggml_tensor * cold_parallel_output = cold_slots;
+        if (branch_reduce_merge) {
+            cold_parallel_output = reduce_slots_in_branch(cold_slots, cold_branch_backend, "ffn_moe_cold_slots_reduced");
+        }
+
+        out_slots = branch_reduce_merge
+            ? ggml_add(ctx0, hot_parallel_output, cold_parallel_output)
+            : ggml_add(ctx0, hot_slots, cold_slots);
         cb(out_slots, "ffn_moe_hot_cold_slots", il);
 
         if (parallel_mode != 0 && !cparams.warmup && annotate_parallel_region && hot_count != nullptr && cold_count != nullptr) {
+            const uint32_t parallel_flags = branch_reduce_merge
+                ? GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE
+                : GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_NONE;
             ggml_backend_sched_moe_hot_cache_parallel_region(
                     sched,
                     il,
@@ -1449,18 +1531,24 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
                     hot_count,
                     cold_count,
                     hot_inputs,
-                    hot_slots,
-                    hot_slots,
+                    hot_parallel_output,
+                    hot_parallel_output,
                     cold_inputs,
-                    cold_slots,
-                    cold_slots,
+                    cold_parallel_output,
+                    cold_parallel_output,
                     out_slots,
-                    GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_NONE);
+                    parallel_flags);
         }
     }
 
     ggml_tensor * out = nullptr;
     if (decode_direct_merge) {
+        out = out_slots;
+        cb(out, "ffn_moe_out", il);
+        return out;
+    }
+
+    if (branch_reduce_merge) {
         out = out_slots;
         cb(out, "ffn_moe_out", il);
         return out;
