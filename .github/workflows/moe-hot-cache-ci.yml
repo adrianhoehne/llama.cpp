@@ -1,0 +1,114 @@
+name: MoE Hot Cache CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cached-experts-v2
+    paths:
+      - ".github/workflows/moe-hot-cache-ci.yml"
+      - "common/**"
+      - "ggml/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "CMakeLists.txt"
+      - "**/CMakeLists.txt"
+  pull_request:
+    paths:
+      - ".github/workflows/moe-hot-cache-ci.yml"
+      - "common/**"
+      - "ggml/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "CMakeLists.txt"
+      - "**/CMakeLists.txt"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  hot-cache-cpu:
+    name: Hot-cache unit test (CPU)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            libgomp1 \
+            libssl-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
+
+      - name: Build hot-cache test
+        run: cmake --build build --config Release --target test-moe-hot-cache -j 8
+
+      - name: Run hot-cache test
+        run: ctest --test-dir build -R '^test-moe-hot-cache$' --output-on-failure --timeout 120
+
+  hot-cache-cuda:
+    name: Hot-cache unit test (CUDA compile)
+    runs-on: ubuntu-24.04
+    container: nvidia/cuda:12.8.1-devel-ubuntu24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            gcc-14 \
+            g++-14 \
+            git \
+            libgomp1 \
+            libssl-dev \
+            ninja-build
+
+      - name: Configure
+        env:
+          CC: gcc-14
+          CXX: g++-14
+          CUDAHOSTCXX: g++-14
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CUDA_ARCHITECTURES="50;61;70;75;80;86;89;90" \
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CUDA=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
+
+      - name: Build hot-cache test
+        run: cmake --build build --config Release --target test-moe-hot-cache -j 8
+
+      - name: Run hot-cache test
+        run: ctest --test-dir build -R '^test-moe-hot-cache$' --output-on-failure --timeout 120
