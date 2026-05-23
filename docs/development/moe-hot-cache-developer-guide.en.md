@@ -233,6 +233,14 @@ LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING=<MODE>
 Controls the ranking mode for initial hot-cache selection and dynamic updates. The most relevant values are `flat`, `pressure`, `smooth`, `time`, and `balanced`; additional development variants include `smooth-pressure`, `capped`, `capped-pressure`, `soft-pressure`, `moe-time`, `decode-time`, `rank`, and `layer-rank`. The default is `flat`. `flat` spreads the budget as evenly as possible over the observed layers: experts are ranked by hits inside each layer, then equal ranks are interleaved across layers. The layer curve has no effect in `flat` mode. Use `pressure` to restore the previous pressure-weighted default.
 
 ```text
+--moe-hot-cache-pp-reduce-merge <off|on|auto>
+LLAMA_ARG_MOE_HOT_CACHE_PP_REDUCE_MERGE=<off|on|auto>
+LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE=<off|on|auto>
+```
+
+Experimental prompt-processing lever for hot-cache runs. The default is `off`. During prompt processing, physical `ubatch` graphs often contain hundreds of tokens. Without this lever, the hot and cold branches are merged while they are still expert-slot tensors and are reduced to `[n_embd, n_tokens]` afterward. With `on` or `auto`, each branch first reduces its own slots to `[n_embd, n_tokens]`; only the smaller hot-plus-cold result is merged afterward. `auto` enables this path only for larger PP batches. Decode (`n_tokens == 1`) is unchanged. The operation is mathematically equivalent, but it changes the floating-point addition order and can therefore slightly affect sampled text.
+
+```text
 LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<N>
 ```
 
@@ -1001,6 +1009,14 @@ LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=0.5
 ```
 
 Gemma4 currently primarily uses direct decode merge with a compact cold prefix. `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE` remains available as a Gemma4-specific comparison/fallback lever, but during decode it only matters when direct decode merge is disabled. Qwen35Moe does not use Branch-Reduce-Merge.
+
+For long prompts, prompt processing with hot/cold splitting can become relevant on its own. The PP-specific reduce-merge lever can be tested with:
+
+```bash
+--moe-hot-cache-pp-reduce-merge auto
+```
+
+With `auto`, decode remains unchanged. For large PP `ubatch` graphs, the hot branch and cold branch first reduce their expert slots to `[n_embd, n_tokens]`; only then are both branch results added. This avoids a large slot merge. In local tests, Gemma4 PP improved from `87.57 tok/s` to `100.74 tok/s` on a long prompt; Qwen35Moe improved from `71.21 tok/s` to `75.61 tok/s`. These numbers are hardware- and cache-list-dependent; the useful validation metrics are `prompt eval time`, prompt tokens/s, `parallel_fallbacks == 0`, and unchanged or better TG rate.
 
 For final throughput measurements:
 

@@ -233,6 +233,14 @@ LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING=<MODE>
 Steuert den Ranking-Modus fuer die Hot-Cache-Auswahl und das dynamische Update. Die wichtigsten Modi sind `flat`, `pressure`, `smooth`, `time` und `balanced`; zusaetzlich existieren Entwicklungsvarianten wie `smooth-pressure`, `capped`, `capped-pressure`, `soft-pressure`, `moe-time`, `decode-time`, `rank` und `layer-rank`. Default ist `flat`. `flat` verteilt das Budget moeglichst gleichmaessig ueber die beobachteten Layer: erst werden Experten innerhalb jedes Layers nach Hits sortiert, danach werden gleiche Raenge ueber alle Layer interleaved. Die Layer-Curve hat auf `flat` keinen Einfluss. `pressure` stellt den vorherigen druckgewichteten Default wieder her.
 
 ```text
+--moe-hot-cache-pp-reduce-merge <off|on|auto>
+LLAMA_ARG_MOE_HOT_CACHE_PP_REDUCE_MERGE=<off|on|auto>
+LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE=<off|on|auto>
+```
+
+Experimenteller Prompt-Processing-Hebel fuer Hot-Cache-Laeufe. Default ist `off`. Bei Prompt Processing enthalten physische `ubatch`-Graphen oft hunderte Tokens. Ohne diesen Hebel werden Hot- und Cold-Branch erst als Expert-Slot-Tensoren gemerged und danach auf `[n_embd, n_tokens]` reduziert. Mit `on` oder `auto` reduziert jeder Branch seine Slots zuerst auf `[n_embd, n_tokens]`; danach wird nur noch das kleinere Hot-plus-Cold-Ergebnis addiert. `auto` aktiviert diesen Pfad erst fuer groessere PP-Batches. Decode (`n_tokens == 1`) bleibt unveraendert. Die Rechenoperation ist mathematisch gleichwertig, aendert aber die Floating-Point-Additionsreihenfolge und kann dadurch Sampling minimal beeinflussen.
+
+```text
 LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=<N>
 ```
 
@@ -1003,6 +1011,14 @@ LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE=0.5
 ```
 
 Gemma4 nutzt aktuell primaer den direkten Decode-Merge mit kompaktem Cold-Prefix. `LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE` bleibt als Gemma4-spezifischer Vergleichs-/Fallback-Hebel vorhanden, wird im Decode aber nur relevant, wenn der direkte Decode-Merge deaktiviert ist. Qwen35Moe nutzt Branch-Reduce-Merge nicht.
+
+Fuer lange Prompts kann Prompt Processing mit Hot/Cold-Aufteilung selbst relevant werden. Dann kann der PP-spezifische Reduce-Merge-Hebel getestet werden:
+
+```bash
+--moe-hot-cache-pp-reduce-merge auto
+```
+
+Bei `auto` bleibt Decode unveraendert. Fuer grosse PP-`ubatch`-Graphen reduziert der Hot-Branch und der Cold-Branch jeweils zuerst ihre Expert-Slots auf `[n_embd, n_tokens]`; erst danach werden beide Branch-Ergebnisse addiert. Das vermeidet einen grossen Slot-Merge. In den lokalen Tests verbesserte das Gemma4-PP bei einem langen Prompt von `87.57 tok/s` auf `100.74 tok/s`; Qwen35Moe verbesserte sich von `71.21 tok/s` auf `75.61 tok/s`. Diese Zahlen sind hardware- und cachelistenabhaengig, die relevante Validierung sind `prompt eval time`, `prompt tokens/s`, `parallel_fallbacks == 0` und eine unveraenderte oder bessere TG-Rate.
 
 Fuer finale Durchsatzmessungen:
 
