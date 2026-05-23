@@ -81,6 +81,20 @@ static void llama_moe_hot_cache_set_weighting_env(const std::string & value) {
 #endif
 }
 
+static bool llama_moe_hot_cache_pp_reduce_merge_valid(const std::string & value) {
+    return value == "off" || value == "0" || value == "false" ||
+           value == "on" || value == "1" || value == "true" ||
+           value == "auto";
+}
+
+static void llama_moe_hot_cache_set_pp_reduce_merge_env(const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", value.c_str());
+#else
+    setenv("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", value.c_str(), 1);
+#endif
+}
+
 static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
     LLAMA_EXAMPLE_SERVER,
@@ -2449,6 +2463,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             llama_moe_hot_cache_set_weighting_env(value);
         }
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-pp-reduce-merge"}, "{off,on,auto}",
+        "experimental: reduce hot/cold MoE branches before merging during prompt processing (default: off)",
+        [](common_params &, const std::string & value) {
+            if (!llama_moe_hot_cache_pp_reduce_merge_valid(value)) {
+                throw std::invalid_argument("--moe-hot-cache-pp-reduce-merge must be one of: off, on, auto");
+            }
+            llama_moe_hot_cache_set_pp_reduce_merge_env(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_PP_REDUCE_MERGE"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
