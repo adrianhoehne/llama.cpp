@@ -9,8 +9,8 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
-#include "llama-moe-hot-cache.h"
-#include "llama-moe-hot-cache-perf.h"
+#include "moe-hot-cache/llama-moe-hot-cache.h"
+#include "moe-hot-cache/llama-moe-hot-cache-perf.h"
 #include "llama-ext.h"
 #include "llama.h"
 
