@@ -19,6 +19,14 @@ enum llama_moe_hot_cache_mul_mat_id_flags : uint32_t {
     LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW             = 1u << 3,
 };
 
+static const llama_moe_hot_cache_model_adapter & llama_moe_hot_cache_require_model_adapter(
+        llm_arch arch,
+        llama_moe_hot_cache_graph_kind graph_kind) {
+    const llama_moe_hot_cache_model_adapter * adapter = llama_moe_hot_cache_find_model_adapter(arch, graph_kind);
+    GGML_ASSERT(adapter != nullptr);
+    return *adapter;
+}
+
 static void llama_qwen35moe_hot_cache_build_worklist_op(
         ggml_tensor * dst,
         const ggml_tensor * src0,
@@ -447,6 +455,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
     const auto & cache = model.moe_hot_cache->layers[il];
     const llama_moe_hot_cache_graph_profile profile = adapter.profile();
 
+    GGML_ASSERT(adapter.graph_kind == llama_moe_hot_cache_graph_kind::logits);
     GGML_ASSERT(!cache.hot_id_map_host.empty());
     GGML_ASSERT(n_moe_slots > 0);
     GGML_ASSERT(n_moe_slots <= LLAMA_MAX_EXPERTS);
@@ -914,6 +923,8 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
 }
 
 ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cur, const int il) {
+    (void) llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::qwen35_ffn);
+
     const int64_t n_embd = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const int64_t n_moe_slots = cparams.warmup ? hparams.n_expert_used : n_expert_used;
@@ -1384,15 +1395,13 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
 }
 
 ggml_tensor * llama_model_gemma4::graph::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
-    const llama_moe_hot_cache_model_adapter * adapter = llama_moe_hot_cache_find_model_adapter(model.arch);
-    GGML_ASSERT(adapter != nullptr);
-    GGML_ASSERT(adapter->graph_kind == llama_moe_hot_cache_graph_kind::logits);
-    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, *adapter);
+    const llama_moe_hot_cache_model_adapter & adapter =
+        llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::logits);
+    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, adapter);
 }
 
 ggml_tensor * llama_model_qwen3next::graph::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
-    const llama_moe_hot_cache_model_adapter * adapter = llama_moe_hot_cache_find_model_adapter(model.arch);
-    GGML_ASSERT(adapter != nullptr);
-    GGML_ASSERT(adapter->graph_kind == llama_moe_hot_cache_graph_kind::logits);
-    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, *adapter);
+    const llama_moe_hot_cache_model_adapter & adapter =
+        llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::logits);
+    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, adapter);
 }
