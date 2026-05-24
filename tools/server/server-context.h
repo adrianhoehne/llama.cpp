@@ -4,7 +4,7 @@
 #include "server-task.h"
 #include "server-queue.h"
 
-#include "src/llama-moe-hot-cache-perf.h"
+#include "src/moe-hot-cache/llama-moe-hot-cache-perf.h"
 
 #include <nlohmann/json_fwd.hpp>
 
