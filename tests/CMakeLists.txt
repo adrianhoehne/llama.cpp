@@ -211,6 +211,8 @@ llama_build(test-moe-hot-cache-parser.cpp)
 llama_test(test-moe-hot-cache-parser)
 llama_build(test-moe-hot-cache-planner.cpp)
 llama_test(test-moe-hot-cache-planner)
+llama_build(test-moe-hot-cache-updater.cpp)
+llama_test(test-moe-hot-cache-updater)
 llama_build(test-moe-hot-cache-weighting.cpp)
 llama_test(test-moe-hot-cache-weighting)
 llama_build_and_test(
