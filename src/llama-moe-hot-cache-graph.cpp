@@ -31,6 +31,8 @@ struct llama_moe_hot_cache_graph_profile {
     bool cold_first_row_input = false;
     bool merge_sum_rows = false;
     bool branch_reduce_merge = false;
+    int64_t cpu_decode_routing_max_tokens = 1;
+    int prefix_reduce_tasks_max = 4;
 };
 
 class llama_moe_hot_cache_graph_tweaks {
@@ -129,6 +131,25 @@ public:
         return enabled;
     }
 
+    static int prefix_reduce_tasks_max() {
+        static const int value = []() {
+            const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PREFIX_REDUCE_TASKS");
+            if (env == nullptr || env[0] == '\0') {
+                return 4;
+            }
+
+            char * end = nullptr;
+            const long parsed = std::strtol(env, &end, 10);
+            if (end == env || parsed < 1) {
+                return 4;
+            }
+
+            return (int) std::min<long>(parsed, 64);
+        }();
+
+        return value;
+    }
+
     static bool pp_reduce_merge(int64_t n_tokens, int64_t capacity) {
         switch (pp_reduce_merge_mode_value()) {
             case PP_REDUCE_MERGE_OFF:
@@ -182,7 +203,24 @@ public:
             /* cold_first_row_input    = */ llama_moe_hot_cache_graph_tweaks::cold_first_row_input(),
             /* merge_sum_rows          = */ llama_moe_hot_cache_graph_tweaks::merge_sum_rows(),
             /* branch_reduce_merge     = */ false,
+            /* cpu_decode_routing_max_tokens = */ 1,
+            /* prefix_reduce_tasks_max = */ llama_moe_hot_cache_graph_tweaks::prefix_reduce_tasks_max(),
         };
+    }
+};
+
+class llama_qwen3next_hot_cache_graph_tweaks {
+public:
+    static llama_moe_hot_cache_graph_profile get_profile() {
+        // Qwen3-Coder-Next uses the Qwen3Next MoE block plus a separate shared
+        // expert path. It also reaches the MoE block with tiny multi-token
+        // batches during decode, so keep routing on the compact CPU path for
+        // those batches while leaving merge shortcuts at their single-token
+        // constraints.
+        llama_moe_hot_cache_graph_profile profile = llama_qwen35moe_hot_cache_graph_tweaks::get_profile();
+        profile.cpu_decode_routing_max_tokens = 4;
+        profile.prefix_reduce_tasks_max = 1;
+        return profile;
     }
 };
 
@@ -203,6 +241,8 @@ public:
             /* cold_first_row_input    = */ llama_moe_hot_cache_graph_tweaks::cold_first_row_input(),
             /* merge_sum_rows          = */ llama_moe_hot_cache_graph_tweaks::merge_sum_rows(),
             /* branch_reduce_merge     = */ llama_moe_hot_cache_graph_tweaks::branch_reduce_merge(),
+            /* cpu_decode_routing_max_tokens = */ 1,
+            /* prefix_reduce_tasks_max = */ llama_moe_hot_cache_graph_tweaks::prefix_reduce_tasks_max(),
         };
     }
 };
@@ -211,6 +251,8 @@ class llama_moe_hot_cache_graph_profiles {
 public:
     static llama_moe_hot_cache_graph_profile profile_for_arch(llm_arch arch) {
         switch (arch) {
+            case LLM_ARCH_QWEN3NEXT:
+                return llama_qwen3next_hot_cache_graph_tweaks::get_profile();
             case LLM_ARCH_QWEN35MOE:
                 return llama_qwen35moe_hot_cache_graph_tweaks::get_profile();
             case LLM_ARCH_GEMMA4:
@@ -659,7 +701,10 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
 
     ggml_tensor * worklist_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
     ggml_tensor * worklist = nullptr;
-    if (!cparams.warmup && n_tokens == 1 && profile.cpu_decode_routing) {
+    const bool cpu_decode_routing =
+        !cparams.warmup && profile.cpu_decode_routing &&
+        n_tokens >= 1 && n_tokens <= profile.cpu_decode_routing_max_tokens;
+    if (cpu_decode_routing) {
         worklist = ggml_map_custom2(
                 ctx0,
                 worklist_shape,
@@ -848,7 +893,9 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
             ggml_tensor * merged_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
             ggml_backend_sched_set_tensor_backend(sched, merged_shape, branch_backend);
 
-            const int prefix_reduce_tasks = std::max<int>(1, std::min<int>(4, cparams.n_threads));
+            const int prefix_reduce_tasks = std::max<int>(1, std::min<int>(
+                    profile.prefix_reduce_tasks_max,
+                    cparams.n_threads));
             ggml_tensor * merged = ggml_map_custom3(
                     ctx0,
                     merged_shape,
@@ -1584,4 +1631,8 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
 
 ggml_tensor * llama_model_gemma4::graph::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
     return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, LLM_FFN_GELU);
+}
+
+ggml_tensor * llama_model_qwen3next::graph::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
+    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, LLM_FFN_SILU);
 }
