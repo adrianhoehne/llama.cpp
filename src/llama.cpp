@@ -9,7 +9,7 @@
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
-#include "llama-moe-hot-cache.h"
+#include "moe-hot-cache/llama-moe-hot-cache.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"

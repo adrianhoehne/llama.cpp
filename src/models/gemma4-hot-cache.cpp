@@ -1,4 +1,4 @@
-#include "../llama-moe-hot-cache.h"
+#include "../moe-hot-cache/llama-moe-hot-cache.h"
 
 #include <cstdlib>
 
