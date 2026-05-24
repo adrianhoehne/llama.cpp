@@ -1,6 +1,7 @@
 #include "llama-moe-hot-cache-perf.h"
 #include "llama-moe-hot-cache-perf-json.h"
 #include "llama-moe-hot-cache-perf-nodes.h"
+#include "llama-moe-hot-cache-perf-state.h"
 
 #include "ggml.h"
 #include "ggml-backend-moe-hot-cache.h"
@@ -8,222 +9,14 @@
 #include "llama-model.h"
 #include "llama.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <mutex>
 #include <string>
 #include <vector>
 
-struct llama_moe_layer_perf_layer {
-    uint64_t calls = 0;
-    uint64_t expert_hits_total = 0;
-    uint64_t hot_slots_total = 0;
-    uint64_t cold_slots_total = 0;
-    uint64_t hot_worklist_calls = 0;
-    uint64_t cold_worklist_calls = 0;
-    uint64_t hot_zero_calls = 0;
-    uint64_t cold_zero_calls = 0;
-
-    uint64_t total_moe_time_us = 0;
-    uint64_t expert_matmul_time_us = 0;
-    uint64_t hot_branch_time_us = 0;
-    uint64_t cold_branch_time_us = 0;
-    uint64_t hot_expert_matmul_time_us = 0;
-    uint64_t cold_expert_matmul_time_us = 0;
-    uint64_t worklist_time_us = 0;
-    uint64_t routing_time_us = 0;
-    uint64_t merge_time_us = 0;
-    uint64_t hot_gather_scatter_time_us = 0;
-    uint64_t cold_gather_scatter_time_us = 0;
-
-    uint64_t parallel_region_wall_time_us = 0;
-    uint64_t parallel_hot_lane_wall_time_us = 0;
-    uint64_t parallel_cold_lane_wall_time_us = 0;
-    uint64_t parallel_join_wait_time_us = 0;
-    uint64_t parallel_overlap_estimate_us = 0;
-    uint64_t parallel_regions = 0;
-    uint64_t parallel_hot_launches = 0;
-    uint64_t parallel_cold_launches = 0;
-    uint64_t parallel_hot_skips_zero = 0;
-    uint64_t parallel_cold_skips_zero = 0;
-    uint64_t parallel_fallbacks = 0;
-    uint64_t parallel_fallback_incomplete = 0;
-    uint64_t parallel_fallback_count_not_prefix = 0;
-    uint64_t parallel_fallback_bad_split_order = 0;
-    uint64_t parallel_fallback_same_backend = 0;
-    uint64_t parallel_fallback_hot_spans_backends = 0;
-    uint64_t parallel_fallback_cold_spans_backends = 0;
-    uint64_t parallel_fallback_hot_not_cuda = 0;
-    uint64_t parallel_fallback_cold_not_cpu = 0;
-    uint64_t parallel_fallback_count_readback = 0;
-    uint64_t parallel_fallback_threshold = 0;
-    uint64_t parallel_fallback_zero_output = 0;
-    uint64_t parallel_fallback_other = 0;
-    uint64_t parallel_split_debug_samples = 0;
-    int32_t parallel_split_debug_hot_begin = -1;
-    int32_t parallel_split_debug_hot_end = -1;
-    int32_t parallel_split_debug_cold_begin = -1;
-    int32_t parallel_split_debug_cold_end = -1;
-    int32_t parallel_split_debug_join = -1;
-    int32_t parallel_split_debug_hot_count = -1;
-    int32_t parallel_split_debug_cold_count = -1;
-    int32_t parallel_split_debug_hot_backend = -1;
-    int32_t parallel_split_debug_cold_backend = -1;
-    int32_t parallel_split_debug_join_backend = -1;
-
-    uint64_t gate_time_us = 0;
-    uint64_t up_time_us = 0;
-    uint64_t down_time_us = 0;
-
-    std::vector<uint64_t> experts;
-    std::vector<uint64_t> hot_experts;
-    std::vector<uint64_t> cold_experts;
-};
-
-struct llama_moe_layer_perf_local {
-    std::mutex mutex;
-
-    uint32_t n_expert = 0;
-    uint32_t n_expert_used = 0;
-
-    uint64_t updates = 0;
-    uint64_t overflow_resets = 0;
-
-    bool active = false;
-    int64_t last_callback_us = 0;
-
-    std::vector<llama_moe_layer_perf_layer> layers;
-
-    void ensure_shape_locked(uint32_t n_layer, uint32_t experts, uint32_t used) {
-        n_expert = experts;
-        n_expert_used = used;
-
-        if (layers.size() < n_layer) {
-            layers.resize(n_layer);
-        }
-
-        for (auto & layer : layers) {
-            if (layer.experts.size() < experts) {
-                layer.experts.resize(experts, 0);
-            }
-            if (layer.hot_experts.size() < experts) {
-                layer.hot_experts.resize(experts, 0);
-            }
-            if (layer.cold_experts.size() < experts) {
-                layer.cold_experts.resize(experts, 0);
-            }
-        }
-    }
-
-    void reset_locked(bool count_overflow = true) {
-        for (auto & layer : layers) {
-            layer.calls = 0;
-            layer.expert_hits_total = 0;
-            layer.hot_slots_total = 0;
-            layer.cold_slots_total = 0;
-            layer.hot_worklist_calls = 0;
-            layer.cold_worklist_calls = 0;
-            layer.hot_zero_calls = 0;
-            layer.cold_zero_calls = 0;
-            layer.total_moe_time_us = 0;
-            layer.expert_matmul_time_us = 0;
-            layer.hot_branch_time_us = 0;
-            layer.cold_branch_time_us = 0;
-            layer.hot_expert_matmul_time_us = 0;
-            layer.cold_expert_matmul_time_us = 0;
-            layer.worklist_time_us = 0;
-            layer.routing_time_us = 0;
-            layer.merge_time_us = 0;
-            layer.hot_gather_scatter_time_us = 0;
-            layer.cold_gather_scatter_time_us = 0;
-            layer.parallel_region_wall_time_us = 0;
-            layer.parallel_hot_lane_wall_time_us = 0;
-            layer.parallel_cold_lane_wall_time_us = 0;
-            layer.parallel_join_wait_time_us = 0;
-            layer.parallel_overlap_estimate_us = 0;
-            layer.parallel_regions = 0;
-            layer.parallel_hot_launches = 0;
-            layer.parallel_cold_launches = 0;
-            layer.parallel_hot_skips_zero = 0;
-            layer.parallel_cold_skips_zero = 0;
-            layer.parallel_fallbacks = 0;
-            layer.parallel_fallback_incomplete = 0;
-            layer.parallel_fallback_count_not_prefix = 0;
-            layer.parallel_fallback_bad_split_order = 0;
-            layer.parallel_fallback_same_backend = 0;
-            layer.parallel_fallback_hot_spans_backends = 0;
-            layer.parallel_fallback_cold_spans_backends = 0;
-            layer.parallel_fallback_hot_not_cuda = 0;
-            layer.parallel_fallback_cold_not_cpu = 0;
-            layer.parallel_fallback_count_readback = 0;
-            layer.parallel_fallback_threshold = 0;
-            layer.parallel_fallback_zero_output = 0;
-            layer.parallel_fallback_other = 0;
-            layer.parallel_split_debug_samples = 0;
-            layer.parallel_split_debug_hot_begin = -1;
-            layer.parallel_split_debug_hot_end = -1;
-            layer.parallel_split_debug_cold_begin = -1;
-            layer.parallel_split_debug_cold_end = -1;
-            layer.parallel_split_debug_join = -1;
-            layer.parallel_split_debug_hot_count = -1;
-            layer.parallel_split_debug_cold_count = -1;
-            layer.parallel_split_debug_hot_backend = -1;
-            layer.parallel_split_debug_cold_backend = -1;
-            layer.parallel_split_debug_join_backend = -1;
-            layer.gate_time_us = 0;
-            layer.up_time_us = 0;
-            layer.down_time_us = 0;
-            std::fill(layer.experts.begin(), layer.experts.end(), 0);
-            std::fill(layer.hot_experts.begin(), layer.hot_experts.end(), 0);
-            std::fill(layer.cold_experts.begin(), layer.cold_experts.end(), 0);
-        }
-
-        updates = 0;
-        if (count_overflow) {
-            overflow_resets++;
-        }
-        last_callback_us = 0;
-    }
-
-    void add_locked(uint64_t & dst, uint64_t add) {
-        if (dst > std::numeric_limits<uint64_t>::max() - add) {
-            reset_locked();
-        }
-
-        dst += add;
-    }
-
-    void add_expert_locked(uint32_t layer, uint32_t expert) {
-        if (layer >= layers.size()) {
-            return;
-        }
-
-        if (expert >= layers[layer].experts.size()) {
-            return;
-        }
-
-        add_locked(layers[layer].experts[expert], 1);
-        add_locked(layers[layer].expert_hits_total, 1);
-    }
-
-    void add_branch_expert_locked(uint32_t layer, uint32_t expert, bool hot) {
-        if (layer >= layers.size()) {
-            return;
-        }
-
-        auto & counts = hot ? layers[layer].hot_experts : layers[layer].cold_experts;
-        if (expert >= counts.size()) {
-            return;
-        }
-
-        add_locked(counts[expert], 1);
-    }
-};
-
-static llama_moe_layer_perf_local g_llama_moe_layer_perf;
+static llama_moe_layer_perf_state g_llama_moe_layer_perf;
 static std::atomic<int> g_llama_moe_layer_perf_mode{-1};
 
 bool llama_moe_layer_perf_parse_mode(const char * value, llama_moe_layer_perf_mode & mode) {
@@ -312,28 +105,12 @@ bool llama_moe_layer_perf_needs_expert_counts(bool no_perf) {
 
 void llama_moe_layer_perf_begin(uint32_t n_layer, uint32_t n_expert, uint32_t n_expert_used) {
     std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
-
-    if (n_layer == 0 || n_expert == 0 || n_expert_used == 0) {
-        g_llama_moe_layer_perf.active = false;
-        return;
-    }
-
-    g_llama_moe_layer_perf.ensure_shape_locked(n_layer, n_expert, n_expert_used);
-    g_llama_moe_layer_perf.active = true;
-    g_llama_moe_layer_perf.last_callback_us = 0;
-
-    if (g_llama_moe_layer_perf.updates == std::numeric_limits<uint64_t>::max()) {
-        g_llama_moe_layer_perf.reset_locked();
-    }
-
-    g_llama_moe_layer_perf.updates++;
+    g_llama_moe_layer_perf.begin_locked(n_layer, n_expert, n_expert_used);
 }
 
 void llama_moe_layer_perf_end() {
     std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
-
-    g_llama_moe_layer_perf.active = false;
-    g_llama_moe_layer_perf.last_callback_us = 0;
+    g_llama_moe_layer_perf.end_locked();
 }
 
 void llama_moe_layer_perf_reset() {
@@ -345,16 +122,7 @@ void llama_moe_layer_perf_reset() {
 
 bool llama_moe_layer_perf_has_data() {
     std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
-
-    return std::any_of(
-            g_llama_moe_layer_perf.layers.begin(),
-            g_llama_moe_layer_perf.layers.end(),
-            [](const llama_moe_layer_perf_layer & layer) {
-                return layer.calls != 0 ||
-                       layer.expert_hits_total != 0 ||
-                       layer.total_moe_time_us != 0 ||
-                       layer.parallel_fallbacks != 0;
-            });
+    return g_llama_moe_layer_perf.has_data_locked();
 }
 
 static void llama_moe_layer_perf_count_topk_locked(uint32_t layer, ggml_tensor * t) {
