@@ -1,11 +1,10 @@
-#include "../src/moe-hot-cache/llama-moe-hot-cache.h"
+#include "../src/moe-hot-cache/llama-moe-hot-cache-worklist.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 static void require_impl(bool condition, int line) {
     if (!condition) {
