@@ -1,12 +1,11 @@
 #include "llama-moe-hot-cache.h"
+#include "llama-moe-hot-cache-adapter.h"
 #include "llama-moe-hot-cache-perf.h"
 #include "ggml-backend-moe-hot-cache.h"
 #include "models/models.h"
 
-#include <algorithm>
 #include <cassert>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -18,251 +17,6 @@ enum llama_moe_hot_cache_mul_mat_id_flags : uint32_t {
     LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SKIP_NEGATIVE_ID_OUTPUT_ZERO = 1u << 2,
     // Only valid when all selected input rows are duplicates of src1 row 0.
     LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_SHARED_INPUT_ROW             = 1u << 3,
-};
-
-struct llama_moe_hot_cache_graph_profile {
-    bool cpu_decode_routing = false;
-    bool decode_direct_merge = false;
-    bool decode_strided_sum_rows = false;
-    bool shared_input_row = false;
-    bool cold_prefix_sum = false;
-    bool cold_prefix_weighted_sum = false;
-    bool decode_repeat_hot_input = false;
-    bool cold_first_row_input = false;
-    bool merge_sum_rows = false;
-    bool branch_reduce_merge = false;
-    int64_t cpu_decode_routing_max_tokens = 1;
-    int prefix_reduce_tasks_max = 4;
-};
-
-class llama_moe_hot_cache_graph_tweaks {
-public:
-    enum pp_reduce_merge_mode {
-        PP_REDUCE_MERGE_OFF,
-        PP_REDUCE_MERGE_ON,
-        PP_REDUCE_MERGE_AUTO,
-    };
-
-    static int parallel_mode() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL");
-        if (env == nullptr || env[0] == '\0') {
-            return 1;
-        }
-        if (std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0 || std::strcmp(env, "false") == 0) {
-            return 0;
-        }
-        if (std::strcmp(env, "force") == 0) {
-            return 2;
-        }
-        return 1;
-    }
-
-    static int64_t parallel_min_slots() {
-        static const int64_t value = []() {
-            const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS");
-            if (env == nullptr || env[0] == '\0') {
-                return int64_t(2);
-            }
-
-            char * end = nullptr;
-            const long long parsed = std::strtoll(env, &end, 10);
-            if (end == env || parsed < 0) {
-                return int64_t(2);
-            }
-
-            return (int64_t) parsed;
-        }();
-
-        return value;
-    }
-
-    static bool merge_sum_rows() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_MERGE_SUM_ROWS");
-        return enabled;
-    }
-
-    static bool cpu_decode_routing() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING");
-        return enabled;
-    }
-
-    static bool decode_direct_merge() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_DECODE_DIRECT_MERGE");
-        return enabled;
-    }
-
-    static bool decode_strided_sum_rows() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_DECODE_STRIDED_SUM_ROWS");
-        return enabled;
-    }
-
-    static bool hot_dummy_padding() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_HOT_DUMMY_PADDING");
-        return enabled;
-    }
-
-    static bool shared_input_row() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_SHARED_INPUT_ROW");
-        return enabled;
-    }
-
-    static bool cold_prefix_sum() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_COLD_PREFIX_SUM");
-        return enabled;
-    }
-
-    static bool cold_prefix_weighted_sum() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_COLD_PREFIX_WEIGHTED_SUM");
-        return enabled;
-    }
-
-    static bool decode_repeat_hot_input() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_DECODE_REPEAT_HOT_INPUT");
-        return enabled;
-    }
-
-    static bool cold_first_row_input() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_COLD_FIRST_ROW_INPUT");
-        return enabled;
-    }
-
-    static bool branch_reduce_merge() {
-        static const bool enabled = env_enabled_by_default("LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE");
-        return enabled;
-    }
-
-    static int prefix_reduce_tasks_max() {
-        static const int value = []() {
-            const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PREFIX_REDUCE_TASKS");
-            if (env == nullptr || env[0] == '\0') {
-                return 4;
-            }
-
-            char * end = nullptr;
-            const long parsed = std::strtol(env, &end, 10);
-            if (end == env || parsed < 1) {
-                return 4;
-            }
-
-            return (int) std::min<long>(parsed, 64);
-        }();
-
-        return value;
-    }
-
-    static bool pp_reduce_merge(int64_t n_tokens, int64_t capacity) {
-        switch (pp_reduce_merge_mode_value()) {
-            case PP_REDUCE_MERGE_OFF:
-                return false;
-            case PP_REDUCE_MERGE_ON:
-                return true;
-            case PP_REDUCE_MERGE_AUTO:
-                return n_tokens >= 32 && capacity >= 64;
-        }
-
-        return false;
-    }
-
-private:
-    static pp_reduce_merge_mode pp_reduce_merge_mode_value() {
-        static const pp_reduce_merge_mode mode = []() {
-            const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE");
-            if (env == nullptr || env[0] == '\0' ||
-                    std::strcmp(env, "0") == 0 ||
-                    std::strcmp(env, "off") == 0 ||
-                    std::strcmp(env, "false") == 0) {
-                return PP_REDUCE_MERGE_OFF;
-            }
-            if (std::strcmp(env, "auto") == 0) {
-                return PP_REDUCE_MERGE_AUTO;
-            }
-            return PP_REDUCE_MERGE_ON;
-        }();
-
-        return mode;
-    }
-
-    static bool env_enabled_by_default(const char * name) {
-        const char * env = std::getenv(name);
-        return env == nullptr || env[0] == '\0' ||
-               (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-    }
-};
-
-class llama_qwen35moe_hot_cache_graph_tweaks {
-public:
-    static llama_moe_hot_cache_graph_profile get_profile() {
-        return {
-            /* cpu_decode_routing      = */ llama_moe_hot_cache_graph_tweaks::cpu_decode_routing(),
-            /* decode_direct_merge     = */ llama_moe_hot_cache_graph_tweaks::decode_direct_merge(),
-            /* decode_strided_sum_rows = */ llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows(),
-            /* shared_input_row        = */ llama_moe_hot_cache_graph_tweaks::shared_input_row(),
-            /* cold_prefix_sum         = */ llama_moe_hot_cache_graph_tweaks::cold_prefix_sum(),
-            /* cold_prefix_weighted_sum= */ llama_moe_hot_cache_graph_tweaks::cold_prefix_weighted_sum(),
-            /* decode_repeat_hot_input = */ llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input(),
-            /* cold_first_row_input    = */ llama_moe_hot_cache_graph_tweaks::cold_first_row_input(),
-            /* merge_sum_rows          = */ llama_moe_hot_cache_graph_tweaks::merge_sum_rows(),
-            /* branch_reduce_merge     = */ false,
-            /* cpu_decode_routing_max_tokens = */ 1,
-            /* prefix_reduce_tasks_max = */ llama_moe_hot_cache_graph_tweaks::prefix_reduce_tasks_max(),
-        };
-    }
-};
-
-class llama_qwen3next_hot_cache_graph_tweaks {
-public:
-    static llama_moe_hot_cache_graph_profile get_profile() {
-        // Qwen3-Coder-Next uses the Qwen3Next MoE block plus a separate shared
-        // expert path. It also reaches the MoE block with tiny multi-token
-        // batches during decode, so keep routing on the compact CPU path for
-        // those batches while leaving merge shortcuts at their single-token
-        // constraints.
-        llama_moe_hot_cache_graph_profile profile = llama_qwen35moe_hot_cache_graph_tweaks::get_profile();
-        profile.cpu_decode_routing_max_tokens = 4;
-        profile.prefix_reduce_tasks_max = 1;
-        return profile;
-    }
-};
-
-class llama_gemma4_hot_cache_graph_tweaks {
-public:
-    static llama_moe_hot_cache_graph_profile get_profile() {
-        // Gemma's cold lane is usually sparse during decode. Use the direct merge
-        // path so the CPU lane reduces only the compact cold prefix before joining
-        // the hot lane, instead of materializing and reducing the full slot tensor.
-        return {
-            /* cpu_decode_routing      = */ llama_moe_hot_cache_graph_tweaks::cpu_decode_routing(),
-            /* decode_direct_merge     = */ llama_moe_hot_cache_graph_tweaks::decode_direct_merge(),
-            /* decode_strided_sum_rows = */ llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows(),
-            /* shared_input_row        = */ llama_moe_hot_cache_graph_tweaks::shared_input_row(),
-            /* cold_prefix_sum         = */ llama_moe_hot_cache_graph_tweaks::cold_prefix_sum(),
-            /* cold_prefix_weighted_sum= */ llama_moe_hot_cache_graph_tweaks::cold_prefix_weighted_sum(),
-            /* decode_repeat_hot_input = */ llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input(),
-            /* cold_first_row_input    = */ llama_moe_hot_cache_graph_tweaks::cold_first_row_input(),
-            /* merge_sum_rows          = */ llama_moe_hot_cache_graph_tweaks::merge_sum_rows(),
-            /* branch_reduce_merge     = */ llama_moe_hot_cache_graph_tweaks::branch_reduce_merge(),
-            /* cpu_decode_routing_max_tokens = */ 1,
-            /* prefix_reduce_tasks_max = */ llama_moe_hot_cache_graph_tweaks::prefix_reduce_tasks_max(),
-        };
-    }
-};
-
-class llama_moe_hot_cache_graph_profiles {
-public:
-    static llama_moe_hot_cache_graph_profile profile_for_arch(llm_arch arch) {
-        switch (arch) {
-            case LLM_ARCH_QWEN3NEXT:
-                return llama_qwen3next_hot_cache_graph_tweaks::get_profile();
-            case LLM_ARCH_QWEN35MOE:
-                return llama_qwen35moe_hot_cache_graph_tweaks::get_profile();
-            case LLM_ARCH_GEMMA4:
-                return llama_gemma4_hot_cache_graph_tweaks::get_profile();
-            default:
-                // New MoE architectures must explicitly opt into shortcuts after their graph
-                // split order and numerical behavior have been checked.
-                return {};
-        }
-    }
 };
 
 static void llama_qwen35moe_hot_cache_build_worklist_op(
@@ -677,7 +431,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
              ggml_tensor * cur,
              ggml_tensor * logits,
                  int   il,
-     llm_ffn_op_type   type_op) {
+        const llama_moe_hot_cache_model_adapter & adapter) {
     ggml_context * ctx0 = graph.ctx0;
     ggml_cgraph * gf = graph.gf;
     ggml_backend_sched_t sched = graph.sched;
@@ -691,7 +445,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
     const int64_t n_moe_slots = cparams.warmup ? hparams.n_expert_used : n_expert_used;
     const auto & layer = model.layers[il];
     const auto & cache = model.moe_hot_cache->layers[il];
-    const llama_moe_hot_cache_graph_profile profile = llama_moe_hot_cache_graph_profiles::profile_for_arch(graph.arch);
+    const llama_moe_hot_cache_graph_profile profile = adapter.profile();
 
     GGML_ASSERT(!cache.hot_id_map_host.empty());
     GGML_ASSERT(n_moe_slots > 0);
@@ -975,7 +729,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
             cache.ffn_down_exps,
             cache.n_hot + 1,
             1,
-            type_op,
+            adapter.ffn_op,
             il,
             cache.ffn_gate_up_exps,
             cache.ffn_up_exps_s,
@@ -1043,7 +797,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
                 layer.ffn_down_exps,
                 n_expert,
                 1,
-                type_op,
+                adapter.ffn_op,
                 il,
                 layer.ffn_gate_up_exps,
                 layer.ffn_up_exps_s,
@@ -1630,9 +1384,15 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
 }
 
 ggml_tensor * llama_model_gemma4::graph::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
-    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, LLM_FFN_GELU);
+    const llama_moe_hot_cache_model_adapter * adapter = llama_moe_hot_cache_find_model_adapter(model.arch);
+    GGML_ASSERT(adapter != nullptr);
+    GGML_ASSERT(adapter->graph_kind == llama_moe_hot_cache_graph_kind::logits);
+    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, *adapter);
 }
 
 ggml_tensor * llama_model_qwen3next::graph::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
-    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, LLM_FFN_SILU);
+    const llama_moe_hot_cache_model_adapter * adapter = llama_moe_hot_cache_find_model_adapter(model.arch);
+    GGML_ASSERT(adapter != nullptr);
+    GGML_ASSERT(adapter->graph_kind == llama_moe_hot_cache_graph_kind::logits);
+    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, *adapter);
 }
