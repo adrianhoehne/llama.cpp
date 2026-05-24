@@ -34,6 +34,7 @@ add_library(llama
             llama-model-saver.cpp
             llama-model.cpp
             moe-hot-cache/llama-moe-hot-cache-budget.cpp
+            moe-hot-cache/llama-moe-hot-cache-builder.cpp
             moe-hot-cache/llama-moe-hot-cache.cpp
             moe-hot-cache/llama-moe-hot-cache-graph.cpp
             moe-hot-cache/llama-moe-hot-cache-parser.cpp
