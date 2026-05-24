@@ -235,8 +235,41 @@ const llama_moe_hot_cache_model_adapter * llama_moe_hot_cache_find_model_adapter
     return nullptr;
 }
 
+const llama_moe_hot_cache_model_adapter * llama_moe_hot_cache_find_model_adapter(
+        llm_arch arch,
+        llama_moe_hot_cache_graph_kind graph_kind) {
+    const llama_moe_hot_cache_model_adapter * adapter = llama_moe_hot_cache_find_model_adapter(arch);
+    if (adapter == nullptr) {
+        return nullptr;
+    }
+
+    if (graph_kind != llama_moe_hot_cache_graph_kind::none && adapter->graph_kind != graph_kind) {
+        return nullptr;
+    }
+
+    return adapter;
+}
+
 bool llama_moe_hot_cache_adapter_supports_arch(llm_arch arch) {
     return llama_moe_hot_cache_find_model_adapter(arch) != nullptr;
+}
+
+bool llama_moe_hot_cache_adapter_supports_graph_kind(
+        llm_arch arch,
+        llama_moe_hot_cache_graph_kind graph_kind) {
+    return llama_moe_hot_cache_find_model_adapter(arch, graph_kind) != nullptr;
+}
+
+const char * llama_moe_hot_cache_graph_kind_name(llama_moe_hot_cache_graph_kind graph_kind) {
+    switch (graph_kind) {
+        case llama_moe_hot_cache_graph_kind::qwen35_ffn:
+            return "qwen35_ffn";
+        case llama_moe_hot_cache_graph_kind::logits:
+            return "logits";
+        case llama_moe_hot_cache_graph_kind::none:
+        default:
+            return "none";
+    }
 }
 
 llama_moe_hot_cache_graph_profile llama_moe_hot_cache_graph_profile_for_arch(llm_arch arch) {
