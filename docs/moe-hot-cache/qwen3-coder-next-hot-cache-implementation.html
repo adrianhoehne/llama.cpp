@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3-Coder-Next Hot-Cache Implementation Guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --ink: #152033;
+      --muted: #5f6b7d;
+      --panel: #ffffff;
+      --line: #cbd5e1;
+      --hot: #cf3f36;
+      --cold: #2568c7;
+      --green: #16825f;
+      --amber: #f0b429;
+      --purple: #6854b8;
+      --shadow: 0 14px 32px rgba(23, 35, 52, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    code,
+    pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .doc-topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 24px;
+      background: #101827;
+      border-bottom: 1px solid #0b1020;
+      color: #f9fafb;
+      flex-wrap: wrap;
+    }
+
+    .doc-topbar a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f9fafb;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .doc-topbar a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .page {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      min-height: calc(100vh - 59px);
+    }
+
+    aside {
+      position: sticky;
+      overflow: auto;
+      padding: 24px;
+      color: #f9fafb;
+      background: #101827;
+      top: 59px;
+      height: calc(100vh - 59px);
+    }
+
+    main {
+      padding: 24px;
+      min-width: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: 28px;
+      line-height: 1.12;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      font-size: 20px;
+      margin-bottom: 10px;
+    }
+
+    h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    aside p {
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    .facts {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .fact,
+    .panel,
+    .step {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .fact {
+      padding: 14px;
+    }
+
+    .fact span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .fact b {
+      font-size: 22px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .panel {
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+
+    .diagram {
+      overflow: auto;
+    }
+
+    svg {
+      display: block;
+      min-width: 980px;
+      width: 100%;
+      height: auto;
+    }
+
+    .box rect {
+      fill: #ffffff;
+      stroke: #aeb9c9;
+      stroke-width: 1.5;
+      rx: 8;
+    }
+
+    .box.hot rect {
+      fill: #fff0ee;
+      stroke: var(--hot);
+    }
+
+    .box.cold rect {
+      fill: #eef5ff;
+      stroke: var(--cold);
+    }
+
+    .box.green rect {
+      fill: #edf9f4;
+      stroke: var(--green);
+    }
+
+    .box.purple rect {
+      fill: #f2effb;
+      stroke: var(--purple);
+    }
+
+    .box text {
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      fill: var(--ink);
+    }
+
+    .box .label {
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .box .sub {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .arrow {
+      fill: none;
+      stroke: #7b8797;
+      stroke-width: 2.2;
+      marker-end: url(#arrow);
+    }
+
+    .arrow.hot {
+      stroke: var(--hot);
+    }
+
+    .arrow.cold {
+      stroke: var(--cold);
+    }
+
+    .steps {
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 14px;
+      padding: 14px;
+      align-items: start;
+    }
+
+    .num {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: var(--amber);
+      color: #161616;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+    }
+
+    .step p {
+      margin-bottom: 10px;
+    }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      border-radius: 7px;
+      overflow: auto;
+      background: #101827;
+      color: #e5e7eb;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .warn {
+      border-left: 4px solid var(--amber);
+      background: #fff8df;
+      color: #5d4a04;
+      border-radius: 6px;
+      padding: 12px 14px;
+      line-height: 1.45;
+      margin-top: 12px;
+    }
+
+    .checklist {
+      margin: 0;
+      padding-left: 20px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    @media (max-width: 1080px) {
+      .page {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+
+      .facts {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 700px) {
+      main,
+      aside {
+        padding: 16px;
+      }
+
+      .facts,
+      .step {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="doc-topbar" aria-label="Documentation pages">
+    <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
+    <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
+    <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
+    <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
+  </nav>
+  <div class="page">
+    <aside>
+      <h1>Qwen3-Coder-Next Hot-Cache</h1>
+      <p>
+        Step-by-step guide for connecting Qwen3-Coder-Next
+        to the MoE Experts First hot/cold path.
+      </p>
+    </aside>
+
+    <main>
+      <section class="facts">
+        <div class="fact"><span>Architecture</span><b>Qwen3Next</b></div>
+        <div class="fact"><span>Parameters</span><b>80B / 3B</b></div>
+        <div class="fact"><span>Layer</span><b>48</b></div>
+        <div class="fact"><span>Experts</span><b>512 x 10</b></div>
+      </section>
+
+      <section class="panel">
+        <h2>Why the Hook Differs From Qwen35MoE</h2>
+        <p>
+          Qwen3-Coder-Next uses the Qwen3Next path. Each layer has an MoE block
+          and an additional shared-expert block. The hot cache may only split the
+          normal top-k MoE part. The shared expert stays in the normal model graph
+          and is added afterward.
+        </p>
+        <div class="diagram">
+          <svg viewBox="0 0 1060 360" role="img" aria-label="Qwen3Next hot-cache hook diagram">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8797"></path>
+              </marker>
+            </defs>
+
+            <path class="arrow" d="M 145 180 C 195 180 195 180 245 180"></path>
+            <path class="arrow" d="M 390 180 C 450 180 450 120 510 120"></path>
+            <path class="arrow" d="M 390 180 C 450 180 450 240 510 240"></path>
+            <path class="arrow hot" d="M 655 120 C 720 120 720 180 785 180"></path>
+            <path class="arrow cold" d="M 655 240 C 720 240 720 180 785 180"></path>
+            <path class="arrow" d="M 145 180 C 310 330 620 330 785 210"></path>
+            <path class="arrow" d="M 915 180 C 960 180 960 180 1005 180"></path>
+
+            <g class="box" transform="translate(28 130)">
+              <rect width="118" height="100"></rect>
+              <text class="label" x="18" y="36">Layer input</text>
+              <text class="sub" x="18" y="62">attn_post_norm</text>
+            </g>
+
+            <g class="box green" transform="translate(245 130)">
+              <rect width="146" height="100"></rect>
+              <text class="label" x="18" y="36">Router logits</text>
+              <text class="sub" x="18" y="62">ffn_gate_inp</text>
+            </g>
+
+            <g class="box hot" transform="translate(510 70)">
+              <rect width="146" height="100"></rect>
+              <text class="label" x="18" y="36">Hot Lane</text>
+              <text class="sub" x="18" y="62">cached experts</text>
+            </g>
+
+            <g class="box cold" transform="translate(510 190)">
+              <rect width="146" height="100"></rect>
+              <text class="label" x="18" y="36">Cold Lane</text>
+              <text class="sub" x="18" y="62">CPU experts</text>
+            </g>
+
+            <g class="box purple" transform="translate(785 130)">
+              <rect width="132" height="100"></rect>
+              <text class="label" x="18" y="36">Merge</text>
+              <text class="sub" x="18" y="62">MoE output</text>
+            </g>
+
+            <g class="box" transform="translate(785 250)">
+              <rect width="132" height="74"></rect>
+              <text class="label" x="18" y="32">Shared</text>
+              <text class="sub" x="18" y="54">unchanged</text>
+            </g>
+
+            <g class="box green" transform="translate(1005 130)">
+              <rect width="46" height="100"></rect>
+              <text class="label" x="14" y="48">Add</text>
+              <text class="sub" x="14" y="70">out</text>
+            </g>
+          </svg>
+        </div>
+      </section>
+
+      <section class="steps">
+        <article class="step">
+          <div class="num">1</div>
+          <div>
+            <h3>Confirm the Architecture</h3>
+            <p>Qwen3-Coder-Next is a Qwen3Next MoE model with 80B total parameters and 3B active parameters.</p>
+            <pre>src/models/qwen3next.cpp
+LLM_ARCH_QWEN3NEXT
+n_layer = 48
+n_expert = 512
+n_expert_used = 10</pre>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>Split Only the Top-k MoE Part</h3>
+            <p>In the Qwen3Next FFN, the normal MoE output is built first. The shared expert is applied afterward. The hot cache replaces only the MoE output.</p>
+            <pre>if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
+    logits = build_lora_mm(ffn_gate_inp, cur);
+    moe_out = build_layer_moe_hot(cur, logits, il);
+} else {
+    moe_out = build_moe_ffn(...);
+}</pre>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="num">3</div>
+          <div>
+            <h3>Reuse the Generic Hot Graph</h3>
+            <p>Qwen3Next uses the same hot/cold infrastructure as Gemma4: router logits in, hot/cold MoE output out.</p>
+            <pre>llama_model_qwen3next::graph::build_layer_moe_hot(...)
+    -> llama_moe_hot_cache_build_moe_hot_from_logits(..., LLM_FFN_SILU)</pre>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="num">4</div>
+          <div>
+            <h3>Register a Dedicated Graph Profile</h3>
+            <p>The model explicitly opts into hot-cache shortcuts. Other MoE models remain unchanged.</p>
+            <pre>{ LLM_ARCH_QWEN3NEXT, "qwen3next", llama_moe_hot_cache_graph_kind::logits, LLM_FFN_SILU }</pre>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="num">5</div>
+          <div>
+            <h3>Create a Learn Run</h3>
+            <p>The first run collects expert hits. Without this JSON, the hot cache does not know which experts to preload.</p>
+            <pre>./build/bin/llama-server \
+  --cpu-moe \
+  --moe-layer-perf-out qwen3-coder-next-experts.json \
+  &lt;normal model args&gt;</pre>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="num">6</div>
+          <div>
+            <h3>Test Hot-Cache Startup</h3>
+            <p>Start with a conservative reserve and performance counters enabled, then inspect <code>/moe-layer-perf</code> for fallbacks and hit rate.</p>
+            <pre>./build/bin/llama-server \
+  --cpu-moe \
+  --moe-hot-cache qwen3-coder-next-experts.json \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  &lt;normal model args&gt;</pre>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="num">7</div>
+          <div>
+            <h3>Validation</h3>
+            <ul class="checklist">
+              <li>No crash during warmup.</li>
+              <li><code>parallel_fallbacks</code> remains 0 or stops increasing.</li>
+              <li>Output remains semantically plausible, especially because of the shared expert.</li>
+              <li>Compare hit rate and TG with and without <code>--no-perf</code>.</li>
+              <li>If fallbacks appear, disable profile shortcuts one by one.</li>
+            </ul>
+            <div class="warn">
+              The first stable run matters more than maximum speed. Fine-tuning merge and cold-prefix paths is useful only after split order and output are stable.
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

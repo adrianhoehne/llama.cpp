@@ -1,0 +1,1131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoE Hot Cache Usage Guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5b667a;
+      --line: #d8dee9;
+      --soft: #eef2f7;
+      --hot: #d9293e;
+      --cold: #2563eb;
+      --good: #0f766e;
+      --warn: #b45309;
+      --code: #111827;
+      --shadow: 0 16px 40px rgba(23, 32, 51, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(245, 247, 251, 0.96)),
+        radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 34rem),
+        radial-gradient(circle at top right, rgba(217, 41, 62, 0.10), transparent 30rem);
+    }
+
+    a {
+      color: #1d4ed8;
+    }
+
+    code,
+    pre {
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    code {
+      color: var(--code);
+      background: #edf2f7;
+      border: 1px solid #dbe3ef;
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-size: 0.92em;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      line-height: 1.55;
+      color: #e5e7eb;
+      background: #101827;
+      border-radius: 8px;
+      padding: 16px;
+      overflow: auto;
+    }
+
+    pre code {
+      color: inherit;
+      background: transparent;
+      border: 0;
+      padding: 0;
+      font-size: 13px;
+    }
+
+    .doc-topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 24px;
+      background: #101827;
+      border-bottom: 1px solid #0b1020;
+      color: #f8fafc;
+      flex-wrap: wrap;
+    }
+
+    .doc-topbar a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f8fafc;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .doc-topbar a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+      min-height: calc(100vh - 59px);
+    }
+
+    aside {
+      position: sticky;
+      padding: 24px;
+      overflow: auto;
+      color: #f8fafc;
+      background: #111827;
+      border-right: 1px solid #0b1020;
+      top: 59px;
+      height: calc(100vh - 59px);
+    }
+
+    aside h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    aside p {
+      margin: 0 0 18px;
+      color: #cbd5e1;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    nav {
+      display: grid;
+      gap: 8px;
+    }
+
+    nav a {
+      display: block;
+      color: #f8fafc;
+      text-decoration: none;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 7px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+
+    nav a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    main {
+      padding: 28px;
+      min-width: 0;
+    }
+
+    .hero,
+    section {
+      max-width: 1180px;
+      margin: 0 auto 22px;
+    }
+
+    .hero {
+      padding: 30px;
+      border-radius: 10px;
+      background: #ffffff;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+    }
+
+    .hero h2,
+    section h2,
+    section h3 {
+      margin-top: 0;
+    }
+
+    .hero h2 {
+      margin-bottom: 10px;
+      font-size: 30px;
+      line-height: 1.12;
+    }
+
+    .hero p,
+    section p {
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    section {
+      padding: 26px;
+      border-radius: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .section-head h2 {
+      margin-bottom: 6px;
+      font-size: 22px;
+    }
+
+    .tag {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: #eef2ff;
+      color: #3730a3;
+      border: 1px solid #c7d2fe;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0;
+    }
+
+    .step,
+    .note,
+    .mode-card {
+      border: 1px solid var(--line);
+      background: #fbfdff;
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .step h3,
+    .mode-card h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+
+    .step p,
+    .mode-card p {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .note {
+      margin-top: 14px;
+      border-left: 4px solid var(--warn);
+      background: #fff8ed;
+    }
+
+    .note strong {
+      color: #92400e;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin: 16px 0 18px;
+    }
+
+    .flow div {
+      position: relative;
+      min-height: 82px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #f8fafc;
+    }
+
+    .flow div:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      right: -9px;
+      width: 8px;
+      height: 2px;
+      background: #94a3b8;
+    }
+
+    .flow b {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 13px;
+    }
+
+    .flow span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .modes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .workflow-grid,
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .workflow-card,
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+      padding: 16px;
+    }
+
+    .workflow-card b,
+    .metric b {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .workflow-card p,
+    .metric p {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 5px;
+    }
+
+    .metric strong {
+      display: block;
+      color: var(--ink);
+      font-size: 24px;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+
+    .screenshot {
+      display: block;
+      width: 100%;
+      max-width: 1080px;
+      margin: 16px auto 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(23, 32, 51, 0.10);
+      background: #fff;
+    }
+
+    .mode-card ul {
+      margin: 12px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      margin-top: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 900px;
+    }
+
+    th,
+    td {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    th {
+      color: #334155;
+      background: #f8fafc;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border-radius: 999px;
+      padding: 0 10px;
+      color: #334155;
+      background: #f1f5f9;
+      border: 1px solid #dbe4f0;
+      font-size: 13px;
+    }
+
+    .ok {
+      color: var(--good);
+      font-weight: 700;
+    }
+
+    .warn {
+      color: var(--warn);
+      font-weight: 700;
+    }
+
+    @media (max-width: 920px) {
+      .layout {
+        display: block;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+
+      main {
+        padding: 18px;
+      }
+
+      .steps,
+      .modes,
+      .workflow-grid,
+      .metric-grid,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .flow div:not(:last-child)::after {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="doc-topbar" aria-label="Documentation pages">
+    <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
+    <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
+    <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
+    <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
+  </nav>
+  <div class="layout">
+    <aside>
+      <h1>MoE Hot Cache Usage Guide</h1>
+      <p>Minimal startup, weighting modes, and every hot-cache related runtime switch in this branch.</p>
+      <nav aria-label="Page sections">
+        <a href="#minimum">Bare Minimum</a>
+        <a href="#workflow">Workflow Details</a>
+        <a href="#live-perf">Live Perf UI</a>
+        <a href="#weighting">Weighting Modes</a>
+        <a href="#arguments">Arguments</a>
+        <a href="#advanced-env">Advanced Env Switches</a>
+        <a href="#results">Measured Results</a>
+      </nav>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <h2>Run the hot-cache path without remembering every tuning note.</h2>
+        <p>
+          This page is the operational companion to the
+          <a href="moe-hot-cache-architecture-explainer.html">architecture explainer</a>.
+          It assumes an already supported MoE architecture such as Qwen35Moe, Qwen3Next, or Gemma4.
+          The key rule is simple: keep the normal MoE experts on the CPU with <code>--cpu-moe</code>,
+          then add a selected GPU copy through <code>--moe-hot-cache</code>.
+        </p>
+      </div>
+
+      <section id="minimum">
+        <div class="section-head">
+          <div>
+            <h2>Bare Minimum To Get It Running</h2>
+            <p>Use one profiling run to create the expert JSON. Then restart with that JSON as the hot-cache plan.</p>
+          </div>
+          <span class="tag">Required workflow</span>
+        </div>
+
+        <div class="steps">
+          <article class="step">
+            <h3>Build</h3>
+            <p>Build with CUDA support. If the build directory already exists, the second command is enough.</p>
+          </article>
+          <article class="step">
+            <h3>Profile</h3>
+            <p>Run representative prompts once with <code>--moe-layer-perf-out</code>. The first run is slow because all experts remain on the CPU/RAM path.</p>
+          </article>
+          <article class="step">
+            <h3>Start Hot Cache</h3>
+            <p>Restart with <code>--moe-hot-cache</code>, a cache budget, and <code>--cpu-moe</code>. The hot experts are copied into VRAM at startup.</p>
+          </article>
+        </div>
+
+        <pre><code># 1. Configure and build
+cmake -B build -DGGML_CUDA=ON
+cmake --build build -j8
+
+# 2. First profiling run. Send one or more representative requests, then stop the server.
+./build/bin/llama-server \
+  --cpu-moe \
+  --moe-layer-perf-out moe-hot-cache.json \
+  --ctx-size &lt;ctx_tokens&gt; \
+  --device CUDA0 \
+  --n-gpu-layers 999 \
+  &lt;your model and server args&gt;
+
+# 3. Normal hot-cache run. Keep ctx/model args the same as the profiling run.
+./build/bin/llama-server \
+  --cpu-moe \
+  --moe-hot-cache moe-hot-cache.json \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-update-rate 0.10 \
+  --ctx-size &lt;ctx_tokens&gt; \
+  --device CUDA0 \
+  --n-gpu-layers 999 \
+  &lt;your model and server args&gt;
+
+# 4. Final speed run after tuning. Perf counters start disabled.
+./build/bin/llama-server \
+  --no-perf \
+  --cpu-moe \
+  --moe-hot-cache moe-hot-cache.json \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
+  --ctx-size &lt;ctx_tokens&gt; \
+  --device CUDA0 \
+  --n-gpu-layers 999 \
+  &lt;your model and server args&gt;</code></pre>
+
+        <div class="note">
+          <strong>First run warning:</strong>
+          the profiling run can take much longer than a hot-cache run because it intentionally runs without the selected GPU expert cache.
+          Use prompts that look like the workload you want to accelerate. A chat profile can be worse for coding prompts, and the other way around.
+        </div>
+
+        <div class="flow" aria-label="Minimal MoE hot-cache workflow">
+          <div><b>Prompt</b><span>Send representative workload.</span></div>
+          <div><b>Perf JSON</b><span><code>--moe-layer-perf-out</code> records expert usage.</span></div>
+          <div><b>Weighting</b><span>Experts are ranked by the selected strategy.</span></div>
+          <div><b>Hot Cache</b><span>Best fitting experts are copied into VRAM.</span></div>
+          <div><b>Runtime</b><span>Hot lane uses VRAM, cold lane uses CPU/RAM.</span></div>
+        </div>
+
+        <p>
+          For a pure speed measurement after tuning, use <code>--no-perf</code>. That removes the perf callback overhead,
+          but it also disables live MoE counters and leaves dynamic hot-cache updates without new counter data.
+        </p>
+      </section>
+
+      <section id="workflow">
+        <div class="section-head">
+          <div>
+            <h2>Workflow Details</h2>
+            <p>The full tuning loop is documented here so this page can stand alone as the main operating guide.</p>
+          </div>
+          <span class="tag">Learn -> Run -> Measure</span>
+        </div>
+
+        <div class="workflow-grid">
+          <article class="workflow-card">
+            <b>1. Build everything</b>
+            <p><code>cmake --build build -j8</code> builds the default llama.cpp targets, including <code>llama-server</code>, <code>llama-cli</code>, tools, examples, tests, and the embedded Web UI.</p>
+          </article>
+          <article class="workflow-card">
+            <b>2. Collect a representative profile</b>
+            <p>Start with <code>--cpu-moe</code> and <code>--moe-layer-perf-out</code>, but without <code>--moe-hot-cache</code>. Run prompts that match the real workload, then stop the server so the JSON is written again on shutdown.</p>
+          </article>
+          <article class="workflow-card">
+            <b>3. Inspect the profile</b>
+            <p>Use <code>GET /moe-layer-perf</code> or the Web UI page at <code>#/moe-layer-perf</code>. The initial JSON contains raw per-layer <code>experts</code> lists used to build the first cache.</p>
+          </article>
+          <article class="workflow-card">
+            <b>4. Start with the hot cache</b>
+            <p>Restart with the same model, context, device, and generation settings. Use <code>--moe-hot-cache-max-mib -1</code> for auto-sizing or a positive MiB value for a fixed cache budget.</p>
+          </article>
+          <article class="workflow-card">
+            <b>5. Measure with the right perf mode</b>
+            <p>Use <code>Full</code> for diagnosis, <code>Update</code> for adaptive replacement with lower overhead, and <code>Off</code> or <code>--no-perf</code> for final throughput measurements.</p>
+          </article>
+          <article class="workflow-card">
+            <b>6. Iterate deliberately</b>
+            <p>Dynamic update handles small workload shifts inside the existing cache layout. For a different workload, collect a fresh profile; a coding cache can be worse for simple chat prompts.</p>
+          </article>
+        </div>
+
+        <div class="note">
+          <strong>Important:</strong>
+          <code>--moe-layer-perf-out</code> is only for the learning run. Do not use it for final speed measurements, and do not use <code>--no-perf</code> while learning the first expert file.
+        </div>
+      </section>
+
+      <section id="live-perf">
+        <div class="section-head">
+          <div>
+            <h2>Live Performance Page</h2>
+            <p>The Web UI includes a live MoE layer performance page at <code>#/moe-layer-perf</code>.</p>
+          </div>
+          <span class="tag">Visualization</span>
+        </div>
+
+        <p>
+          Open it with the activity button next to the chat input actions. The dropdown next to that button controls
+          the runtime MoE perf mode: <code>Full</code>, <code>Update</code>, or <code>Off</code>. When the server starts
+          with <code>--no-perf</code>, the dropdown starts in <code>Off</code>.
+        </p>
+
+        <div class="workflow-grid">
+          <article class="workflow-card">
+            <b>Full</b>
+            <p>Collects all counters and timing fields for detailed tuning, including diagnostic split fields when enabled.</p>
+          </article>
+          <article class="workflow-card">
+            <b>Update</b>
+            <p>Collects only the data needed for dynamic hot-cache replacement and hit-rate visualization.</p>
+          </article>
+          <article class="workflow-card">
+            <b>Off</b>
+            <p>Disables MoE perf counters. Use this for the least distorted final tokens-per-second measurement.</p>
+          </article>
+        </div>
+
+        <img class="screenshot" src="assets/moe-layer-perf-overview.png" alt="MoE layer performance UI showing hit-rate graph, timing groups, and layer heatmap">
+
+        <p>
+          The timing cards are ordered by execution flow: summary, routing/prep, parallel region,
+          hot and cold lanes, synchronization, then merge. Do not add all timing cards together.
+          Some values are nested or overlapping measurements. <code>Parallel wall</code> is the wall
+          time of the hot/cold region, <code>Hot lane</code> and <code>Cold lane</code> are lane wall
+          times, <code>Overlap</code> is time hidden by parallel execution, and <code>Join wait</code>
+          is time one lane waits for the other.
+        </p>
+      </section>
+
+      <section id="weighting">
+        <div class="section-head">
+          <div>
+            <h2>Weighting Modes</h2>
+            <p>
+              Weighting controls how the expert list is ranked before the VRAM budget is packed.
+              The same scoring path is used for initial cache creation and for dynamic updates after a request.
+            </p>
+          </div>
+          <span class="tag">Default: flat</span>
+        </div>
+
+        <div class="modes">
+          <article class="mode-card">
+            <h3><code>flat</code></h3>
+            <p>Ranks experts inside each layer by hits, then interleaves equal ranks across layers.</p>
+            <ul>
+              <li>Aliases: none.</li>
+              <li>Ignores <code>--moe-hot-cache-layer-curve</code>.</li>
+              <li>Best default when you want a broad, even cache across observed layers.</li>
+              <li>This is the current default because it avoids over-focusing on a few early slow layers.</li>
+            </ul>
+          </article>
+
+          <article class="mode-card">
+            <h3><code>pressure</code></h3>
+            <p>Multiplies expert hits by layer pressure from the perf JSON.</p>
+            <ul>
+              <li>Aliases: none.</li>
+              <li>Pressure prefers <code>parallel_join_wait_time_per_call_us</code>, then cold-hot lane delta, then cold slots per call, then wait per cold slot.</li>
+              <li><code>--moe-hot-cache-layer-curve</code> controls how aggressively slow layers get extra weight.</li>
+              <li>Use it when a small set of layers consistently blocks the hot/cold join.</li>
+            </ul>
+          </article>
+
+          <article class="mode-card">
+            <h3><code>smooth</code> / <code>smooth-pressure</code></h3>
+            <p>A conservative pressure mode with robust bounds and a smaller boost curve.</p>
+            <ul>
+              <li>Aliases: <code>smooth</code>, <code>smooth-pressure</code>, <code>capped</code>, <code>capped-pressure</code>, <code>soft-pressure</code>.</li>
+              <li>Uses 10th and 90th percentile pressure bounds, then applies a square-root shaped boost.</li>
+              <li>Does not heavily punish lower-pressure layers.</li>
+              <li>Use it when <code>pressure</code> overreacts to noisy timing data.</li>
+            </ul>
+          </article>
+
+          <article class="mode-card">
+            <h3><code>time</code></h3>
+            <p>Uses total MoE time per layer instead of hot/cold join pressure.</p>
+            <ul>
+              <li>Aliases: <code>time</code>, <code>moe-time</code>, <code>decode-time</code>.</li>
+              <li>Looks at <code>total_moe_time_per_call_us</code>.</li>
+              <li>Layer curve controls the min/max boost range.</li>
+              <li>Use it when the slow layer is expensive overall, not just because one lane waits for the other.</li>
+            </ul>
+          </article>
+
+          <article class="mode-card">
+            <h3><code>balanced</code></h3>
+            <p>Converts each layer's local expert rank into a large global score.</p>
+            <ul>
+              <li>Aliases: <code>balanced</code>, <code>rank</code>, <code>layer-rank</code>.</li>
+              <li>Ignores <code>--moe-hot-cache-layer-curve</code>.</li>
+              <li>Keeps top ranked experts from many layers competitive even when raw hit totals differ.</li>
+              <li>Use it as a comparison mode when <code>flat</code> spreads too evenly but <code>pressure</code> is too aggressive.</li>
+            </ul>
+          </article>
+
+          <article class="mode-card">
+            <h3>Shared scoring rules</h3>
+            <p>All modes use the parsed layer observations as the source of truth.</p>
+            <ul>
+              <li>For first-run JSON, raw <code>experts</code> counts are used.</li>
+              <li>For hot-cache JSON, <code>hot_experts + cold_experts</code> is used.</li>
+              <li>Already-hot experts get a small sticky bonus during dynamic updates so the cache does not churn too easily.</li>
+              <li>Zero-hit experts are ignored.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section id="arguments">
+        <div class="section-head">
+          <div>
+            <h2>Arguments And Runtime Controls</h2>
+            <p>
+              These are the knobs relevant to the MoE hot-cache path. In <code>model_config.ini</code>,
+              use the long argument name without the leading <code>--</code>, for example
+              <code>moe-hot-cache-max-mib = -1</code>.
+            </p>
+          </div>
+          <span class="tag">CLI / INI / Env</span>
+        </div>
+
+        <h3>Hot-cache workflow arguments</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Argument</th>
+                <th>INI / env</th>
+                <th>Values and default</th>
+                <th>What it does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>--cpu-moe</code></td>
+                <td><code>cpu-moe = true</code><br><code>LLAMA_ARG_CPU_MOE</code></td>
+                <td>Boolean, default off</td>
+                <td>Practical requirement for this feature. Keeps the normal MoE experts on CPU/RAM so the hot cache can add selected GPU-resident expert copies and merge them with the cold path.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-layer-perf-out FNAME</code></td>
+                <td><code>moe-layer-perf-out = FNAME</code><br><code>LLAMA_ARG_MOE_LAYER_PERF_OUT</code></td>
+                <td>Path, default unset</td>
+                <td>First-run profiling helper. Enables MoE perf collection and writes the current <code>/moe-layer-perf</code> JSON after completed requests and during shutdown.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache FNAME</code></td>
+                <td><code>moe-hot-cache = FNAME</code><br><code>LLAMA_ARG_MOE_HOT_CACHE</code></td>
+                <td>Path, default unset</td>
+                <td>Reads the perf JSON used to select and build the initial hot-cache contents. Required when <code>--moe-hot-cache-max-mib</code> is not <code>0</code>.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-max-mib N</code></td>
+                <td><code>moe-hot-cache-max-mib = N</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_MAX_MIB</code></td>
+                <td><code>0</code> disables, <code>&gt;0</code> fixed MiB, <code>-1</code> auto-size. Default <code>0</code>.</td>
+                <td>Sets the cache budget. With <code>-1</code>, the code reads free VRAM on the selected GPU, subtracts reserves, and fills as much as safely fits.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-auto-reserve-mib N</code></td>
+                <td><code>moe-hot-cache-auto-reserve-mib = N</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_AUTO_RESERVE_MIB</code></td>
+                <td>Integer <code>&gt;= 0</code>, default <code>1024</code></td>
+                <td>Used only with <code>--moe-hot-cache-max-mib -1</code>. Leaves this many MiB free for warmup, compute buffers, and transient CUDA allocations.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-update-rate N</code></td>
+                <td><code>moe-hot-cache-update-rate = N</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_UPDATE_RATE</code></td>
+                <td>Float <code>0.0</code> to <code>1.0</code>, default <code>0.0</code></td>
+                <td>After a completed server request, replaces up to this fraction of hot-cache entries with better observed candidates. Needs active perf counters.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-weighting MODE</code><br><code>--moe-hot-cache-qwen-weighting MODE</code></td>
+                <td><code>moe-hot-cache-weighting = MODE</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_WEIGHTING</code><br><code>LLAMA_MOE_HOT_CACHE_WEIGHTING</code><br><code>LLAMA_MOE_HOT_CACHE_QWEN_WEIGHTING</code></td>
+                <td><code>flat</code>, <code>pressure</code>, <code>smooth</code>, <code>time</code>, <code>balanced</code>. Default <code>flat</code>.</td>
+                <td>Selects the expert ranking strategy for initial cache fill and dynamic updates. See the weighting section above for aliases and behavior.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-layer-curve N</code><br><code>--moe-hot-cache-qwen-layer-curve N</code></td>
+                <td><code>moe-hot-cache-layer-curve = N</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_LAYER_CURVE</code><br><code>LLAMA_MOE_HOT_CACHE_LAYER_CURVE</code><br><code>LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE</code><br><code>LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE</code></td>
+                <td>Float <code>0.0</code> to <code>1.0</code>, default <code>0.5</code></td>
+                <td>Controls how strongly pressure/time modes favor slower layers. <code>0.0</code> disables layer-pressure reshaping. <code>1.0</code> is aggressive. Ignored by <code>flat</code> and <code>balanced</code>.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-pp-reduce-merge MODE</code></td>
+                <td><code>moe-hot-cache-pp-reduce-merge = MODE</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_PP_REDUCE_MERGE</code><br><code>LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE</code></td>
+                <td><code>off</code>, <code>on</code>, <code>auto</code>. Default <code>off</code>.</td>
+                <td>Prompt-processing optimization. Reduces each hot/cold branch to <code>[n_embd, n_tokens]</code> before the final merge. In <code>auto</code>, it enables only for larger PP shapes: <code>n_tokens &gt;= 32</code> and capacity <code>&gt;= 64</code>. Decode is unchanged.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Perf, logging, and live switching</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Control</th>
+                <th>Values and default</th>
+                <th>What it does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>GET /moe-layer-perf</code></td>
+                <td>HTTP endpoint</td>
+                <td>Returns the current MoE perf JSON. In router mode, pass <code>?model=&lt;name&gt;</code> if multiple models are loaded.</td>
+              </tr>
+              <tr>
+                <td><code>POST /moe-layer-perf</code></td>
+                <td><code>{"mode":"full"}</code>, <code>{"mode":"update"}</code>, or <code>{"mode":"off"}</code></td>
+                <td>Switches live MoE perf collection mode at runtime and resets the current perf window.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_LAYER_PERF</code></td>
+                <td><code>full</code>, <code>update</code>, <code>off</code>. Default <code>full</code>; with <code>--no-perf</code>, initial mode is <code>off</code>.</td>
+                <td>Initial MoE perf mode before any runtime <code>POST /moe-layer-perf</code> change. <code>full</code> enables the expensive timing callbacks and full expert lists for analysis. <code>update</code> keeps only the counters required for hit-rate display and dynamic cache replacement. <code>off</code> disables MoE perf collection and is the cleanest mode for final throughput measurements.</td>
+              </tr>
+              <tr>
+                <td><code>--no-perf</code></td>
+                <td>General llama.cpp flag</td>
+                <td>Starts with performance counters disabled. Useful for clean throughput measurement after tuning. Do not use it while learning an expert file.</td>
+              </tr>
+              <tr>
+                <td><code>--log-tg-progress</code><br><code>--no-log-tg-progress</code></td>
+                <td>Boolean, default disabled</td>
+                <td>Periodically logs per-slot token-generation throughput while requests are running. This is only logging; it does not change the hot-cache graph.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Related llama.cpp arguments that affect hot-cache runs</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Argument</th>
+                <th>Why it matters</th>
+                <th>Practical note</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>--ctx-size N</code></td>
+                <td>Auto cache sizing estimates KV memory from the context settings.</td>
+                <td>Required for <code>--moe-hot-cache-max-mib -1</code>. Keep it identical between profiling and hot-cache runs.</td>
+              </tr>
+              <tr>
+                <td><code>--ubatch-size N</code></td>
+                <td>Used by auto-budget KV estimates and by PP graph shape.</td>
+                <td>Large prompts can benefit from <code>--moe-hot-cache-pp-reduce-merge auto</code>.</td>
+              </tr>
+              <tr>
+                <td><code>--device CUDA0</code></td>
+                <td>Controls which backend devices are used by the model. The hot cache picks the first GPU/IGPU device seen by the loaded model.</td>
+                <td>Use the intended fast GPU first when multiple devices are present.</td>
+              </tr>
+              <tr>
+                <td><code>--n-gpu-layers N</code></td>
+                <td>Controls non-MoE layer offload. It changes remaining VRAM and therefore the auto hot-cache budget.</td>
+                <td>With <code>--cpu-moe</code>, the regular MoE experts stay on CPU even when other layers are on GPU.</td>
+              </tr>
+              <tr>
+                <td><code>--flash-attn on|off</code></td>
+                <td>Changes KV layout and the auto-budget estimate.</td>
+                <td>Keep it identical between profiling and hot-cache runs.</td>
+              </tr>
+              <tr>
+                <td><code>--parallel N</code></td>
+                <td>Changes sequence count and KV reserve. Server auto mode may choose a value if unset.</td>
+                <td>For hot-cache tuning, prefer <code>--parallel 1</code>. Multiple parallel requests are not recommended because different prompts are likely to need different experts, which lowers the effective hit rate and makes dynamic updates chase mixed workloads. This is separate from internal hot/cold branch parallelization.</td>
+              </tr>
+              <tr>
+                <td><code>--override-kv qwen35moe.expert_used_count=int:N</code></td>
+                <td>Model-specific override that changes how many experts are selected per token.</td>
+                <td>Not a hot-cache argument. More selected experts can improve quality for some models but increases work and changes the best expert list.</td>
+              </tr>
+              <tr>
+                <td><code>--override-tensor PATTERN=DEVICE</code></td>
+                <td>Can force selected tensors or full layers to a backend.</td>
+                <td>Advanced only. It competes with hot-cache VRAM and can make learned hot-cache results hard to compare.</td>
+              </tr>
+              <tr>
+                <td><code>--n-cpu-moe N</code></td>
+                <td>Keeps only the first N MoE layers on CPU.</td>
+                <td>For this feature, prefer <code>--cpu-moe</code>. Partial CPU MoE can break the intended hot/cold graph assumptions.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="advanced-env">
+        <div class="section-head">
+          <div>
+            <h2>Advanced Env-Only Switches</h2>
+            <p>
+              These are low-level development and comparison levers. They usually do not belong in normal start files
+              unless you are isolating a performance issue.
+            </p>
+          </div>
+          <span class="tag">Advanced</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Environment variable</th>
+                <th>Values and default</th>
+                <th>Effect</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_PARALLEL</code></td>
+                <td><code>auto</code> default, <code>0</code>/<code>off</code>, <code>force</code></td>
+                <td>Controls the internal hot/cold branch fork inside the GGML scheduler. In <code>auto</code>, the scheduler tries to run the GPU hot lane and CPU cold lane at the same time, but falls back to serial execution if the graph shape, split order, or work size is unsuitable. <code>off</code> keeps the hot-cache graph but computes the lanes serially, which is useful for A/B tests. <code>force</code> is a debugging mode: cases that would normally fall back are reported as errors so scheduler bugs are easier to catch.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_PARALLEL_MIN_SLOTS</code></td>
+                <td>Integer <code>&gt;= 0</code>, default <code>2</code></td>
+                <td>Sets the minimum amount of MoE slot work required before <code>auto</code> parallelization starts. Very small hot/cold regions can be slower in parallel because the worker wakeup, split bookkeeping, and join cost can exceed the saved compute time. Raising this value avoids tiny parallel regions; setting it to <code>0</code> makes the scheduler try every valid region.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_PREFIX_REDUCE_TASKS</code></td>
+                <td>Integer <code>1..64</code>, default <code>4</code></td>
+                <td>Caps how many CPU tasks the prefix-reduction helper may use when reducing compact cold-slot prefixes. A higher value can split reduction work over more CPU threads, but can also add scheduling overhead and cache pressure. It is mainly a diagnostic lever for cold-lane bottlenecks, not a normal tuning option.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE</code></td>
+                <td>Float <code>0.0..1.0</code>, default <code>0.5</code></td>
+                <td>Gemma4-specific fallback for the layer-pressure curve when no generic CLI/INI curve is supplied. The curve controls how much slow layers influence expert ranking in pressure/time modes. <code>0.0</code> makes layer pressure irrelevant, while <code>1.0</code> strongly favors layers that appear expensive in the perf JSON. Prefer <code>--moe-hot-cache-layer-curve</code> for reproducible config files.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_MERGE_SUM_ROWS</code></td>
+                <td>Boolean, default on</td>
+                <td>Enables optimized helpers for summing MoE slot rows into the final layer output where the model profile allows it. This reduces generic graph overhead in merge-heavy paths. Turning it off is useful when validating numerical behavior or isolating whether a merge shortcut is causing a regression.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING</code></td>
+                <td>Boolean, default on</td>
+                <td>Moves decode-time hot/cold routing and worklist creation into a CPU custom operation for tiny decode batches. This avoids building larger GPU-side helper graphs for one-token decode, which is usually faster for the supported MoE paths. Disabling it forces the more graph-heavy route and is mostly useful for debugging routing differences.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_DECODE_DIRECT_MERGE</code></td>
+                <td>Boolean, default on where supported</td>
+                <td>Allows single-token decode to merge hot and cold results directly into the final FFN output shape. Without it, the graph may carry larger expert-slot intermediates and reduce them later. Direct merge cuts intermediate tensor work and is one of the main decode-speed shortcuts for supported Qwen and Gemma paths.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_DECODE_STRIDED_SUM_ROWS</code></td>
+                <td>Boolean, default on</td>
+                <td>Enables a strided sum-row helper used when decode still needs to reduce several slot rows. It is a narrower merge optimization than direct merge: direct merge avoids some intermediates, while strided sum rows makes the remaining row reduction cheaper. Disable only for regression isolation.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_HOT_DUMMY_PADDING</code></td>
+                <td>Boolean, default on</td>
+                <td>Adds dummy hot-lane work when the real hot lane would be empty or too small. This keeps graph shape and scheduler split detection stable across tokens, so the hot/cold region does not constantly change form. The dummy path is designed to contribute zero output; disabling it can expose shape-specific bugs but can also increase fallback risk.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_SHARED_INPUT_ROW</code></td>
+                <td>Boolean, default on</td>
+                <td>Allows decode cold work to reuse one input row when every cold expert uses the same current token vector. That avoids repeating or gathering identical input rows for each cold slot. It is mostly a decode micro-optimization and is only applied where the graph profile says the shared-row assumption is valid.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_COLD_PREFIX_SUM</code></td>
+                <td>Boolean, default on where supported</td>
+                <td>Treats valid cold slots as a compact prefix and reduces only that prefix. This avoids scanning or summing unused cold-slot capacity, which matters when only a few selected experts miss the hot cache. It is enabled only for profiles where the worklist layout guarantees that the cold prefix is compact.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_COLD_PREFIX_WEIGHTED_SUM</code></td>
+                <td>Boolean, default on with cold prefix sum</td>
+                <td>Combines expert weighting with the cold-prefix reduction. Instead of first producing cold expert outputs and then multiplying/merging weights in a separate step, the helper applies weights while summing the prefix. This saves one small operation chain on the cold path and is only meaningful when cold prefix sum is active.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_DECODE_REPEAT_HOT_INPUT</code></td>
+                <td>Boolean, default on</td>
+                <td>Creates the hot-lane input for decode by directly repeating the current token row for the selected hot slots. This avoids a more general gather path for the common one-token decode case. It primarily reduces hot-lane setup overhead and should stay on unless comparing graph variants.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_COLD_FIRST_ROW_INPUT</code></td>
+                <td>Boolean, default on</td>
+                <td>When shared cold input is enabled, this uses the first row as the canonical cold input row. That removes another small indexing/gather step from the cold lane. It is safe only in decode-style graph shapes where the active token input is shared by all cold slots.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE</code></td>
+                <td>Boolean, default on, architecture-dependent</td>
+                <td>Lets a branch reduce its expert-slot outputs before the final hot/cold merge. For Gemma4 this is a comparison and fallback lever around direct decode merge. Qwen profiles currently do not use it because the Qwen path is tuned around direct decode merge and compact prefix reductions. Disable it when testing whether Gemma4 fallbacks or merge costs come from branch-level reduction.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="pill-list">
+          <span class="pill"><span class="ok">Supported adapters:</span>&nbsp;Qwen35Moe</span>
+          <span class="pill">Qwen3Next</span>
+          <span class="pill">Gemma4</span>
+          <span class="pill"><span class="warn">Normal models:</span>&nbsp;use standard llama.cpp path</span>
+        </div>
+      </section>
+
+      <section id="results">
+        <div class="section-head">
+          <div>
+            <h2>Measured Qwen3.6 Results</h2>
+            <p>
+              These measurements are from the local Qwen3.6 coding workload and are included as a practical
+              reference point, not as a general benchmark guarantee.
+            </p>
+          </div>
+          <span class="tag">Observed data</span>
+        </div>
+
+        <p>
+          The measured setup used <code>unsloth/Qwen3.6-35B-A3B-GGUF:Q6_K_XL</code> with a
+          <code>100000</code> token context and the coding prompt
+          <code>Erstelle mir ein Snake Spiel in HTML und Java Script</code>. The standard llama.cpp router
+          setup averaged <code>22.2 t/s</code>. With MoE hot-cache enabled, auto-sizing selected
+          <code>2367/10172</code> observed experts, used <code>6554 MiB</code> of VRAM, and corresponded
+          to about <code>9.2</code> full MoE layers.
+        </p>
+
+        <div class="metric-grid">
+          <article class="metric">
+            <span>Standard router baseline</span>
+            <strong>22.2 t/s</strong>
+            <p>Router-mode reference for the coding prompt at 100k context.</p>
+          </article>
+          <article class="metric">
+            <span>Measured break-even hit rate</span>
+            <strong>45.89%</strong>
+            <p>The real hot-cache hit rate needed to beat the baseline in that setup.</p>
+          </article>
+          <article class="metric">
+            <span>Best run in this hit-rate sweep</span>
+            <strong>26.12 t/s</strong>
+            <p>Reached at <code>62.51%</code> real hot-cache hit rate.</p>
+          </article>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Real hot-cache hit rate</th>
+                <th>Decode throughput</th>
+                <th>Baseline comparison</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td><code>22.63%</code></td><td><code>18.35 t/s</code></td><td>Below baseline</td></tr>
+              <tr><td><code>28.21%</code></td><td><code>19.07 t/s</code></td><td>Below baseline</td></tr>
+              <tr><td><code>35.31%</code></td><td><code>20.05 t/s</code></td><td>Below baseline</td></tr>
+              <tr><td><code>41.90%</code></td><td><code>21.23 t/s</code></td><td>Below baseline</td></tr>
+              <tr><td><code>48.33%</code></td><td><code>22.80 t/s</code></td><td>Above baseline</td></tr>
+              <tr><td><code>54.54%</code></td><td><code>24.34 t/s</code></td><td>Above baseline</td></tr>
+              <tr><td><code>60.76%</code></td><td><code>25.77 t/s</code></td><td>Above baseline</td></tr>
+              <tr><td><code>62.51%</code></td><td><code>26.12 t/s</code></td><td>Above baseline</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note">
+          <strong>Layer override experiment:</strong>
+          putting the four weakest MoE layers (<code>2,0,3,6</code>) and all router gates on <code>CUDA0</code>
+          did not improve throughput. The request timed out after 30 minutes at 1949 tokens with
+          <code>41.33%</code> hit rate. The hot cache shrank to <code>1389/10185</code> experts
+          (<code>3877 MiB</code>, about <code>5.4</code> full MoE layers). This kind of hybrid approach
+          would need a separate graph path that bypasses the hot/cold split for fully GPU-resident MoE layers.
+        </div>
+
+        <h3>Practical Next Steps</h3>
+        <div class="workflow-grid">
+          <article class="workflow-card">
+            <b>Tune auto-sizing carefully</b>
+            <p>Increase <code>--moe-hot-cache-auto-reserve-mib</code> if warmup or compute buffers hit CUDA OOM. Decrease it only when runs are stable and VRAM remains unused.</p>
+          </article>
+          <article class="workflow-card">
+            <b>Retune per workload</b>
+            <p>Use a new profile for materially different workloads. Dynamic update helps with drift, but it is not a replacement for representative first-run data.</p>
+          </article>
+          <article class="workflow-card">
+            <b>Prefer one user stream</b>
+            <p>For hot-cache tuning and benchmarking, use <code>--parallel 1</code>. Parallel server requests usually need different experts and reduce effective hit rate.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
