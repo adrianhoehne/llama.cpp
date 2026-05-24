@@ -41,6 +41,7 @@ add_library(llama
             moe-hot-cache/llama-moe-hot-cache-perf-json.cpp
             moe-hot-cache/llama-moe-hot-cache-perf.cpp
             moe-hot-cache/llama-moe-hot-cache-perf-nodes.cpp
+            moe-hot-cache/llama-moe-hot-cache-perf-state.cpp
             moe-hot-cache/llama-moe-hot-cache-planner.cpp
             moe-hot-cache/llama-moe-hot-cache-updater.cpp
             moe-hot-cache/llama-moe-hot-cache-weighting.cpp
