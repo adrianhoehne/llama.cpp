@@ -1794,6 +1794,11 @@ struct llama_model_qwen3next : public llama_model_base {
                     ggml_tensor * cur,
                             int   il);
 
+        ggml_tensor * build_layer_moe_hot(
+                    ggml_tensor * cur,
+                    ggml_tensor * logits,
+                            int   il);
+
         ggml_tensor * build_norm_gated(
                     ggml_tensor * input,
                     ggml_tensor * weights,
