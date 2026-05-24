@@ -539,7 +539,7 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
     if (model.layers[il].ffn_gate_inp != nullptr) {
         // MoE branch
         ggml_tensor * moe_out = nullptr;
-        if (llama_moe_hot_cache_layer_active(model, il)) {
+        if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
             cb(logits, "ffn_moe_logits", il);
 

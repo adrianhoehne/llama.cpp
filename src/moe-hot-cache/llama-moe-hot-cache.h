@@ -1,5 +1,7 @@
 #pragma once
 
+#include "llama-moe-hot-cache-adapter.h"
+
 #include "ggml.h"
 #include "ggml-cpp.h"
 
@@ -181,6 +183,10 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
         double update_rate);
 
 bool llama_moe_hot_cache_layer_active(const llama_model & model, int il);
+bool llama_moe_hot_cache_layer_active_for_graph(
+        const llama_model & model,
+        int il,
+        llama_moe_hot_cache_graph_kind graph_kind);
 
 void llama_moe_hot_cache_build_worklist(
         ggml_tensor * dst,

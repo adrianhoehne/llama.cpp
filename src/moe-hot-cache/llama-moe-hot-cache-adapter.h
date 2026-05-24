@@ -55,5 +55,12 @@ public:
 };
 
 const llama_moe_hot_cache_model_adapter * llama_moe_hot_cache_find_model_adapter(llm_arch arch);
+const llama_moe_hot_cache_model_adapter * llama_moe_hot_cache_find_model_adapter(
+        llm_arch arch,
+        llama_moe_hot_cache_graph_kind graph_kind);
 bool llama_moe_hot_cache_adapter_supports_arch(llm_arch arch);
+bool llama_moe_hot_cache_adapter_supports_graph_kind(
+        llm_arch arch,
+        llama_moe_hot_cache_graph_kind graph_kind);
+const char * llama_moe_hot_cache_graph_kind_name(llama_moe_hot_cache_graph_kind graph_kind);
 llama_moe_hot_cache_graph_profile llama_moe_hot_cache_graph_profile_for_arch(llm_arch arch);
