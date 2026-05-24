@@ -1,4 +1,5 @@
 #include "llama-moe-hot-cache-perf.h"
+#include "llama-moe-hot-cache-perf-nodes.h"
 
 #include "ggml.h"
 #include "ggml-backend-moe-hot-cache.h"
@@ -309,186 +310,6 @@ bool llama_moe_layer_perf_needs_expert_counts(bool no_perf) {
     return mode != LLAMA_MOE_LAYER_PERF_MODE_OFF;
 }
 
-static int llama_moe_parse_layer_from_name(const char * name) {
-    if (name == nullptr) {
-        return -1;
-    }
-
-    const char * p = std::strstr(name, "ffn_moe_");
-    if (p == nullptr) {
-        return -1;
-    }
-
-    const char * dash = std::strchr(p, '-');
-    if (dash == nullptr) {
-        return -1;
-    }
-
-    dash++;
-
-    if (*dash < '0' || *dash > '9') {
-        return -1;
-    }
-
-    return std::atoi(dash);
-}
-
-static bool llama_moe_name_contains(const char * name, const char * needle) {
-    return name != nullptr && std::strstr(name, needle) != nullptr;
-}
-
-static bool llama_moe_is_any_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_");
-}
-
-static bool llama_moe_is_update_node(const char * name);
-
-static bool llama_moe_is_topk_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_topk-");
-}
-
-static bool llama_moe_is_hot_count_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_count-");
-}
-
-static bool llama_moe_is_cold_count_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_count-");
-}
-
-static bool llama_moe_is_hot_expert_ids_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_expert_ids_compact-");
-}
-
-static bool llama_moe_is_cold_ids_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_ids_compact-");
-}
-
-static bool llama_moe_is_update_node(const char * name) {
-    return llama_moe_is_topk_node(name) ||
-           llama_moe_is_hot_count_node(name) ||
-           llama_moe_is_cold_count_node(name) ||
-           llama_moe_is_hot_expert_ids_node(name) ||
-           llama_moe_is_cold_ids_node(name);
-}
-
-static bool llama_moe_is_gate_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_gate-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_gate-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_gate-");
-}
-
-static bool llama_moe_is_up_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_up-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_up-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_up-");
-}
-
-static bool llama_moe_is_down_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_down-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_down-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_down-");
-}
-
-static bool llama_moe_is_hot_gate_up_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_gate_up-");
-}
-
-static bool llama_moe_is_cold_gate_up_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_gate_up-");
-}
-
-static bool llama_moe_is_hot_gate_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_gate-");
-}
-
-static bool llama_moe_is_cold_gate_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_gate-");
-}
-
-static bool llama_moe_is_hot_up_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_up-");
-}
-
-static bool llama_moe_is_cold_up_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_up-");
-}
-
-static bool llama_moe_is_hot_down_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_down-");
-}
-
-static bool llama_moe_is_cold_down_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_down-");
-}
-
-static bool llama_moe_is_hot_branch_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_");
-}
-
-static bool llama_moe_is_cold_branch_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_");
-}
-
-static bool llama_moe_is_worklist_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_worklist-");
-}
-
-static bool llama_moe_is_routing_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_logits-") ||
-           llama_moe_name_contains(name, "ffn_moe_probs-") ||
-           llama_moe_name_contains(name, "ffn_moe_argsort-") ||
-           llama_moe_name_contains(name, "ffn_moe_topk-") ||
-           llama_moe_name_contains(name, "ffn_moe_weights-") ||
-           llama_moe_name_contains(name, "ffn_moe_weights_sum-") ||
-           llama_moe_name_contains(name, "ffn_moe_weights_sum_clamped-") ||
-           llama_moe_name_contains(name, "ffn_moe_weights_norm-") ||
-           llama_moe_name_contains(name, "ffn_moe_weights_scaled-");
-}
-
-static bool llama_moe_is_merge_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_cold_slots-") ||
-           llama_moe_name_contains(name, "ffn_moe_out-");
-}
-
-static bool llama_moe_is_hot_gather_scatter_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_hot_ids_compact-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_expert_ids_compact-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_src_slots-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_token_ids-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_weights_compact-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_inputs-") ||
-           llama_moe_name_contains(name, "ffn_moe_hot_slots-");
-}
-
-static bool llama_moe_is_cold_gather_scatter_node(const char * name) {
-    return llama_moe_name_contains(name, "ffn_moe_cold_ids_compact-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_src_slots-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_token_ids-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_weights_compact-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_inputs-") ||
-           llama_moe_name_contains(name, "ffn_moe_cold_slots-");
-}
-
-static bool llama_moe_is_hot_expert_matmul_node(const char * name) {
-    return llama_moe_is_hot_gate_up_node(name) ||
-           llama_moe_is_hot_gate_node(name)    ||
-           llama_moe_is_hot_up_node(name)      ||
-           llama_moe_is_hot_down_node(name);
-}
-
-static bool llama_moe_is_cold_expert_matmul_node(const char * name) {
-    return llama_moe_is_cold_gate_up_node(name) ||
-           llama_moe_is_cold_gate_node(name)    ||
-           llama_moe_is_cold_up_node(name)      ||
-           llama_moe_is_cold_down_node(name);
-}
-
-static bool llama_moe_is_expert_matmul_node(const char * name) {
-    return llama_moe_is_gate_node(name) ||
-           llama_moe_is_up_node(name)   ||
-           llama_moe_is_down_node(name);
-}
-
 void llama_moe_layer_perf_begin(uint32_t n_layer, uint32_t n_expert, uint32_t n_expert_used) {
     std::lock_guard<std::mutex> lock(g_llama_moe_layer_perf.mutex);
 
@@ -666,15 +487,15 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
 
     if (ask) {
         return mode == LLAMA_MOE_LAYER_PERF_MODE_FULL ?
-            llama_moe_is_any_node(name) :
-            llama_moe_is_update_node(name);
+            llama_moe_layer_perf_node_classifier::is_any_node(name) :
+            llama_moe_layer_perf_node_classifier::is_update_node(name);
     }
 
-    if (!llama_moe_is_any_node(name)) {
+    if (!llama_moe_layer_perf_node_classifier::is_any_node(name)) {
         return true;
     }
 
-    const int layer = llama_moe_parse_layer_from_name(name);
+    const int layer = llama_moe_layer_perf_node_classifier::parse_layer_from_name(name);
     if (layer < 0) {
         return true;
     }
@@ -706,54 +527,54 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
     if (mode == LLAMA_MOE_LAYER_PERF_MODE_FULL && elapsed_us > 0) {
         g_llama_moe_layer_perf.add_locked(dst.total_moe_time_us, elapsed_us);
 
-        if (llama_moe_is_expert_matmul_node(name)) {
+        if (llama_moe_layer_perf_node_classifier::is_expert_matmul_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.expert_matmul_time_us, elapsed_us);
         }
 
-        if (llama_moe_is_hot_branch_node(name)) {
+        if (llama_moe_layer_perf_node_classifier::is_hot_branch_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.hot_branch_time_us, elapsed_us);
-        } else if (llama_moe_is_cold_branch_node(name)) {
+        } else if (llama_moe_layer_perf_node_classifier::is_cold_branch_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.cold_branch_time_us, elapsed_us);
         }
 
-        if (llama_moe_is_hot_expert_matmul_node(name)) {
+        if (llama_moe_layer_perf_node_classifier::is_hot_expert_matmul_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.hot_expert_matmul_time_us, elapsed_us);
-        } else if (llama_moe_is_cold_expert_matmul_node(name)) {
+        } else if (llama_moe_layer_perf_node_classifier::is_cold_expert_matmul_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.cold_expert_matmul_time_us, elapsed_us);
         }
 
-        if (llama_moe_is_worklist_node(name)) {
+        if (llama_moe_layer_perf_node_classifier::is_worklist_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.worklist_time_us, elapsed_us);
-        } else if (llama_moe_is_routing_node(name)) {
+        } else if (llama_moe_layer_perf_node_classifier::is_routing_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.routing_time_us, elapsed_us);
-        } else if (llama_moe_is_merge_node(name)) {
+        } else if (llama_moe_layer_perf_node_classifier::is_merge_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.merge_time_us, elapsed_us);
         }
 
-        if (llama_moe_is_hot_gather_scatter_node(name)) {
+        if (llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.hot_gather_scatter_time_us, elapsed_us);
-        } else if (llama_moe_is_cold_gather_scatter_node(name)) {
+        } else if (llama_moe_layer_perf_node_classifier::is_cold_gather_scatter_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.cold_gather_scatter_time_us, elapsed_us);
         }
 
-        if (llama_moe_is_gate_node(name)) {
+        if (llama_moe_layer_perf_node_classifier::is_gate_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.gate_time_us, elapsed_us);
-        } else if (llama_moe_is_up_node(name)) {
+        } else if (llama_moe_layer_perf_node_classifier::is_up_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.up_time_us, elapsed_us);
-        } else if (llama_moe_is_down_node(name)) {
+        } else if (llama_moe_layer_perf_node_classifier::is_down_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.down_time_us, elapsed_us);
         }
     }
 
-    if (llama_moe_is_topk_node(name)) {
+    if (llama_moe_layer_perf_node_classifier::is_topk_node(name)) {
         llama_moe_layer_perf_count_topk_locked((uint32_t) layer, t);
-    } else if (llama_moe_is_hot_count_node(name)) {
+    } else if (llama_moe_layer_perf_node_classifier::is_hot_count_node(name)) {
         llama_moe_layer_perf_count_worklist_count_locked((uint32_t) layer, t, true);
-    } else if (llama_moe_is_cold_count_node(name)) {
+    } else if (llama_moe_layer_perf_node_classifier::is_cold_count_node(name)) {
         llama_moe_layer_perf_count_worklist_count_locked((uint32_t) layer, t, false);
-    } else if (llama_moe_is_hot_expert_ids_node(name)) {
+    } else if (llama_moe_layer_perf_node_classifier::is_hot_expert_ids_node(name)) {
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, true);
-    } else if (llama_moe_is_cold_ids_node(name)) {
+    } else if (llama_moe_layer_perf_node_classifier::is_cold_ids_node(name)) {
         llama_moe_layer_perf_count_branch_experts_locked((uint32_t) layer, t, false);
     }
 
