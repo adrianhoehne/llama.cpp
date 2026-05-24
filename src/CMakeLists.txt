@@ -35,6 +35,7 @@ add_library(llama
             llama-model.cpp
             moe-hot-cache/llama-moe-hot-cache.cpp
             moe-hot-cache/llama-moe-hot-cache-graph.cpp
+            moe-hot-cache/llama-moe-hot-cache-parser.cpp
             moe-hot-cache/llama-moe-hot-cache-perf.cpp
             llama-quant.cpp
             llama-sampler.cpp
