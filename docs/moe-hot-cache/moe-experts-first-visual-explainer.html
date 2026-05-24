@@ -1,0 +1,1608 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoE Experts First Visual Explainer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --ink: #18212f;
+      --muted: #5a6678;
+      --line: #cad2df;
+      --panel: #ffffff;
+      --hot: #d83a34;
+      --hot-soft: #f8d8d6;
+      --cold: #2367c9;
+      --cold-soft: #d9e8ff;
+      --active: #f4c430;
+      --green: #14835f;
+      --green-soft: #d9f1e8;
+      --cpu: #2f5f91;
+      --gpu: #c0392b;
+      --shadow: 0 12px 30px rgba(27, 39, 57, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .doc-topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 24px;
+      background: #101827;
+      border-bottom: 1px solid #0b1020;
+      color: #f9fafb;
+      flex-wrap: wrap;
+    }
+
+    .doc-topbar a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f9fafb;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .doc-topbar a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .page {
+      min-height: calc(100vh - 59px);
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    }
+
+    aside {
+      background: #111827;
+      color: #f9fafb;
+      padding: 24px;
+      position: sticky;
+      top: 59px;
+      height: calc(100vh - 59px);
+      overflow: auto;
+    }
+
+    main {
+      padding: 24px;
+      min-width: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: 28px;
+      line-height: 1.12;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      font-size: 18px;
+      margin-bottom: 12px;
+    }
+
+    h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.48;
+    }
+
+    aside p {
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    .control-group {
+      border-top: 1px solid rgba(255, 255, 255, 0.14);
+      padding-top: 18px;
+      margin-top: 18px;
+    }
+
+    .control-group[hidden] {
+      display: none;
+    }
+
+    .label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+      color: #e5e7eb;
+      font-size: 13px;
+    }
+
+    .value {
+      color: #ffffff;
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #f4c430;
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .button-row.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    button {
+      border: 1px solid #39465a;
+      background: #1f2937;
+      color: #f9fafb;
+      min-height: 38px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #263244;
+    }
+
+    button.active {
+      background: #f4c430;
+      color: #141414;
+      border-color: #f4c430;
+      font-weight: 700;
+    }
+
+    .status {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .stat {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 10px;
+    }
+
+    .stat b {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 2px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat span {
+      color: #cbd5e1;
+      font-size: 12px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+
+    .panel-head {
+      padding: 16px 18px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .panel-head p {
+      margin-bottom: 0;
+      font-size: 13px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .key {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+    }
+
+    .swatch.hot {
+      background: var(--hot);
+    }
+
+    .swatch.cold {
+      background: var(--cold);
+    }
+
+    .swatch.active {
+      background: var(--active);
+    }
+
+    .swatch.green {
+      background: var(--green);
+    }
+
+    .pipeline {
+      padding: 18px;
+    }
+
+    .track {
+      position: relative;
+      display: grid;
+      grid-template-columns: 110px 156px minmax(260px, 1fr) 120px 120px;
+      gap: 12px;
+      align-items: stretch;
+      min-height: 300px;
+    }
+
+    .track.baseline-mode {
+      grid-template-columns: 110px minmax(260px, 1fr) 140px 120px;
+    }
+
+    .track.baseline-mode [data-stage="worklist"] {
+      display: none;
+    }
+
+    .stage {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcff;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .stage-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .router-box {
+      display: grid;
+      gap: 8px;
+    }
+
+    .stage-copy,
+    .lane-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.38;
+    }
+
+    .worklist-box {
+      display: grid;
+      gap: 10px;
+      align-content: center;
+    }
+
+    .worklist-summary {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .worklist-summary span {
+      border-radius: 5px;
+      padding: 5px 6px;
+      text-align: center;
+    }
+
+    .worklist-summary .hot-count {
+      background: var(--hot-soft);
+      color: var(--hot);
+    }
+
+    .worklist-summary .cold-count {
+      background: var(--cold-soft);
+      color: var(--cold);
+    }
+
+    .worklist-slots {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .work-slot {
+      min-height: 26px;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.9;
+      transition: transform 160ms ease, opacity 160ms ease;
+    }
+
+    .work-slot.hot {
+      background: var(--hot);
+    }
+
+    .work-slot.cold {
+      background: var(--cold);
+    }
+
+    .work-slot.active {
+      opacity: 1;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(24, 33, 47, 0.18);
+    }
+
+    .token {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--active);
+      display: grid;
+      place-items: center;
+      color: #1f2937;
+      font-weight: 800;
+      box-shadow: 0 5px 14px rgba(244, 196, 48, 0.38);
+    }
+
+    .token.moving {
+      position: absolute;
+      z-index: 4;
+      left: var(--token-x, 0);
+      top: var(--token-y, 0);
+      opacity: 1;
+      transition: left 260ms linear, top 260ms linear, transform 260ms linear, opacity 160ms ease;
+    }
+
+    .track.split-active .token.moving,
+    .track.merge-active .token.moving {
+      opacity: 0;
+      transform: scale(0.88);
+    }
+
+    .split-particles {
+      position: absolute;
+      inset: 0;
+      z-index: 6;
+      pointer-events: none;
+    }
+
+    .split-particle {
+      position: absolute;
+      left: var(--particle-x, 0);
+      top: var(--particle-y, 0);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #ffffff;
+      font-size: 10px;
+      font-weight: 900;
+      opacity: 0;
+      transform: scale(0.6);
+      transition: left 260ms linear, top 260ms linear, opacity 160ms ease, transform 260ms ease;
+      box-shadow: 0 5px 12px rgba(27, 39, 57, 0.24);
+    }
+
+    .split-particle.hot {
+      background: var(--hot);
+    }
+
+    .split-particle.cold {
+      background: var(--cold);
+    }
+
+    .track.split-active .split-particle.active,
+    .track.merge-active .split-particle.active {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    .lane-wrap {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 12px;
+      min-width: 0;
+      position: relative;
+    }
+
+    .track.split-active .lane.hot,
+    .track.split-active .lane.cold {
+      box-shadow: 0 0 0 3px rgba(244, 196, 48, 0.36) inset;
+    }
+
+    .track.merge-active [data-stage="merge"] {
+      box-shadow: 0 0 0 3px rgba(244, 196, 48, 0.36) inset;
+    }
+
+    .track.normal-gpu-active .lane.hot,
+    .track.normal-cpu-active .lane.cold {
+      box-shadow: 0 0 0 3px rgba(244, 196, 48, 0.36) inset;
+    }
+
+    .lane {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      position: relative;
+      overflow: hidden;
+      min-height: 134px;
+    }
+
+    .lane.hot {
+      background: var(--hot-soft);
+      border-color: #eaa29f;
+    }
+
+    .lane.cold {
+      background: var(--cold-soft);
+      border-color: #a9c8f2;
+    }
+
+    .lane-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .lane-label span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .expert-row {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(18px, 1fr));
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .expert-chip {
+      min-height: 28px;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      transition: transform 160ms ease, background 160ms ease, color 160ms ease;
+    }
+
+    .expert-chip.hot {
+      background: var(--hot);
+    }
+
+    .expert-chip.cold {
+      background: var(--cold);
+    }
+
+    .expert-chip.active {
+      background: var(--active);
+      color: #1f2937;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(244, 196, 48, 0.32);
+    }
+
+    .merge-box {
+      display: grid;
+      gap: 10px;
+      align-content: center;
+    }
+
+    .merge-meter {
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #e5e7eb;
+      display: flex;
+    }
+
+    .merge-meter .hot-part {
+      background: var(--hot);
+      width: var(--hot-width, 60%);
+    }
+
+    .merge-meter .cold-part {
+      background: var(--cold);
+      width: calc(100% - var(--hot-width, 60%));
+    }
+
+    .output-stream {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-content: center;
+      margin-bottom: 10px;
+    }
+
+    .out-token {
+      min-width: 28px;
+      height: 28px;
+      border-radius: 5px;
+      background: var(--green-soft);
+      color: var(--green);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .grid-section {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 460px);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .heatmap {
+      padding: 18px;
+    }
+
+    .layer-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .layer {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcff;
+      min-width: 0;
+    }
+
+    .layer.active-layer {
+      border-color: var(--active);
+      box-shadow: 0 0 0 2px rgba(244, 196, 48, 0.35) inset;
+    }
+
+    .layer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .layer-header span {
+      color: var(--muted);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .expert-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 3px;
+      aspect-ratio: 1 / 1;
+    }
+
+    .expert-cell {
+      border-radius: 2px;
+      background: var(--cold);
+      transition: background 160ms ease, transform 160ms ease, opacity 160ms ease;
+      opacity: 0.86;
+    }
+
+    .expert-cell.hot {
+      background: var(--hot);
+    }
+
+    .expert-cell.active {
+      background: var(--active);
+      transform: scale(1.08);
+      opacity: 1;
+    }
+
+    .graph-panel {
+      padding: 18px;
+    }
+
+    canvas {
+      width: 100%;
+      height: 220px;
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .summary {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .metric b {
+      font-size: 24px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .note {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--active);
+      background: #fff8dd;
+      color: #5d4a04;
+      border-radius: 6px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1080px) {
+      .page {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+
+      .hero,
+      .grid-section,
+      .summary {
+        grid-template-columns: 1fr;
+      }
+
+      .track {
+        grid-template-columns: 1fr;
+      }
+
+      .lane-wrap {
+        grid-template-rows: auto;
+      }
+    }
+
+    @media (max-width: 720px) {
+      main,
+      aside {
+        padding: 16px;
+      }
+
+      .layer-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .panel-head {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="doc-topbar" aria-label="Documentation pages">
+    <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
+    <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
+    <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
+    <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
+  </nav>
+  <div class="page">
+    <aside>
+      <h1>MoE Experts First</h1>
+      <p>
+        This interactive view shows how the hot cache computes active MoE experts on the GPU first
+        while cold experts run in parallel on the CPU.
+      </p>
+
+      <div class="control-group">
+        <div class="label-row">
+          <label for="mode">View</label>
+          <span class="value" id="modeLabel">Hot Cache</span>
+        </div>
+        <div class="button-row two" id="modeButtons">
+          <button data-mode="baseline">Normal</button>
+          <button data-mode="hotcache" class="active">Hot Cache</button>
+        </div>
+      </div>
+
+      <div class="control-group" id="hitControl">
+        <div class="label-row">
+          <label for="hitSlider">Hot Hit Rate</label>
+          <span class="value" id="hitValue">62%</span>
+        </div>
+        <input id="hitSlider" type="range" min="20" max="80" value="62">
+      </div>
+
+      <div class="control-group" id="cacheControl">
+        <div class="label-row">
+          <label for="cacheSlider">Cache Budget</label>
+          <span class="value" id="cacheValue">48%</span>
+        </div>
+        <input id="cacheSlider" type="range" min="10" max="75" value="48">
+      </div>
+
+      <div class="control-group" id="normalGpuControl" hidden>
+        <div class="label-row">
+          <label for="normalGpuSlider">Normal GPU Layers</label>
+          <span class="value" id="normalGpuValue">4 / 16</span>
+        </div>
+        <input id="normalGpuSlider" type="range" min="0" max="16" value="4">
+      </div>
+
+      <div class="control-group">
+        <div class="label-row">
+          <label for="speedSlider">Video Speed</label>
+          <span class="value" id="speedValue">1.0x</span>
+        </div>
+        <input id="speedSlider" type="range" min="5" max="22" value="10">
+      </div>
+
+      <div class="control-group">
+        <div class="button-row">
+          <button id="playBtn" class="active">Pause</button>
+          <button id="stepBtn">Step</button>
+          <button id="resetBtn">Reset</button>
+        </div>
+      </div>
+
+      <div class="status">
+        <div class="stat">
+          <b id="tokenCount">0</b>
+          <span>Tokens</span>
+        </div>
+        <div class="stat">
+          <b id="hitRate">0%</b>
+          <span>Hits</span>
+        </div>
+        <div class="stat">
+          <b id="hotSlots">0</b>
+          <span>Hot Slots</span>
+        </div>
+        <div class="stat">
+          <b id="coldSlots">0</b>
+          <span>Cold Slots</span>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Token Video</h2>
+              <p>A token moves through the router, hot lane, cold lane, merge, and output.</p>
+            </div>
+            <div class="legend">
+              <span class="key"><span class="swatch hot"></span>Hot Expert</span>
+              <span class="key"><span class="swatch cold"></span>Cold Expert</span>
+              <span class="key"><span class="swatch active"></span>Just used</span>
+            </div>
+          </div>
+          <div class="pipeline">
+            <div class="track" id="track">
+              <div class="stage" data-stage="router">
+                <div class="stage-title">Router / Gate</div>
+                <div class="router-box">
+                  <div class="token" id="staticToken">T</div>
+                  <p class="stage-copy" id="routerText">The gate selects the top-k experts for the current token.</p>
+                </div>
+              </div>
+
+              <div class="stage" data-stage="worklist">
+                <div class="stage-title">Worklist</div>
+                <div class="worklist-box">
+                  <div class="worklist-summary" id="worklistSummary">
+                    <span class="hot-count">Hot 0</span>
+                    <span class="cold-count">Cold 0</span>
+                  </div>
+                  <div class="worklist-slots" id="worklistSlots"></div>
+                  <p class="stage-copy">Selected expert slots become compact hot or cold jobs.</p>
+                </div>
+              </div>
+
+              <div class="lane-wrap">
+                <div class="lane hot" data-stage="hot">
+                  <div class="lane-label"><span id="hotLaneTitle">CUDA0 Hot Lane</span> <span id="hotLaneText">from cache</span></div>
+                  <div class="expert-row" id="hotLane"></div>
+                  <p class="lane-copy" id="hotLaneCopy">Hot-cache hits run directly from VRAM on the GPU.</p>
+                </div>
+                <div class="lane cold" data-stage="cold">
+                  <div class="lane-label"><span id="coldLaneTitle">CPU Cold Lane</span> <span id="coldLaneText">original experts</span></div>
+                  <div class="expert-row" id="coldLane"></div>
+                  <p class="lane-copy" id="coldLaneCopy">Non-cached experts run through the normal CPU/RAM path.</p>
+                </div>
+              </div>
+
+              <div class="stage" data-stage="merge">
+                <div class="stage-title" id="mergeTitle">Merge</div>
+                <div class="merge-box">
+                  <div class="merge-meter" id="mergeMeter">
+                    <div class="hot-part"></div>
+                    <div class="cold-part"></div>
+                  </div>
+                  <p class="stage-copy" id="mergeText">Both partial outputs are added into the normal MoE layer result.</p>
+                </div>
+              </div>
+
+              <div class="stage" data-stage="output">
+                <div class="stage-title">Output</div>
+                <div class="output-stream" id="outputStream"></div>
+                <p class="stage-copy">After the merge, the next layer receives a single token representation again.</p>
+              </div>
+
+              <div class="token moving" id="movingToken">T</div>
+              <div class="split-particles" id="splitParticles"></div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <section class="grid-section">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Layer Heatmap</h2>
+              <p>Each square represents an expert group. Red is cached, blue remains cold, and yellow was active in the previous token.</p>
+            </div>
+          </div>
+          <div class="heatmap">
+            <div class="layer-grid" id="layerGrid"></div>
+          </div>
+        </div>
+
+        <div class="panel graph-panel">
+          <h2>Live Hit Rate</h2>
+          <canvas id="hitCanvas" width="520" height="260" aria-label="Hit rate graph"></canvas>
+          <p>
+            The line shows the simulated hot-cache hit rate. Below the break-even point, parallelization overhead can consume the gain.
+          </p>
+        </div>
+      </section>
+
+      <section class="summary">
+        <div class="metric">
+          <span>Baseline</span>
+          <b id="baselineMetric">22.2 t/s</b>
+        </div>
+        <div class="metric">
+          <span>Hot Cache Simulation</span>
+          <b id="simMetric">26.1 t/s</b>
+        </div>
+        <div class="metric">
+          <span>Break-even</span>
+          <b>45.9%</b>
+        </div>
+        <div class="metric">
+          <span>Dynamic Update</span>
+          <b id="updateMetric">10%</b>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      mode: "hotcache",
+      playing: true,
+      frame: 0,
+      token: 0,
+      hits: 0,
+      totalSlots: 0,
+      hotSlots: 0,
+      coldSlots: 0,
+      currentHotCount: 0,
+      currentColdCount: 0,
+      selectedSlots: [],
+      hitHistory: [],
+      activeLayer: 0,
+      activeExperts: new Set(),
+      intervalId: null,
+      layerCount: 16,
+      expertsPerLayer: 64,
+    };
+
+    const els = {
+      hitControl: document.getElementById("hitControl"),
+      cacheControl: document.getElementById("cacheControl"),
+      normalGpuControl: document.getElementById("normalGpuControl"),
+      hitSlider: document.getElementById("hitSlider"),
+      cacheSlider: document.getElementById("cacheSlider"),
+      normalGpuSlider: document.getElementById("normalGpuSlider"),
+      speedSlider: document.getElementById("speedSlider"),
+      hitValue: document.getElementById("hitValue"),
+      cacheValue: document.getElementById("cacheValue"),
+      normalGpuValue: document.getElementById("normalGpuValue"),
+      speedValue: document.getElementById("speedValue"),
+      tokenCount: document.getElementById("tokenCount"),
+      hitRate: document.getElementById("hitRate"),
+      hotSlots: document.getElementById("hotSlots"),
+      coldSlots: document.getElementById("coldSlots"),
+      worklistSummary: document.getElementById("worklistSummary"),
+      worklistSlots: document.getElementById("worklistSlots"),
+      hotLane: document.getElementById("hotLane"),
+      coldLane: document.getElementById("coldLane"),
+      layerGrid: document.getElementById("layerGrid"),
+      movingToken: document.getElementById("movingToken"),
+      splitParticles: document.getElementById("splitParticles"),
+      track: document.getElementById("track"),
+      outputStream: document.getElementById("outputStream"),
+      mergeMeter: document.getElementById("mergeMeter"),
+      playBtn: document.getElementById("playBtn"),
+      stepBtn: document.getElementById("stepBtn"),
+      resetBtn: document.getElementById("resetBtn"),
+      modeButtons: document.getElementById("modeButtons"),
+      modeLabel: document.getElementById("modeLabel"),
+      routerText: document.getElementById("routerText"),
+      hotLaneTitle: document.getElementById("hotLaneTitle"),
+      hotLaneText: document.getElementById("hotLaneText"),
+      hotLaneCopy: document.getElementById("hotLaneCopy"),
+      coldLaneTitle: document.getElementById("coldLaneTitle"),
+      coldLaneText: document.getElementById("coldLaneText"),
+      coldLaneCopy: document.getElementById("coldLaneCopy"),
+      mergeTitle: document.getElementById("mergeTitle"),
+      mergeText: document.getElementById("mergeText"),
+      hitCanvas: document.getElementById("hitCanvas"),
+      simMetric: document.getElementById("simMetric"),
+      updateMetric: document.getElementById("updateMetric"),
+    };
+
+    const hotLaneChips = [];
+    const coldLaneChips = [];
+    const worklistSlots = [];
+    const splitParticles = [];
+    const layers = [];
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function pseudoRandom(seed) {
+      const x = Math.sin(seed * 12.9898) * 43758.5453;
+      return x - Math.floor(x);
+    }
+
+    function currentHitTarget() {
+      if (state.mode === "baseline") {
+        return 0;
+      }
+      return Number(els.hitSlider.value) / 100;
+    }
+
+    function cacheRatio() {
+      return Number(els.cacheSlider.value) / 100;
+    }
+
+    function normalGpuLayerCount() {
+      return clamp(Number(els.normalGpuSlider.value), 0, state.layerCount);
+    }
+
+    function normalLayerOnGpu(layerIndex = state.activeLayer) {
+      return layerIndex < normalGpuLayerCount();
+    }
+
+    function makeLaneChips() {
+      els.hotLane.innerHTML = "";
+      els.coldLane.innerHTML = "";
+      hotLaneChips.length = 0;
+      coldLaneChips.length = 0;
+
+      for (let i = 0; i < 8; i++) {
+        const hot = document.createElement("div");
+        hot.className = "expert-chip hot";
+        hot.textContent = `H${i + 1}`;
+        els.hotLane.appendChild(hot);
+        hotLaneChips.push(hot);
+
+        const cold = document.createElement("div");
+        cold.className = "expert-chip cold";
+        cold.textContent = `C${i + 1}`;
+        els.coldLane.appendChild(cold);
+        coldLaneChips.push(cold);
+      }
+
+      updateLaneChips();
+    }
+
+    function makeWorklistSlots() {
+      els.worklistSlots.innerHTML = "";
+      worklistSlots.length = 0;
+
+      for (let i = 0; i < 8; i++) {
+        const slot = document.createElement("div");
+        slot.className = "work-slot cold";
+        slot.textContent = "-";
+        els.worklistSlots.appendChild(slot);
+        worklistSlots.push(slot);
+      }
+    }
+
+    function makeSplitParticles() {
+      els.splitParticles.innerHTML = "";
+      splitParticles.length = 0;
+
+      for (let i = 0; i < 8; i++) {
+        const particle = document.createElement("div");
+        particle.className = "split-particle";
+        els.splitParticles.appendChild(particle);
+        splitParticles.push(particle);
+      }
+    }
+
+    function makeLayers() {
+      els.layerGrid.innerHTML = "";
+      layers.length = 0;
+
+      for (let layerIndex = 0; layerIndex < state.layerCount; layerIndex++) {
+        const layer = document.createElement("section");
+        layer.className = "layer";
+
+        const header = document.createElement("div");
+        header.className = "layer-header";
+        header.innerHTML = `<b>Layer ${layerIndex}</b><span>0%</span>`;
+
+        const grid = document.createElement("div");
+        grid.className = "expert-grid";
+
+        const cells = [];
+        for (let expertIndex = 0; expertIndex < state.expertsPerLayer; expertIndex++) {
+          const cell = document.createElement("div");
+          cell.className = "expert-cell";
+          grid.appendChild(cell);
+          cells.push(cell);
+        }
+
+        layer.appendChild(header);
+        layer.appendChild(grid);
+        els.layerGrid.appendChild(layer);
+        layers.push({ layer, headerValue: header.querySelector("span"), cells });
+      }
+    }
+
+    function layerHotLimit(layerIndex) {
+      if (state.mode === "baseline") {
+        return 0;
+      }
+      const base = cacheRatio();
+      const pressure = 0.85 + 0.25 * pseudoRandom(layerIndex + 7);
+      return clamp(Math.round(state.expertsPerLayer * base * pressure), 2, state.expertsPerLayer);
+    }
+
+    function updateLayers() {
+      const hitTarget = currentHitTarget();
+      for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+        const layerInfo = layers[layerIndex];
+        const hotLimit = layerHotLimit(layerIndex);
+        const baselineGpu = state.mode === "baseline" && normalLayerOnGpu(layerIndex);
+        layerInfo.layer.classList.toggle("active-layer", layerIndex === state.activeLayer);
+        layerInfo.headerValue.textContent = state.mode === "baseline"
+          ? (baselineGpu ? "GPU" : "CPU")
+          : `${Math.round((hotLimit / state.expertsPerLayer) * 100)}%`;
+
+        for (let expertIndex = 0; expertIndex < layerInfo.cells.length; expertIndex++) {
+          const cell = layerInfo.cells[expertIndex];
+          const noiseRank = pseudoRandom((layerIndex + 1) * 1000 + expertIndex);
+          const isHot = state.mode === "hotcache"
+            ? noiseRank < hotLimit / state.expertsPerLayer
+            : baselineGpu;
+          const isActive = layerIndex === state.activeLayer && state.activeExperts.has(expertIndex);
+          cell.classList.toggle("hot", isHot);
+          cell.classList.toggle("active", isActive);
+        }
+      }
+
+      els.mergeMeter.style.setProperty("--hot-width", `${Math.round(hitTarget * 100)}%`);
+    }
+
+    function chooseActiveExperts() {
+      state.activeExperts.clear();
+      state.selectedSlots = [];
+      const slots = 8;
+      const target = currentHitTarget();
+      let hotCount = state.mode === "baseline"
+        ? (normalLayerOnGpu() ? slots : 0)
+        : Math.round(slots * target);
+      hotCount = clamp(hotCount, 0, slots);
+      const coldCount = slots - hotCount;
+      const hotLimit = layerHotLimit(state.activeLayer);
+
+      state.currentHotCount = hotCount;
+      state.currentColdCount = coldCount;
+
+      for (let i = 0; i < hotCount; i++) {
+        const expert = Math.floor((i / Math.max(1, hotCount)) * Math.max(1, hotLimit));
+        const clamped = clamp(expert, 0, state.expertsPerLayer - 1);
+        state.activeExperts.add(clamped);
+        state.selectedSlots.push({ kind: "hot", expert: clamped });
+      }
+
+      for (let i = hotCount; i < slots; i++) {
+        const expert = hotLimit + Math.floor((i - hotCount + 1) * 5 + pseudoRandom(state.token + i) * 8);
+        const clamped = clamp(expert, 0, state.expertsPerLayer - 1);
+        state.activeExperts.add(clamped);
+        state.selectedSlots.push({ kind: "cold", expert: clamped });
+      }
+
+      state.hotSlots += hotCount;
+      state.coldSlots += coldCount;
+      state.hits += hotCount;
+      state.totalSlots += slots;
+      state.hitHistory.push(state.totalSlots ? state.hits / state.totalSlots : 0);
+      if (state.hitHistory.length > 80) {
+        state.hitHistory.shift();
+      }
+    }
+
+    function updateLaneChips() {
+      const baseline = state.mode === "baseline";
+      const baselineGpu = normalLayerOnGpu();
+      const hotCount = baseline ? (baselineGpu ? 8 : 0) : state.currentHotCount;
+      const coldCount = baseline ? (baselineGpu ? 0 : 8) : state.currentColdCount;
+
+      for (let i = 0; i < 8; i++) {
+        hotLaneChips[i].classList.toggle("active", i < hotCount);
+        coldLaneChips[i].classList.toggle("active", i < coldCount);
+        hotLaneChips[i].style.opacity = baseline && !baselineGpu ? "0.28" : "1";
+        coldLaneChips[i].style.opacity = baseline && baselineGpu ? "0.28" : "1";
+        hotLaneChips[i].textContent = baseline ? `G${i + 1}` : `H${i + 1}`;
+        coldLaneChips[i].textContent = `C${i + 1}`;
+      }
+    }
+
+    function updateWorklist() {
+      const hotCount = state.mode === "baseline" ? 0 : state.currentHotCount;
+      const coldCount = state.mode === "baseline" ? 8 : state.currentColdCount;
+      els.worklistSummary.innerHTML =
+        `<span class="hot-count">Hot ${hotCount}</span><span class="cold-count">Cold ${coldCount}</span>`;
+
+      for (let i = 0; i < worklistSlots.length; i++) {
+        const slot = state.selectedSlots[i] || { kind: "cold", expert: i };
+        const label = slot.kind === "hot" ? `H:E${slot.expert}` : `C:E${slot.expert}`;
+        worklistSlots[i].textContent = label;
+        worklistSlots[i].className = `work-slot ${slot.kind}`;
+        worklistSlots[i].classList.toggle("active", state.mode === "hotcache");
+      }
+    }
+
+    function updateText() {
+      const hotcache = state.mode === "hotcache";
+      els.track.classList.toggle("baseline-mode", !hotcache);
+      els.hitControl.hidden = !hotcache;
+      els.cacheControl.hidden = !hotcache;
+      els.normalGpuControl.hidden = hotcache;
+      els.modeLabel.textContent = hotcache ? "Hot Cache" : "Normal";
+      els.routerText.textContent = hotcache
+        ? "The gate selects the top-k experts for the current token."
+        : "The gate selects top-k experts; the normal path handles all slots.";
+      els.hotLaneTitle.textContent = hotcache ? "CUDA0 Hot Lane" : "GPU Layer Placement";
+      els.hotLaneText.textContent = hotcache ? "from cache" : "GPU tensors";
+      els.hotLaneCopy.textContent = hotcache
+        ? "Hot-cache hits run directly from VRAM on the GPU."
+        : "In the normal path, GPU work depends on which full layers or tensors were placed on CUDA.";
+      els.coldLaneTitle.textContent = hotcache ? "CPU Cold Lane" : "CPU Layer Placement";
+      els.coldLaneText.textContent = hotcache ? "parallel" : "CPU tensors";
+      els.coldLaneCopy.textContent = hotcache
+        ? "Non-cached experts run through the normal CPU/RAM path."
+        : "CPU work is layer/tensor dependent, not a per-token hot/cold expert split.";
+      els.mergeTitle.textContent = hotcache ? "Merge" : "Expert Sum";
+      els.mergeText.textContent = hotcache
+        ? "Both partial outputs are added into the normal MoE layer result."
+        : "Selected expert outputs are reduced into the normal MoE layer result.";
+    }
+
+    function updateMetrics() {
+      const rate = state.totalSlots ? state.hits / state.totalSlots : 0;
+      const target = currentHitTarget();
+      const simulated = state.mode === "baseline"
+        ? 22.2
+        : 22.2 + Math.max(0, target - 0.459) * 18.5 - (1 - target) * 1.2;
+
+      els.hitValue.textContent = `${els.hitSlider.value}%`;
+      els.cacheValue.textContent = `${els.cacheSlider.value}%`;
+      els.normalGpuValue.textContent = `${normalGpuLayerCount()} / ${state.layerCount}`;
+      els.speedValue.textContent = `${(Number(els.speedSlider.value) / 10).toFixed(1)}x`;
+      els.tokenCount.textContent = String(state.token);
+      els.hitRate.textContent = `${Math.round(rate * 100)}%`;
+      els.hotSlots.textContent = String(state.hotSlots);
+      els.coldSlots.textContent = String(state.coldSlots);
+      els.simMetric.textContent = `${simulated.toFixed(1)} t/s`;
+      els.updateMetric.textContent = state.mode === "hotcache" ? "10%" : "off";
+    }
+
+    function drawGraph() {
+      const canvas = els.hitCanvas;
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width;
+      const height = canvas.height;
+      const pad = 34;
+      const breakEven = 0.459;
+
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.strokeStyle = "#e5e7eb";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad + ((height - 2 * pad) * i) / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad, y);
+        ctx.lineTo(width - pad, y);
+        ctx.stroke();
+      }
+
+      const yBreak = height - pad - breakEven * (height - 2 * pad);
+      ctx.strokeStyle = "#f4c430";
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      ctx.moveTo(pad, yBreak);
+      ctx.lineTo(width - pad, yBreak);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = "#5a6678";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText("Break-even 45.9%", pad + 6, yBreak - 7);
+      ctx.fillText("0%", 8, height - pad + 4);
+      ctx.fillText("100%", 8, pad + 4);
+
+      const data = state.hitHistory.length ? state.hitHistory : [0];
+      ctx.strokeStyle = "#14835f";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      data.forEach((value, index) => {
+        const x = pad + (index / Math.max(1, data.length - 1)) * (width - 2 * pad);
+        const y = height - pad - value * (height - 2 * pad);
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+
+      const last = data[data.length - 1] || 0;
+      ctx.fillStyle = "#14835f";
+      ctx.beginPath();
+      const lastX = pad + (width - 2 * pad);
+      const lastY = height - pad - last * (height - 2 * pad);
+      ctx.arc(lastX, lastY, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function stageCenter(stageName, yRatio = 0.5) {
+      const stage = els.track.querySelector(`[data-stage="${stageName}"]`);
+      const trackRect = els.track.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      const x = stageRect.left - trackRect.left + stageRect.width / 2 - 17;
+      const y = stageRect.top - trackRect.top + stageRect.height * yRatio - 17;
+      return { x, y };
+    }
+
+    function placeToken(token, stageName, yRatio = 0.5) {
+      const { x, y } = stageCenter(stageName, yRatio);
+      token.style.setProperty("--token-x", `${x}px`);
+      token.style.setProperty("--token-y", `${y}px`);
+    }
+
+    function placeMovingToken(stageName) {
+      const targetStage = stageName === "split" ? "worklist" : stageName;
+      const effectiveStage = stageName === "normal-lane"
+        ? (normalLayerOnGpu() ? "hot" : "cold")
+        : targetStage;
+      const { x, y } = stageCenter(effectiveStage);
+      els.movingToken.style.setProperty("--token-x", `${x}px`);
+      els.movingToken.style.setProperty("--token-y", `${y}px`);
+    }
+
+    function placeParticle(particle, x, y) {
+      particle.style.setProperty("--particle-x", `${x}px`);
+      particle.style.setProperty("--particle-y", `${y}px`);
+    }
+
+    function worklistParticleOrigin(index) {
+      const trackRect = els.track.getBoundingClientRect();
+      const slot = worklistSlots[index];
+      if (!slot) {
+        return stageCenter("worklist");
+      }
+
+      const rect = slot.getBoundingClientRect();
+      return {
+        x: rect.left - trackRect.left + rect.width / 2 - 12,
+        y: rect.top - trackRect.top + rect.height / 2 - 12,
+      };
+    }
+
+    function laneParticleTarget(kind, index, total) {
+      const lane = els.track.querySelector(`[data-stage="${kind}"]`);
+      const trackRect = els.track.getBoundingClientRect();
+      const rect = lane.getBoundingClientRect();
+      const width = Math.max(1, rect.width - 56);
+      const x = rect.left - trackRect.left + 28 + ((index + 0.5) / Math.max(1, total)) * width - 12;
+      const y = rect.top - trackRect.top + rect.height * 0.68 - 12;
+      return { x, y };
+    }
+
+    function mergeParticleTarget(index, total) {
+      const merge = els.track.querySelector('[data-stage="merge"]');
+      const trackRect = els.track.getBoundingClientRect();
+      const rect = merge.getBoundingClientRect();
+      const columns = Math.min(4, Math.max(1, total));
+      const rows = Math.ceil(total / columns);
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const x = rect.left - trackRect.left + rect.width * 0.25 + ((column + 0.5) / columns) * rect.width * 0.5 - 12;
+      const y = rect.top - trackRect.top + rect.height * 0.43 + ((row + 0.5) / rows) * rect.height * 0.28 - 12;
+      return { x, y };
+    }
+
+    function updateSplitVisual(stageName) {
+      const splitActive = state.mode === "hotcache" && stageName === "split";
+      const mergeActive = state.mode === "hotcache" && stageName === "merge";
+      const particlesActive = splitActive || mergeActive;
+      const normalLaneActive = state.mode === "baseline" && stageName === "normal-lane";
+      const normalGpuActive = normalLaneActive && normalLayerOnGpu();
+      els.track.classList.toggle("split-active", splitActive);
+      els.track.classList.toggle("merge-active", mergeActive);
+      els.track.classList.toggle("normal-gpu-active", normalGpuActive);
+      els.track.classList.toggle("normal-cpu-active", normalLaneActive && !normalGpuActive);
+
+      let hotIndex = 0;
+      let coldIndex = 0;
+
+      for (let i = 0; i < splitParticles.length; i++) {
+        const particle = splitParticles[i];
+        const slot = state.selectedSlots[i];
+
+        if (!slot) {
+          particle.className = "split-particle";
+          particle.textContent = "";
+          particle.classList.remove("active");
+          continue;
+        }
+
+        const kindIndex = slot.kind === "hot" ? hotIndex++ : coldIndex++;
+        const kindTotal = slot.kind === "hot" ? state.currentHotCount : state.currentColdCount;
+        const label = slot.kind === "hot" ? `H${kindIndex + 1}` : `C${kindIndex + 1}`;
+        let target = worklistParticleOrigin(i);
+        if (splitActive) {
+          target = laneParticleTarget(slot.kind, kindIndex, kindTotal);
+        } else if (mergeActive) {
+          target = mergeParticleTarget(i, state.selectedSlots.length);
+        }
+
+        particle.className = `split-particle ${slot.kind}`;
+        particle.textContent = label;
+        particle.classList.toggle("active", particlesActive);
+        placeParticle(particle, target.x, target.y);
+      }
+    }
+
+    function addOutputToken() {
+      const item = document.createElement("div");
+      item.className = "out-token";
+      item.textContent = String(state.token);
+      els.outputStream.appendChild(item);
+      while (els.outputStream.children.length > 18) {
+        els.outputStream.removeChild(els.outputStream.firstChild);
+      }
+    }
+
+    function step() {
+      const stages = state.mode === "hotcache"
+        ? ["router", "worklist", "split", "merge", "output"]
+        : ["router", "normal-lane", "merge", "output"];
+      const stage = stages[state.frame % stages.length];
+
+      if (stage === "router") {
+        state.token += 1;
+        state.activeLayer = (state.activeLayer + 1) % state.layerCount;
+        chooseActiveExperts();
+      }
+
+      if (stage === "output") {
+        addOutputToken();
+      }
+
+      placeMovingToken(stage);
+      updateSplitVisual(stage);
+      updateLaneChips();
+      updateWorklist();
+      updateLayers();
+      updateMetrics();
+      drawGraph();
+      state.frame += 1;
+    }
+
+    function reset() {
+      state.frame = 0;
+      state.token = 0;
+      state.hits = 0;
+      state.totalSlots = 0;
+      state.hotSlots = 0;
+      state.coldSlots = 0;
+      state.hitHistory = [];
+      state.activeLayer = 0;
+      state.activeExperts.clear();
+      els.outputStream.innerHTML = "";
+      step();
+    }
+
+    function schedule() {
+      if (state.intervalId) {
+        clearInterval(state.intervalId);
+      }
+      const speed = Number(els.speedSlider.value) / 10;
+      const delay = Math.round(900 / speed);
+      state.intervalId = setInterval(() => {
+        if (state.playing) {
+          step();
+        }
+      }, delay);
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      els.modeButtons.querySelectorAll("button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.mode === mode);
+      });
+      updateText();
+      reset();
+    }
+
+    els.playBtn.addEventListener("click", () => {
+      state.playing = !state.playing;
+      els.playBtn.textContent = state.playing ? "Pause" : "Play";
+      els.playBtn.classList.toggle("active", state.playing);
+    });
+
+    els.stepBtn.addEventListener("click", () => {
+      state.playing = false;
+      els.playBtn.textContent = "Play";
+      els.playBtn.classList.remove("active");
+      step();
+    });
+
+    els.resetBtn.addEventListener("click", reset);
+
+    els.modeButtons.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-mode]");
+      if (button) {
+        setMode(button.dataset.mode);
+      }
+    });
+
+    [els.hitSlider, els.cacheSlider].forEach((slider) => {
+      slider.addEventListener("input", () => {
+        updateLayers();
+        updateWorklist();
+        updateMetrics();
+      });
+    });
+
+    els.normalGpuSlider.addEventListener("input", () => {
+      const isNormalLaneVisible = els.track.classList.contains("normal-gpu-active") ||
+        els.track.classList.contains("normal-cpu-active");
+      updateLaneChips();
+      updateLayers();
+      updateMetrics();
+      if (isNormalLaneVisible) {
+        placeMovingToken("normal-lane");
+      }
+      updateSplitVisual(isNormalLaneVisible ? "normal-lane" : "router");
+    });
+
+    els.speedSlider.addEventListener("input", () => {
+      updateMetrics();
+      schedule();
+    });
+
+    window.addEventListener("resize", () => {
+      placeMovingToken("router");
+      const visualStage = els.track.classList.contains("split-active")
+        ? "split"
+        : els.track.classList.contains("merge-active")
+          ? "merge"
+          : els.track.classList.contains("normal-gpu-active") || els.track.classList.contains("normal-cpu-active")
+            ? "normal-lane"
+            : "router";
+      updateSplitVisual(visualStage);
+      drawGraph();
+    });
+
+    makeLaneChips();
+    makeWorklistSlots();
+    makeSplitParticles();
+    makeLayers();
+    updateText();
+    reset();
+    schedule();
+  </script>
+</body>
+</html>
