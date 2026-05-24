@@ -255,7 +255,14 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
 }
 
 bool llama_moe_hot_cache_layer_active(const llama_model & model, int il) {
-    return llama_moe_hot_cache_adapter_supports_arch(model.arch) &&
+    return llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::none);
+}
+
+bool llama_moe_hot_cache_layer_active_for_graph(
+        const llama_model & model,
+        int il,
+        llama_moe_hot_cache_graph_kind graph_kind) {
+    return llama_moe_hot_cache_adapter_supports_graph_kind(model.arch, graph_kind) &&
            model.moe_hot_cache &&
            il >= 0 &&
            il < int(model.moe_hot_cache->layers.size()) &&

@@ -63,12 +63,30 @@ static void test_find_supported_adapters() {
 static void test_rejects_unsupported_arch() {
     require(!llama_moe_hot_cache_adapter_supports_arch(LLM_ARCH_LLAMA));
     require(llama_moe_hot_cache_find_model_adapter(LLM_ARCH_LLAMA) == nullptr);
+    require(llama_moe_hot_cache_find_model_adapter(LLM_ARCH_LLAMA, llama_moe_hot_cache_graph_kind::logits) == nullptr);
+    require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_LLAMA, llama_moe_hot_cache_graph_kind::logits));
 
     const auto profile = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_LLAMA);
     require(!profile.cpu_decode_routing);
     require(!profile.decode_direct_merge);
     require(!profile.merge_sum_rows);
     require(!profile.branch_reduce_merge);
+}
+
+static void test_graph_kind_capability_checks() {
+    require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_QWEN35MOE, llama_moe_hot_cache_graph_kind::qwen35_ffn));
+    require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_QWEN35MOE, llama_moe_hot_cache_graph_kind::logits));
+
+    require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_GEMMA4, llama_moe_hot_cache_graph_kind::logits));
+    require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_GEMMA4, llama_moe_hot_cache_graph_kind::qwen35_ffn));
+
+    const auto * qwen_any = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_QWEN35MOE, llama_moe_hot_cache_graph_kind::none);
+    require(qwen_any != nullptr);
+    require(qwen_any->graph_kind == llama_moe_hot_cache_graph_kind::qwen35_ffn);
+
+    require(std::string(llama_moe_hot_cache_graph_kind_name(llama_moe_hot_cache_graph_kind::none)) == "none");
+    require(std::string(llama_moe_hot_cache_graph_kind_name(llama_moe_hot_cache_graph_kind::qwen35_ffn)) == "qwen35_ffn");
+    require(std::string(llama_moe_hot_cache_graph_kind_name(llama_moe_hot_cache_graph_kind::logits)) == "logits");
 }
 
 static void test_profile_defaults_are_arch_specific() {
@@ -109,6 +127,7 @@ static void test_parallel_mode_is_runtime_switchable() {
 int main() {
     test_find_supported_adapters();
     test_rejects_unsupported_arch();
+    test_graph_kind_capability_checks();
     test_profile_defaults_are_arch_specific();
     test_parallel_mode_is_runtime_switchable();
     return 0;
