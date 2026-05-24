@@ -500,7 +500,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
     GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
 
     ggml_tensor * moe_out = nullptr;
-    if (llama_moe_hot_cache_layer_active(model, il)) {
+    if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::qwen35_ffn)) {
         moe_out = build_layer_ffn_hot(cur, il);
     } else {
         moe_out =
