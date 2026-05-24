@@ -201,8 +201,6 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
-llama_build(test-moe-hot-cache.cpp)
-llama_test(test-moe-hot-cache)
 llama_build(test-moe-hot-cache-builder.cpp)
 llama_test(test-moe-hot-cache-builder)
 llama_build(test-moe-hot-cache-budget.cpp)
@@ -215,6 +213,8 @@ llama_build(test-moe-hot-cache-updater.cpp)
 llama_test(test-moe-hot-cache-updater)
 llama_build(test-moe-hot-cache-weighting.cpp)
 llama_test(test-moe-hot-cache-weighting)
+llama_build(test-moe-hot-cache-worklist.cpp)
+llama_test(test-moe-hot-cache-worklist)
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp
