@@ -37,6 +37,7 @@ add_library(llama
             moe-hot-cache/llama-moe-hot-cache.cpp
             moe-hot-cache/llama-moe-hot-cache-graph.cpp
             moe-hot-cache/llama-moe-hot-cache-parser.cpp
+            moe-hot-cache/llama-moe-hot-cache-perf-json.cpp
             moe-hot-cache/llama-moe-hot-cache-perf.cpp
             moe-hot-cache/llama-moe-hot-cache-perf-nodes.cpp
             moe-hot-cache/llama-moe-hot-cache-planner.cpp
