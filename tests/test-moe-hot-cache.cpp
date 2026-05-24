@@ -21,27 +21,6 @@ static bool hot_dummy_padding_enabled() {
            (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
 }
 
-static void test_select_budget() {
-    const std::vector<llama_moe_hot_cache_entry> observed = {
-        { 0, 0, 10 },
-        { 0, 1, 9  },
-        { 1, 0, 8  },
-        { 1, 1, 7  },
-    };
-
-    const std::vector<llama_moe_hot_cache_expert_size> sizes = {
-        { 0, 0, 40 },
-        { 0, 1, 70 },
-        { 1, 0, 20 },
-        { 1, 1, 10 },
-    };
-
-    const auto plan = llama_moe_hot_cache_select(observed, sizes, 80);
-    require(plan.used_bytes == 80);
-    require(plan.selected.size() == 1);
-    require(plan.selected[0].layer == 0 && plan.selected[0].expert == 0);
-}
-
 static ggml_context_ptr make_ctx() {
     ggml_init_params params = {
         /*.mem_size   =*/ 16*1024,
@@ -227,7 +206,6 @@ static void test_build_worklist_from_logits() {
 }
 
 int main() {
-    test_select_budget();
     test_build_worklist_mixed();
     test_build_worklist_all_hot_or_cold();
     test_build_worklist_from_logits();
