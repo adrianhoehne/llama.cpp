@@ -15,8 +15,8 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
-#include "src/llama-moe-hot-cache.h"
-#include "src/llama-moe-hot-cache-perf.h"
+#include "src/moe-hot-cache/llama-moe-hot-cache.h"
+#include "src/moe-hot-cache/llama-moe-hot-cache-perf.h"
 
 #include <algorithm>
 #include <cstddef>

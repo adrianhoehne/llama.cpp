@@ -8,7 +8,7 @@
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
-#include "src/llama-moe-hot-cache-perf.h"
+#include "src/moe-hot-cache/llama-moe-hot-cache-perf.h"
 #include "llama.h"
 #include "log.h"
 
