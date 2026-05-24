@@ -203,6 +203,10 @@ llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build(test-moe-hot-cache.cpp)
 llama_test(test-moe-hot-cache)
+llama_build(test-moe-hot-cache-parser.cpp)
+llama_test(test-moe-hot-cache-parser)
+llama_build(test-moe-hot-cache-weighting.cpp)
+llama_test(test-moe-hot-cache-weighting)
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp
