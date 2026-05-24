@@ -201,6 +201,8 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
+llama_build(test-moe-hot-cache-adapter.cpp)
+llama_test(test-moe-hot-cache-adapter)
 llama_build(test-moe-hot-cache-builder.cpp)
 llama_test(test-moe-hot-cache-builder)
 llama_build(test-moe-hot-cache-budget.cpp)

@@ -1,4 +1,5 @@
 #include "llama-moe-hot-cache.h"
+#include "llama-moe-hot-cache-adapter.h"
 #include "llama-moe-hot-cache-budget.h"
 #include "llama-moe-hot-cache-builder.h"
 #include "llama-moe-hot-cache-common.h"
@@ -254,7 +255,8 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
 }
 
 bool llama_moe_hot_cache_layer_active(const llama_model & model, int il) {
-    return model.moe_hot_cache &&
+    return llama_moe_hot_cache_adapter_supports_arch(model.arch) &&
+           model.moe_hot_cache &&
            il >= 0 &&
            il < int(model.moe_hot_cache->layers.size()) &&
            model.moe_hot_cache->layers[il].active();
