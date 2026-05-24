@@ -1,0 +1,2126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoE Hot-Cache Architecture Explainer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --ink: #152033;
+      --muted: #5e6a7e;
+      --panel: #ffffff;
+      --line: #ccd4e1;
+      --soft: #eef2f7;
+      --hot: #cf3f36;
+      --cold: #2568c7;
+      --active: #f2bd24;
+      --green: #16825f;
+      --purple: #6f55b5;
+      --shadow: 0 14px 34px rgba(23, 35, 52, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .source-link {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .source-link:hover code {
+      text-decoration: underline;
+    }
+
+    .doc-topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 24px;
+      background: #101827;
+      border-bottom: 1px solid #0b1020;
+      color: #f9fafb;
+      flex-wrap: wrap;
+    }
+
+    .doc-topbar a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f9fafb;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .doc-topbar a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .app {
+      min-height: calc(100vh - 59px);
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    }
+
+    aside {
+      position: sticky;
+      overflow: auto;
+      background: #101827;
+      color: #f9fafb;
+      padding: 24px;
+      top: 59px;
+      height: calc(100vh - 59px);
+    }
+
+    main {
+      padding: 24px;
+      min-width: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: 28px;
+      line-height: 1.12;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      font-size: 20px;
+      margin-bottom: 10px;
+    }
+
+    h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    aside p {
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      color: #f9fafb;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .group {
+      border-top: 1px solid rgba(255, 255, 255, 0.13);
+      margin-top: 18px;
+      padding-top: 18px;
+    }
+
+    .group-title {
+      color: #e5e7eb;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .button-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+
+    button {
+      border: 1px solid #3a475b;
+      background: #202b3a;
+      color: #f9fafb;
+      min-height: 38px;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: left;
+      padding: 0 12px;
+    }
+
+    button:hover {
+      background: #293649;
+    }
+
+    button.active {
+      background: var(--active);
+      color: #161616;
+      border-color: var(--active);
+      font-weight: 800;
+    }
+
+    .tiny-list {
+      margin: 0;
+      padding-left: 18px;
+      color: #cbd5e1;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+
+    .panel-head {
+      padding: 18px 18px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .panel-head p {
+      margin-bottom: 0;
+      font-size: 13px;
+    }
+
+    .diagram-wrap {
+      padding: 18px;
+      overflow: auto;
+    }
+
+    svg {
+      display: block;
+      min-width: 900px;
+      width: 100%;
+      height: auto;
+    }
+
+    .node rect {
+      fill: #ffffff;
+      stroke: #aeb9c9;
+      stroke-width: 1.6;
+      rx: 8;
+    }
+
+    .node text {
+      fill: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      pointer-events: none;
+    }
+
+    .node .label {
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .node .sub {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .node.hot rect {
+      fill: #fff0ef;
+      stroke: var(--hot);
+    }
+
+    .node.cold rect {
+      fill: #eef5ff;
+      stroke: var(--cold);
+    }
+
+    .node.green rect {
+      fill: #edf9f4;
+      stroke: var(--green);
+    }
+
+    .node.purple rect {
+      fill: #f2eefb;
+      stroke: var(--purple);
+    }
+
+    .node.active rect {
+      stroke: var(--active);
+      stroke-width: 4;
+      filter: drop-shadow(0 8px 16px rgba(242, 189, 36, 0.34));
+    }
+
+    .arrow {
+      stroke: #7b8797;
+      stroke-width: 2.2;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+
+    .arrow.hot {
+      stroke: var(--hot);
+    }
+
+    .arrow.cold {
+      stroke: var(--cold);
+    }
+
+    .arrow.green {
+      stroke: var(--green);
+    }
+
+    .arrow.dim {
+      opacity: 0.25;
+    }
+
+    .explain {
+      padding: 18px;
+    }
+
+    .explain-box {
+      border: 1px solid var(--line);
+      background: #fbfcff;
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 184px;
+    }
+
+    .explain-box h3 {
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+
+    .explain-box p {
+      margin-bottom: 10px;
+    }
+
+    .code {
+      display: block;
+      background: #101827;
+      color: #e5e7eb;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .step-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      min-height: 150px;
+    }
+
+    .step-card.active {
+      border-color: var(--active);
+      box-shadow: 0 0 0 2px rgba(242, 189, 36, 0.35), var(--shadow);
+    }
+
+    .step-no {
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      background: #3f4c5f;
+      color: #ffffff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .step-card p {
+      margin-bottom: 0;
+      font-size: 13px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .diagram-panel,
+    .doc-panel {
+      margin-bottom: 18px;
+    }
+
+    .diagram-panel .diagram-wrap svg {
+      min-width: 1040px;
+    }
+
+    .class-box rect {
+      fill: #ffffff;
+      stroke: #aeb9c9;
+      stroke-width: 1.4;
+      rx: 8;
+    }
+
+    .class-box .class-title {
+      fill: var(--ink);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .class-box .class-file {
+      fill: #0f3d70;
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .class-box .class-member {
+      fill: var(--muted);
+      font-size: 11px;
+    }
+
+    .class-box.hot rect {
+      fill: #fff0ef;
+      stroke: var(--hot);
+    }
+
+    .class-box.green rect {
+      fill: #edf9f4;
+      stroke: var(--green);
+    }
+
+    .class-box.purple rect {
+      fill: #f2eefb;
+      stroke: var(--purple);
+    }
+
+    .flow-step rect {
+      fill: #ffffff;
+      stroke: #aeb9c9;
+      stroke-width: 1.4;
+      rx: 8;
+    }
+
+    .flow-step.hot rect {
+      fill: #fff0ef;
+      stroke: var(--hot);
+    }
+
+    .flow-step.cold rect {
+      fill: #eef5ff;
+      stroke: var(--cold);
+    }
+
+    .flow-step.green rect {
+      fill: #edf9f4;
+      stroke: var(--green);
+    }
+
+    .flow-step.purple rect {
+      fill: #f2eefb;
+      stroke: var(--purple);
+    }
+
+    .flow-step text {
+      fill: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .flow-step .sub {
+      fill: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .lane-label {
+      fill: #344154;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .doc-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+      gap: 18px;
+      padding: 18px;
+    }
+
+    .doc-copy p,
+    .doc-copy li {
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .model-steps {
+      margin: 0;
+      padding-left: 22px;
+    }
+
+    .model-steps li {
+      margin-bottom: 12px;
+    }
+
+    .model-steps b {
+      color: var(--ink);
+    }
+
+    .checklist {
+      display: grid;
+      gap: 10px;
+    }
+
+    .check-row {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcff;
+      padding: 10px;
+    }
+
+    .check-row b {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .check-row span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      padding: 18px;
+    }
+
+    .model-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcff;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .model-card h3 {
+      margin: 0;
+      padding: 12px 14px 4px;
+      font-size: 15px;
+    }
+
+    .model-card p {
+      margin: 0;
+      padding: 0 14px 10px;
+      font-size: 13px;
+    }
+
+    .field-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .field-table th,
+    .field-table td {
+      border-top: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    .field-table th {
+      background: #f2f5f9;
+      color: #344154;
+    }
+
+    .field-table code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      color: #0f3d70;
+    }
+
+    .mini-diagram {
+      padding: 18px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .stack-row {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .stack-label {
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: #e8edf5;
+      color: #314057;
+      font-weight: 800;
+      font-size: 13px;
+      text-align: center;
+      padding: 8px;
+    }
+
+    .stack-items {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #ffffff;
+      min-height: 72px;
+    }
+
+    .item b {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .item span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .file-map {
+      padding: 18px;
+    }
+
+    .file-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .file-table th,
+    .file-table td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .file-table th {
+      color: #344154;
+      background: #f2f5f9;
+    }
+
+    .file-table code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: #0f3d70;
+    }
+
+    .note {
+      margin-top: 14px;
+      border-left: 4px solid var(--active);
+      background: #fff8df;
+      border-radius: 6px;
+      padding: 12px 14px;
+      color: #5d4a04;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .key {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+    }
+
+    .swatch.hot {
+      background: var(--hot);
+    }
+
+    .swatch.cold {
+      background: var(--cold);
+    }
+
+    .swatch.green {
+      background: var(--green);
+    }
+
+    .swatch.purple {
+      background: var(--purple);
+    }
+
+    @media (max-width: 1120px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+
+      .hero,
+      .two-col,
+      .flow-grid,
+      .doc-grid,
+      .model-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stack-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      main,
+      aside {
+        padding: 16px;
+      }
+
+      .stack-items {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="doc-topbar" aria-label="Documentation pages">
+    <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
+    <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
+    <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
+    <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
+  </nav>
+  <div class="app">
+    <aside>
+      <h1>Architecture Explainer</h1>
+      <p>
+        A junior-friendly and senior-useful view of the MoE Experts First feature:
+        what is built at startup, what happens per token, and which files own each responsibility.
+      </p>
+
+      <div class="group">
+        <div class="group-title">Page Sections</div>
+        <div class="button-grid">
+          <a class="nav-link" href="#classes">Class Diagram</a>
+          <a class="nav-link" href="#data-models">Data Models</a>
+          <a class="nav-link" href="#code-reference">Code Reference</a>
+          <a class="nav-link" href="#runtime-flow">Runtime Flow</a>
+          <a class="nav-link" href="#senior-notes">Senior Notes</a>
+          <a class="nav-link" href="#add-model">Add a Model</a>
+          <a class="nav-link" href="#agent-runbook">Agent Runbook</a>
+          <a class="nav-link" href="#files">Files</a>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Highlight Phase</div>
+        <div class="button-grid" id="phaseButtons">
+          <button class="active" data-phase="overview">Overview</button>
+          <button data-phase="learn">1. Learn Run</button>
+          <button data-phase="startup">2. Server Start</button>
+          <button data-phase="decode">3. Decode Token</button>
+          <button data-phase="update">4. Dynamic Update</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Rules of Thumb</div>
+        <ul class="tiny-list">
+          <li>The original experts stay in the model.</li>
+          <li>Hot experts are an additional VRAM copy.</li>
+          <li>The worklist decides per token which slots are hot or cold.</li>
+          <li>The scheduler overlaps the hot and cold lanes.</li>
+        </ul>
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero" id="overall-architecture">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Overall Architecture</h2>
+              <p>Click a block to see why it exists and which file contains the relevant code.</p>
+            </div>
+            <div class="legend">
+              <span class="key"><span class="swatch hot"></span>GPU Hot</span>
+              <span class="key"><span class="swatch cold"></span>CPU Cold</span>
+              <span class="key"><span class="swatch green"></span>Metrics/Update</span>
+              <span class="key"><span class="swatch purple"></span>Graph/Scheduler</span>
+            </div>
+          </div>
+          <div class="diagram-wrap">
+            <svg viewBox="0 0 1120 650" role="img" aria-label="MoE hot-cache architecture diagram">
+              <defs>
+                <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8797"></path>
+                </marker>
+              </defs>
+
+              <path class="arrow green learn-edge" d="M 145 112 C 220 112 220 112 294 112"></path>
+              <path class="arrow startup-edge" d="M 435 112 C 508 112 508 112 582 112"></path>
+              <path class="arrow startup-edge" d="M 733 112 C 808 112 808 112 884 112"></path>
+
+              <path class="arrow decode-edge" d="M 144 326 C 210 326 210 326 276 326"></path>
+              <path class="arrow decode-edge" d="M 424 326 C 478 326 478 270 532 270"></path>
+              <path class="arrow decode-edge cold" d="M 424 326 C 478 326 478 382 532 382"></path>
+              <path class="arrow decode-edge hot" d="M 690 270 C 750 270 750 326 810 326"></path>
+              <path class="arrow decode-edge cold" d="M 690 382 C 750 382 750 326 810 326"></path>
+              <path class="arrow decode-edge" d="M 958 326 C 1004 326 1004 326 1050 326"></path>
+
+              <path class="arrow green update-edge" d="M 930 482 C 826 548 686 548 606 482"></path>
+              <path class="arrow green update-edge" d="M 460 482 C 350 548 220 548 145 482"></path>
+
+              <g class="node green" data-node="perf" data-phases="learn update" transform="translate(24 62)">
+                <rect width="124" height="100"></rect>
+                <text class="label" x="18" y="34">Perf JSON</text>
+                <text class="sub" x="18" y="58">/moe-layer-perf</text>
+                <text class="sub" x="18" y="76">expert hits</text>
+              </g>
+
+              <g class="node green" data-node="parser" data-phases="learn startup update" transform="translate(294 62)">
+                <rect width="142" height="100"></rect>
+                <text class="label" x="18" y="34">Parser</text>
+                <text class="sub" x="18" y="58">reads layers</text>
+                <text class="sub" x="18" y="76">and experts</text>
+              </g>
+
+              <g class="node green" data-node="planner" data-phases="startup update" transform="translate(582 62)">
+                <rect width="154" height="100"></rect>
+                <text class="label" x="18" y="34">Planner</text>
+                <text class="sub" x="18" y="58">scores experts</text>
+                <text class="sub" x="18" y="76">fits budget</text>
+              </g>
+
+              <g class="node hot" data-node="cache" data-phases="startup decode update" transform="translate(884 62)">
+                <rect width="154" height="100"></rect>
+                <text class="label" x="18" y="34">Hot Cache</text>
+                <text class="sub" x="18" y="58">selected slices</text>
+                <text class="sub" x="18" y="76">in VRAM</text>
+              </g>
+
+              <g class="node" data-node="token" data-phases="decode" transform="translate(24 276)">
+                <rect width="122" height="100"></rect>
+                <text class="label" x="18" y="34">Token</text>
+                <text class="sub" x="18" y="58">current input</text>
+                <text class="sub" x="18" y="76">for one layer</text>
+              </g>
+
+              <g class="node" data-node="router" data-phases="decode" transform="translate(276 276)">
+                <rect width="150" height="100"></rect>
+                <text class="label" x="18" y="34">Router</text>
+                <text class="sub" x="18" y="58">chooses top-k</text>
+                <text class="sub" x="18" y="76">expert ids</text>
+              </g>
+
+              <g class="node hot" data-node="hotlane" data-phases="decode" transform="translate(532 220)">
+                <rect width="160" height="100"></rect>
+                <text class="label" x="18" y="34">Hot Lane</text>
+                <text class="sub" x="18" y="58">CUDA0</text>
+                <text class="sub" x="18" y="76">cached experts</text>
+              </g>
+
+              <g class="node cold" data-node="coldlane" data-phases="decode" transform="translate(532 332)">
+                <rect width="160" height="100"></rect>
+                <text class="label" x="18" y="34">Cold Lane</text>
+                <text class="sub" x="18" y="58">CPU/RAM</text>
+                <text class="sub" x="18" y="76">original experts</text>
+              </g>
+
+              <g class="node purple" data-node="scheduler" data-phases="decode" transform="translate(810 276)">
+                <rect width="150" height="100"></rect>
+                <text class="label" x="18" y="34">Join/Merge</text>
+                <text class="sub" x="18" y="58">parallel region</text>
+                <text class="sub" x="18" y="76">then add output</text>
+              </g>
+
+              <g class="node" data-node="next" data-phases="decode" transform="translate(1050 276)">
+                <rect width="60" height="100"></rect>
+                <text class="label" x="16" y="48">Next</text>
+                <text class="sub" x="16" y="70">layer</text>
+              </g>
+
+              <g class="node green" data-node="counters" data-phases="learn update" transform="translate(806 452)">
+                <rect width="154" height="86"></rect>
+                <text class="label" x="18" y="33">Counters</text>
+                <text class="sub" x="18" y="56">hits + timings</text>
+              </g>
+
+              <g class="node green" data-node="dynamic" data-phases="update" transform="translate(454 452)">
+                <rect width="154" height="86"></rect>
+                <text class="label" x="18" y="33">Update</text>
+                <text class="sub" x="18" y="56">exchange slots</text>
+              </g>
+
+              <g class="node" data-node="normal" data-phases="overview" transform="translate(24 452)">
+                <rect width="124" height="86"></rect>
+                <text class="label" x="18" y="33">Normal</text>
+                <text class="sub" x="18" y="56">fallback path</text>
+              </g>
+            </svg>
+          </div>
+        </div>
+
+        <div class="panel explain">
+          <h2>Block Explanation</h2>
+          <div class="explain-box">
+            <h3 id="detailTitle">Overview</h3>
+            <p id="detailText">
+              This feature is an additive path. Without the hot cache, llama.cpp runs normally. With the hot cache, the original MoE experts stay in the model and selected experts are additionally copied into VRAM.
+            </p>
+            <code class="code" id="detailCode">Start: --cpu-moe --moe-hot-cache file.json --moe-hot-cache-max-mib -1</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="flow-grid" id="stepCards">
+        <article class="step-card active" data-phase="learn">
+          <div class="step-no">1</div>
+          <h3>Learn Run</h3>
+          <p>A regular run records which experts are actually used per layer.</p>
+        </article>
+        <article class="step-card" data-phase="startup">
+          <div class="step-no">2</div>
+          <h3>Server Start</h3>
+          <p>The JSON is parsed, experts are scored, and the best candidates are packed into a VRAM budget.</p>
+        </article>
+        <article class="step-card" data-phase="decode">
+          <div class="step-no">3</div>
+          <h3>Decode</h3>
+          <p>For each token, the worklist separates hot slots and cold slots into two parallel lanes.</p>
+        </article>
+        <article class="step-card" data-phase="update">
+          <div class="step-no">4</div>
+          <h3>Update</h3>
+          <p>After a request, weak cache entries can be exchanged for better experts.</p>
+        </article>
+      </section>
+
+      <section class="two-col">
+        <div class="panel mini-diagram">
+          <h2>Where Does Each Part Live?</h2>
+          <div class="stack">
+            <div class="stack-row">
+              <div class="stack-label">llama.cpp Touch Points</div>
+              <div class="stack-items">
+                <div class="item"><b>Model Hooks</b><span>Small guards call the hot path only when the adapter allows this graph kind.</span></div>
+                <div class="item"><b>Scheduler</b><span>Recognizes the marked hot/cold region and overlaps the branches when possible.</span></div>
+                <div class="item"><b>Server Hook</b><span>Exposes perf JSON and triggers optional post-request cache updates.</span></div>
+              </div>
+            </div>
+            <div class="stack-row">
+              <div class="stack-label">Hot-Cache Package</div>
+              <div class="stack-items">
+                <div class="item"><b>Adapter</b><span>Owns model support, graph kind, FFN op, and profile defaults.</span></div>
+                <div class="item"><b>Parser/Planner</b><span>Reads perf JSON, scores experts, sizes candidates, and fits the budget.</span></div>
+                <div class="item"><b>Builder/Runtime</b><span>Creates cache tensors, copies expert slices, and builds worklists.</span></div>
+              </div>
+            </div>
+            <div class="stack-row">
+              <div class="stack-label">Perf and Update</div>
+              <div class="stack-items">
+                <div class="item"><b>Perf State</b><span>Collects hits, hot/cold slots, timings, fallback reasons, and expert arrays.</span></div>
+                <div class="item"><b>Updater</b><span>Exchanges cache entries inside the existing capacity after a request.</span></div>
+                <div class="item"><b>Tests</b><span>Component tests cover parser, weighting, planner, builder, worklist, adapter, budget, and perf.</span></div>
+              </div>
+            </div>
+            <div class="stack-row">
+              <div class="stack-label">Hardware</div>
+              <div class="stack-items">
+                <div class="item"><b>CUDA Cache</b><span>Computes selected hot expert slices from the extra VRAM cache.</span></div>
+                <div class="item"><b>CPU/RAM</b><span>Keeps the original experts and computes cold misses when <code>--cpu-moe</code> is used.</span></div>
+                <div class="item"><b>VRAM Budget</b><span>Limits cache size and is controlled by explicit MiB or auto sizing with reserve.</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="note">
+            Current rule: most feature logic lives under <code>src/moe-hot-cache</code>. The llama.cpp model files should stay as small guarded hooks, so upstream rebases remain manageable.
+          </div>
+        </div>
+
+        <div class="panel mini-diagram">
+          <h2>Before and After</h2>
+          <div class="stack">
+            <div class="stack-row">
+              <div class="stack-label">Without Feature</div>
+              <div class="stack-items">
+                <div class="item"><b>Router</b><span>Selects experts.</span></div>
+                <div class="item"><b>MoE FFN</b><span>All selected experts run through the normal path.</span></div>
+                <div class="item"><b>Output</b><span>The result moves to the next layer.</span></div>
+              </div>
+            </div>
+            <div class="stack-row">
+              <div class="stack-label">With Hot Cache</div>
+              <div class="stack-items">
+                <div class="item"><b>Worklist</b><span>Splits expert slots into hot and cold work.</span></div>
+                <div class="item"><b>Parallel</b><span>GPU and CPU work at the same time.</span></div>
+                <div class="item"><b>Merge</b><span>Both results are added back together.</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="note">
+            Performance improves only when enough slots are hot and the cold lane does not trail too far behind.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel diagram-panel" id="classes">
+        <div class="panel-head">
+          <div>
+            <h2>Class Diagram</h2>
+            <p>The boxes show the main building blocks and the direction in which data flows.</p>
+          </div>
+        </div>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 1120 700" role="img" aria-label="MoE hot-cache class diagram">
+            <defs>
+              <marker id="arrowClass" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8797"></path>
+              </marker>
+            </defs>
+
+            <path class="arrow green" marker-end="url(#arrowClass)" d="M 190 118 C 250 118 250 118 310 118"></path>
+            <path class="arrow green" marker-end="url(#arrowClass)" d="M 500 118 C 560 118 560 118 620 118"></path>
+            <path class="arrow" marker-end="url(#arrowClass)" d="M 810 118 C 875 118 875 212 940 212"></path>
+            <path class="arrow" marker-end="url(#arrowClass)" d="M 190 318 C 250 318 250 318 310 318"></path>
+            <path class="arrow" marker-end="url(#arrowClass)" d="M 500 318 C 560 318 560 318 620 318"></path>
+            <path class="arrow hot" marker-end="url(#arrowClass)" d="M 810 318 C 875 318 875 318 940 318"></path>
+            <path class="arrow green" marker-end="url(#arrowClass)" d="M 622 542 C 520 622 306 622 190 526"></path>
+            <path class="arrow green" marker-end="url(#arrowClass)" d="M 806 542 C 882 618 968 454 1012 378"></path>
+            <path class="arrow purple" marker-end="url(#arrowClass)" d="M 1010 260 C 1010 212 914 118 810 118"></path>
+
+            <g class="class-box green" transform="translate(28 52)">
+              <rect width="162" height="132"></rect>
+              <text class="class-title" x="14" y="28">Perf JSON Parser</text>
+              <text class="class-file" x="14" y="50">parser.h/.cpp</text>
+              <text class="class-member" x="14" y="78">+ parse_observations()</text>
+              <text class="class-member" x="14" y="96">+ parse_enabled_layer_slots()</text>
+              <text class="class-member" x="14" y="114">reads learn + live JSON</text>
+            </g>
+
+            <g class="class-box green" transform="translate(310 52)">
+              <rect width="190" height="132"></rect>
+              <text class="class-title" x="14" y="28">Weighting</text>
+              <text class="class-file" x="14" y="50">weighting.cpp</text>
+              <text class="class-member" x="14" y="78">+ score_observations()</text>
+              <text class="class-member" x="14" y="96">modes: flat, pressure, time</text>
+              <text class="class-member" x="14" y="114">ranks experts by value</text>
+            </g>
+
+            <g class="class-box green" transform="translate(620 52)">
+              <rect width="190" height="132"></rect>
+              <text class="class-title" x="14" y="28">Planner</text>
+              <text class="class-file" x="14" y="50">planner.h/.cpp</text>
+              <text class="class-member" x="14" y="78">+ collect_expert_sizes()</text>
+              <text class="class-member" x="14" y="96">+ llama_moe_hot_cache_select()</text>
+              <text class="class-member" x="14" y="114">fits ranking into MiB budget</text>
+            </g>
+
+            <g class="class-box purple" transform="translate(930 152)">
+              <rect width="162" height="132"></rect>
+              <text class="class-title" x="14" y="28">Builder</text>
+              <text class="class-file" x="14" y="50">builder.h/.cpp</text>
+              <text class="class-member" x="14" y="78">+ build()</text>
+              <text class="class-member" x="14" y="96">+ copy_expert_slice()</text>
+              <text class="class-member" x="14" y="114">fills cache tensors</text>
+            </g>
+
+            <g class="class-box purple" transform="translate(28 252)">
+              <rect width="162" height="132"></rect>
+              <text class="class-title" x="14" y="28">Model Adapter</text>
+              <text class="class-file" x="14" y="50">adapter.h/.cpp</text>
+              <text class="class-member" x="14" y="78">arch, name, graph_kind</text>
+              <text class="class-member" x="14" y="96">ffn_op, profile()</text>
+              <text class="class-member" x="14" y="114">central model allow-list</text>
+            </g>
+
+            <g class="class-box purple" transform="translate(310 252)">
+              <rect width="190" height="132"></rect>
+              <text class="class-title" x="14" y="28">Graph Profile</text>
+              <text class="class-file" x="14" y="50">graph_profile struct</text>
+              <text class="class-member" x="14" y="78">cpu_decode_routing</text>
+              <text class="class-member" x="14" y="96">direct_merge, branch_reduce</text>
+              <text class="class-member" x="14" y="114">model-specific optimizations</text>
+            </g>
+
+            <g class="class-box hot" transform="translate(620 252)">
+              <rect width="190" height="132"></rect>
+              <text class="class-title" x="14" y="28">Hot Cache Runtime</text>
+              <text class="class-file" x="14" y="50">llama_moe_hot_cache</text>
+              <text class="class-member" x="14" y="78">layers, ctxs, bufs</text>
+              <text class="class-member" x="14" y="96">hot_id_map, masks</text>
+              <text class="class-member" x="14" y="114">VRAM copy per layer</text>
+            </g>
+
+            <g class="class-box purple" transform="translate(930 306)">
+              <rect width="162" height="132"></rect>
+              <text class="class-title" x="14" y="28">Graph Builder</text>
+              <text class="class-file" x="14" y="50">graph.cpp</text>
+              <text class="class-member" x="14" y="78">build worklist</text>
+              <text class="class-member" x="14" y="96">hot lane, cold lane</text>
+              <text class="class-member" x="14" y="114">merge output</text>
+            </g>
+
+            <g class="class-box green" transform="translate(28 452)">
+              <rect width="162" height="132"></rect>
+              <text class="class-title" x="14" y="28">Perf State</text>
+              <text class="class-file" x="14" y="50">perf-state.h/.cpp</text>
+              <text class="class-member" x="14" y="78">experts, hot_experts</text>
+              <text class="class-member" x="14" y="96">timings, fallbacks</text>
+              <text class="class-member" x="14" y="114">basis for UI + update</text>
+            </g>
+
+            <g class="class-box green" transform="translate(620 452)">
+              <rect width="190" height="132"></rect>
+              <text class="class-title" x="14" y="28">Updater</text>
+              <text class="class-file" x="14" y="50">updater.h/.cpp</text>
+              <text class="class-member" x="14" y="78">+ plan_layer_replacements()</text>
+              <text class="class-member" x="14" y="96">+ update_from_scored()</text>
+              <text class="class-member" x="14" y="114">exchanges cache slots</text>
+            </g>
+          </svg>
+        </div>
+        <div class="note">
+          The parser lives in <code>llama_moe_hot_cache_perf_json_parser</code>.
+          It is deliberately separated so learn files, <code>/moe-layer-perf</code>, and dynamic updates share the same JSON interpretation.
+        </div>
+      </section>
+
+      <section class="panel doc-panel" id="data-models">
+        <div class="panel-head">
+          <div>
+            <h2>Data Models</h2>
+            <p>These structs are the feature's internal data contract. Read them from top to bottom as JSON observations becoming a plan, then a runtime cache, then perf data for updates.</p>
+          </div>
+        </div>
+        <div class="model-grid">
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_entry</code></a></h3>
+            <p>A ranked expert reference used by weighting and planning.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>layer</code></td><td>Layer index that owns the expert.</td></tr>
+                <tr><td><code>expert</code></td><td>Expert id inside that layer.</td></tr>
+                <tr><td><code>hit_count</code></td><td>Score used for sorting. It may be raw hits or a weighted score.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_expert_observation</code></a></h3>
+            <p>One expert row parsed from a learn file or from <code>/moe-layer-perf</code>.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>expert</code></td><td>Expert id in the layer.</td></tr>
+                <tr><td><code>hot</code></td><td>How often this expert was served from the hot cache.</td></tr>
+                <tr><td><code>cold</code></td><td>How often this expert fell through to the cold path.</td></tr>
+                <tr><td><code>raw</code></td><td>Original count when the source has no hot/cold split, usually from a learn run.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_layer_observation</code></a></h3>
+            <p>Layer-level input for scoring. This is where hit data and timing pressure meet.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>layer</code></td><td>Layer index.</td></tr>
+                <tr><td><code>experts</code></td><td>All observed expert rows for this layer.</td></tr>
+                <tr><td><code>has_branch_counts</code></td><td>Whether hot/cold branch data is available.</td></tr>
+                <tr><td><code>cold_slots_per_call</code></td><td>Average number of cold slots per layer call.</td></tr>
+                <tr><td><code>parallel_*_time_per_call_us</code></td><td>Join wait, hot lane, cold lane, and total MoE timings normalized per call.</td></tr>
+                <tr><td><code>wait_per_cold_slot_us</code></td><td>Pressure signal used to decide which cold misses hurt most.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_plan</code></a></h3>
+            <p>The planner output. It says what was considered and what fits into the cache budget.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>observed</code></td><td>Ranked expert entries after parsing and weighting.</td></tr>
+                <tr><td><code>selected</code></td><td>Experts selected for the VRAM cache, including byte size.</td></tr>
+                <tr><td><code>budget_bytes</code></td><td>Maximum allowed cache size.</td></tr>
+                <tr><td><code>used_bytes</code></td><td>Actual size used by selected experts.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_expert_size</code></a></h3>
+            <p>Memory accounting for a single expert candidate.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>layer</code></td><td>Layer index.</td></tr>
+                <tr><td><code>expert</code></td><td>Expert id inside that layer.</td></tr>
+                <tr><td><code>bytes</code></td><td>Estimated bytes needed to cache this expert's tensor slices.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_weighting_config</code></a></h3>
+            <p>Configuration that controls how observations become cache scores.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>mode</code></td><td>Scoring strategy: <code>flat</code>, <code>pressure</code>, <code>smooth_pressure</code>, <code>time</code>, or <code>balanced</code>.</td></tr>
+                <tr><td><code>layer_curve</code></td><td>How strongly the scoring curve reshapes layer priority.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_layer</code></a></h3>
+            <p>Runtime cache state for one model layer.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>ffn_*_exps</code></td><td>Cached expert tensors for gate/up/down variants, depending on model layout.</td></tr>
+                <tr><td><code>hot_id_map</code></td><td>Device-side map from original expert id to cache slot id.</td></tr>
+                <tr><td><code>hot_mask</code>, <code>cold_mask</code></td><td>Device-side masks used by graph operations to split hot and cold work.</td></tr>
+                <tr><td><code>hot_id_map_host</code></td><td>Host copy of the expert-to-cache-slot map, used by CPU routing and updates.</td></tr>
+                <tr><td><code>n_hot</code>, <code>n_expert</code></td><td>Number of cached experts and total experts in the layer.</td></tr>
+                <tr><td><code>expert_weights_scale</code></td><td>Optional model scale applied to expert weights.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_worklist_field</code></a></h3>
+            <p>Column layout of the worklist tensor consumed by graph operations.</p>
+            <table class="field-table">
+              <thead><tr><th>Field Group</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>HOT_ID</code>, <code>HOT_SRC_SLOT</code>, <code>HOT_TOKEN_ID</code>, <code>HOT_WEIGHT</code></td><td>Compact hot-lane job description.</td></tr>
+                <tr><td><code>COLD_ID</code>, <code>COLD_SRC_SLOT</code>, <code>COLD_TOKEN_ID</code>, <code>COLD_WEIGHT</code></td><td>Compact cold-lane job description.</td></tr>
+                <tr><td><code>HOT_EXPERT_ID</code></td><td>Original expert id for hot-cache accounting and update data.</td></tr>
+                <tr><td><code>HOT_COUNT</code>, <code>COLD_COUNT</code></td><td>Per-call counts used to size and skip branch work.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache</code></a></h3>
+            <p>Top-level runtime object attached to the model.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>layers</code></td><td>Per-layer cache state.</td></tr>
+                <tr><td><code>ctxs</code></td><td>GGML contexts owning the cache tensors.</td></tr>
+                <tr><td><code>bufs</code></td><td>Backend buffers that hold the actual memory.</td></tr>
+                <tr><td><code>active()</code></td><td>Returns true when at least one layer has a usable cache.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-adapter.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_model_adapter</code></a></h3>
+            <p>The model compatibility entry. It keeps model-specific behavior out of generic code.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>arch</code></td><td>llama architecture enum this adapter supports.</td></tr>
+                <tr><td><code>name</code></td><td>Human-readable adapter name for code review and diagnostics.</td></tr>
+                <tr><td><code>graph_kind</code></td><td>Which hot graph shape the model is allowed to use.</td></tr>
+                <tr><td><code>ffn_op</code></td><td>Activation operation used by the MoE FFN path.</td></tr>
+                <tr><td><code>profile()</code></td><td>Returns the optimization profile for this architecture.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-adapter.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_graph_profile</code></a></h3>
+            <p>Per-model graph optimization flags.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>cpu_decode_routing</code></td><td>Route tiny decode batches on CPU to reduce graph overhead.</td></tr>
+                <tr><td><code>decode_direct_merge</code>, <code>merge_sum_rows</code></td><td>Choose faster merge forms when graph shape allows it.</td></tr>
+                <tr><td><code>cold_prefix_sum</code>, <code>cold_prefix_weighted_sum</code></td><td>Reduce only compact cold prefixes instead of full slot tensors.</td></tr>
+                <tr><td><code>branch_reduce_merge</code></td><td>Let branches reduce before the final merge, useful for some models.</td></tr>
+                <tr><td><code>cpu_decode_routing_max_tokens</code></td><td>Maximum tiny-batch size that may use CPU routing.</td></tr>
+                <tr><td><code>prefix_reduce_tasks_max</code></td><td>Upper bound for CPU tasks used in prefix reduction.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache_update_stats</code></a></h3>
+            <p>Summary logged after dynamic cache replacement.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>active</code></td><td>Whether an update was attempted.</td></tr>
+                <tr><td><code>update_rate</code></td><td>Configured fraction of hot experts that may be exchanged.</td></tr>
+                <tr><td><code>hit_rate</code></td><td>Hot-slot ratio observed in the completed request.</td></tr>
+                <tr><td><code>hot_slots</code>, <code>cold_slots</code></td><td>Total hot and cold expert slots observed.</td></tr>
+                <tr><td><code>candidates</code>, <code>max_exchange</code></td><td>Available replacements and configured exchange budget.</td></tr>
+                <tr><td><code>exchanged</code>, <code>layers_changed</code></td><td>How much the cache actually changed.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-state.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_layer_perf_layer</code></a></h3>
+            <p>Per-layer counters exposed through <code>/moe-layer-perf</code>.</p>
+            <table class="field-table">
+              <thead><tr><th>Field Group</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>calls</code>, <code>expert_hits_total</code></td><td>How often the layer ran and how many expert slots were selected.</td></tr>
+                <tr><td><code>hot_slots_total</code>, <code>cold_slots_total</code></td><td>Hot/cold split totals used for hit rate and update decisions.</td></tr>
+                <tr><td><code>*_time_us</code></td><td>MoE, routing, worklist, matmul, branch, gather/scatter, and merge timings.</td></tr>
+                <tr><td><code>parallel_* </code></td><td>Scheduler wall time, lane launches, overlap estimate, join wait, and fallback reasons.</td></tr>
+                <tr><td><code>experts</code>, <code>hot_experts</code>, <code>cold_experts</code></td><td>Per-expert counts for visualization, learning, and dynamic updates.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-state.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_layer_perf_state</code></a></h3>
+            <p>Thread-safe owner for all live MoE performance counters.</p>
+            <table class="field-table">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>mutex</code></td><td>Protects updates to counters and layer vectors.</td></tr>
+                <tr><td><code>n_expert</code>, <code>n_expert_used</code></td><td>Shape metadata for the currently measured model.</td></tr>
+                <tr><td><code>updates</code>, <code>overflow_resets</code></td><td>Bookkeeping for counter lifecycle and overflow protection.</td></tr>
+                <tr><td><code>active</code></td><td>Whether performance collection is currently enabled.</td></tr>
+                <tr><td><code>layers</code></td><td>Vector of per-layer counters.</td></tr>
+              </tbody>
+            </table>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel doc-panel" id="code-reference">
+        <div class="panel-head">
+          <div>
+            <h2>Code Reference</h2>
+            <p>
+              This section supersedes the old Markdown code reference. The old file was written before
+              the separation into <code>src/moe-hot-cache/</code>; the tables below describe the current
+              ownership boundaries and entry points.
+            </p>
+          </div>
+        </div>
+        <div class="model-grid">
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache.cpp</code></a></h3>
+            <p>Top-level lifecycle orchestration. It wires parser, weighting, budget, planner, builder, and updater together.</p>
+            <table class="field-table">
+              <thead><tr><th>Entry Point</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>llama_moe_hot_cache_init()</code></td><td>Reads the JSON, scores observations, computes the budget, selects experts, and calls the builder.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_init_after_model_load()</code></td><td>Initializes fixed-size caches before context memory when <code>max_mib &gt; 0</code>.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_init_after_context_memory()</code></td><td>Initializes auto-sized caches after context memory when <code>max_mib == -1</code>.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_update_from_perf_json()</code></td><td>Parses live perf data, scores current observations, and delegates replacement to the updater.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_layer_active_for_graph()</code></td><td>Checks adapter support, layer bounds, runtime cache presence, and graph kind compatibility.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-parser.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-parser.*</code></a></h3>
+            <p>The JSON parser class shared by learn files, <code>/moe-layer-perf</code>, and dynamic updates.</p>
+            <table class="field-table">
+              <thead><tr><th>Method</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>parse_observations()</code></td><td>Reads layers, <code>experts</code>, <code>hot_experts</code>, <code>cold_experts</code>, and timing fields into typed observations.</td></tr>
+                <tr><td><code>parse_enabled_layer_slots()</code></td><td>Reads only the hot/cold slot totals needed to report hit rate and update stats.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_perf_json_layer_slots</code></td><td>Compact layer, hot-slot, cold-slot tuple used by the updater.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-weighting.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-weighting.cpp</code></a></h3>
+            <p>Turns observations into sortable expert scores. This is model-neutral and used by initial fill and dynamic update.</p>
+            <table class="field-table">
+              <thead><tr><th>Method / Mode</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>parse_mode()</code>, <code>mode_name()</code></td><td>Maps CLI/env names to canonical weighting modes.</td></tr>
+                <tr><td><code>default_config()</code></td><td>Builds the default config; current default is <code>flat</code> with layer curve <code>0.5</code>.</td></tr>
+                <tr><td><code>score_observations()</code></td><td>Public scoring entry used by cache init and update.</td></tr>
+                <tr><td><code>flat</code></td><td>Interleaves best experts across layers and is the current default because it gives stable layer coverage under tight VRAM.</td></tr>
+                <tr><td><code>pressure</code>, <code>smooth_pressure</code>, <code>time</code>, <code>balanced</code></td><td>Alternative curves that favor slow layers, smooth outliers, total MoE time, or stronger per-layer distribution.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-planner.cpp" target="_blank" rel="noopener noreferrer"><code>planner.cpp</code></a> and <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-budget.cpp" target="_blank" rel="noopener noreferrer"><code>budget.cpp</code></a></h3>
+            <p>Memory accounting and budget selection. These files decide what can physically fit.</p>
+            <table class="field-table">
+              <thead><tr><th>Method</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>llama_moe_hot_cache_tensor_expert_bytes()</code></td><td>Computes the byte cost of one expert slice from a tensor.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_collect_expert_sizes()</code></td><td>Collects candidate expert sizes from model layers that actually have MoE expert tensors.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_select()</code></td><td>Packs ranked experts into the byte budget while accounting for per-layer dummy padding.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_select_gpu_dev()</code></td><td>Selects the GPU backend device that should own the hot-cache buffer.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_auto_budget_bytes()</code></td><td>Computes remaining VRAM for <code>--moe-hot-cache-max-mib -1</code>, including safety reserve.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-builder.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-builder.*</code></a></h3>
+            <p>Converts a plan into live cache tensors and fills the VRAM copy.</p>
+            <table class="field-table">
+              <thead><tr><th>Method</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>group_selected_by_layer()</code></td><td>Groups selected experts by layer so each layer can get its own compact cache tensors.</td></tr>
+                <tr><td><code>summarize_selected_layers()</code></td><td>Creates startup log stats such as active layers, min/max hot experts, and average hot experts.</td></tr>
+                <tr><td><code>copy_expert_slice()</code>, <code>copy_scale_slice()</code></td><td>Copies expert and quantization-scale slices from the original model tensors into the cache buffer.</td></tr>
+                <tr><td><code>set_tensor_i32_1d()</code>, <code>set_tensor_f32_1d()</code></td><td>Updates map and mask tensors during build and dynamic replacement.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_build()</code></td><td>Allocates contexts, buffers, per-layer tensors, maps, masks, dummy slots, and host maps.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-worklist.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-worklist.*</code></a></h3>
+            <p>Builds the compact per-layer job list that tells the graph which slots are hot and which are cold.</p>
+            <table class="field-table">
+              <thead><tr><th>Method</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>llama_moe_hot_cache_build_worklist()</code></td><td>Consumes already selected Top-K IDs and weights, then writes compact hot/cold slot lists.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_build_worklist_from_logits()</code></td><td>For tiny decode batches, computes routing directly from logits on CPU and writes the same worklist shape.</td></tr>
+                <tr><td><code>LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_*</code></td><td>Defines the tensor fields for hot IDs, cold IDs, source slots, token IDs, weights, and counts.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-graph.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-graph.cpp</code></a></h3>
+            <p>Builds the GGML hot/cold graph and keeps the hot and cold branches numerically equivalent to the normal MoE path.</p>
+            <table class="field-table">
+              <thead><tr><th>Function</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>*_build_worklist_op()</code></td><td>Wraps the C++ worklist builders as custom GGML nodes.</td></tr>
+                <tr><td><code>sum_prefix_rows</code>, <code>sum_weighted_prefix_rows</code>, <code>first_row_input</code></td><td>Decode and prefix-reduce helpers that reduce cold-lane merge overhead.</td></tr>
+                <tr><td><code>set_mul_mat_id_flags()</code></td><td>Stores hot-cache flags in <code>ggml_mul_mat_id</code> operation params.</td></tr>
+                <tr><td><code>build_lora_mm_id()</code></td><td>Builds LoRA-compatible <code>mul_mat_id</code> nodes for selected expert IDs.</td></tr>
+                <tr><td><code>build_moe_ffn_with_ids()</code></td><td>Common FFN core for hot and cold branches, including gate/up/down variants, activation, scales, weights, and reduce.</td></tr>
+                <tr><td><code>build_moe_hot_from_logits()</code></td><td>Generic logits-based hot-cache graph used by Gemma4 and Qwen3Next.</td></tr>
+                <tr><td><code>qwen35 build_layer_ffn_hot()</code></td><td>Qwen35-specific graph that builds router logits inside the hot-cache path.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-adapter.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-adapter.*</code></a></h3>
+            <p>The compatibility boundary. New models opt in here; unsupported models keep the normal llama.cpp graph.</p>
+            <table class="field-table">
+              <thead><tr><th>Item</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>ADAPTERS</code></td><td>Central allow-list for <code>QWEN35MOE</code>, <code>QWEN3NEXT</code>, and <code>GEMMA4</code>.</td></tr>
+                <tr><td><code>qwen35_profile()</code></td><td>Qwen35 profile: qwen-specific graph kind, single-token CPU decode routing, and proven decode shortcuts.</td></tr>
+                <tr><td><code>qwen3next_profile()</code></td><td>Qwen3Next profile: logits graph, tiny multi-token routing up to four tokens, and conservative prefix tasks.</td></tr>
+                <tr><td><code>gemma4_profile()</code></td><td>Gemma4 profile: logits graph, GELU FFN, branch-reduce option, and decode merge shortcuts.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_graph_tweaks</code></td><td>Reads env-controlled graph toggles such as parallel mode, merge mode, CPU routing, prefix reduction, and PP reduce merge.</td></tr>
+                <tr><td><code>find_model_adapter()</code>, <code>supports_graph_kind()</code></td><td>Enforces that a model can only enter the graph kind it registered for.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf.cpp" target="_blank" rel="noopener noreferrer"><code>perf.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-state.cpp" target="_blank" rel="noopener noreferrer"><code>perf-state.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-json.cpp" target="_blank" rel="noopener noreferrer"><code>perf-json.cpp</code></a></h3>
+            <p>Performance collection pipeline for learning, UI visualization, and dynamic updates.</p>
+            <table class="field-table">
+              <thead><tr><th>Component</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>perf-state</code></td><td>Owns thread-safe counters, shape initialization, overflow protection, and per-layer hit/timing storage.</td></tr>
+                <tr><td><code>perf-nodes</code></td><td>Classifies GGML nodes by name into routing, worklist, branch, matmul, gather/scatter, merge, and update categories.</td></tr>
+                <tr><td><code>perf-reader</code></td><td>Reads Top-K and worklist tensors back from backend memory to count experts and slots.</td></tr>
+                <tr><td><code>perf-json</code></td><td>Serializes the current state into <code>/moe-layer-perf</code> JSON, including disabled mode.</td></tr>
+                <tr><td><code>perf.cpp</code></td><td>Coordinates modes, eval callback, graph-compute begin/end, scheduler metric collection, and public C API functions.</td></tr>
+                <tr><td><code>full</code>, <code>update</code>, <code>off</code></td><td>Runtime modes: full diagnostics, update-only counters, or no hot-cache perf counters.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-updater.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-updater.*</code></a></h3>
+            <p>Dynamic cache replacement after a server request. It changes contents and maps, not tensor shapes.</p>
+            <table class="field-table">
+              <thead><tr><th>Method</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>current_hot_experts()</code></td><td>Reconstructs which original experts are currently cached in a layer.</td></tr>
+                <tr><td><code>plan_layer_replacements()</code></td><td>Builds evict/add candidates from current cache contents and observed expert scores.</td></tr>
+                <tr><td><code>sort_replacement_candidates()</code></td><td>Sorts candidates by gain so high-value replacements happen first.</td></tr>
+                <tr><td><code>update_max_exchange()</code></td><td>Applies the configured update rate to cap how many cache slots may change.</td></tr>
+                <tr><td><code>update_from_scored_observations()</code></td><td>Copies new expert slices into existing cache slots and updates hot/cold maps and masks.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3>Model, Server, and Scheduler Hooks</h3>
+            <p>Small integration points connect the separated hot-cache package to llama.cpp runtime.</p>
+            <table class="field-table">
+              <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+              <tbody>
+                <tr><td><code>src/models/qwen35moe.cpp</code></td><td>Uses the guarded <code>qwen35_ffn</code> path when the adapter and layer cache are active.</td></tr>
+                <tr><td><code>src/models/qwen3next.cpp</code></td><td>Builds router logits, then calls the generic logits hot-cache path when active.</td></tr>
+                <tr><td><code>src/models/gemma4.cpp</code></td><td>Calls the generic logits hot-cache path with Gemma's GELU FFN operation.</td></tr>
+                <tr><td><code>tools/server/server.cpp</code>, <code>server-models.cpp</code></td><td>Expose GET/POST <code>/moe-layer-perf</code> and route requests to the loaded model.</td></tr>
+                <tr><td><code>tools/server/server-context.cpp</code></td><td>Writes perf output, marks update pending, and runs post-request hot-cache replacement.</td></tr>
+                <tr><td><code>ggml-backend-moe-hot-cache.*</code></td><td>Scheduler-side support for marked hot/cold parallel regions, metrics, and fallback counters.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
+            <h3>Unit Tests</h3>
+            <p>Each extracted responsibility has a focused test file so future model additions can be reviewed without broad runtime experiments first.</p>
+            <table class="field-table">
+              <thead><tr><th>Test Group</th><th>Coverage</th></tr></thead>
+              <tbody>
+                <tr><td><code>test-moe-hot-cache-parser</code></td><td>Perf JSON parsing, enabled layer slot parsing, and learn/live JSON compatibility.</td></tr>
+                <tr><td><code>test-moe-hot-cache-weighting</code></td><td>Mode parsing, flat scoring, pressure/time behavior, and layer-curve effects.</td></tr>
+                <tr><td><code>test-moe-hot-cache-planner</code>, <code>budget</code>, <code>builder</code></td><td>Byte accounting, budget fit, grouping, selected layer stats, tensor copy helpers, and cache build behavior.</td></tr>
+                <tr><td><code>test-moe-hot-cache-worklist</code></td><td>Hot/cold split, compact slot layout, counts, and logits-based routing output.</td></tr>
+                <tr><td><code>test-moe-hot-cache-adapter</code></td><td>Registered models, graph-kind isolation, profile defaults, and unsupported graph rejection.</td></tr>
+                <tr><td><code>test-moe-hot-cache-perf-*</code></td><td>State lifecycle, node classification, tensor readback, and JSON serialization.</td></tr>
+                <tr><td><code>test-moe-hot-cache-updater</code></td><td>Candidate planning, exchange limits, sorting, and map/mask-safe replacement.</td></tr>
+              </tbody>
+            </table>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel diagram-panel" id="runtime-flow">
+        <div class="panel-head">
+          <div>
+            <h2>Runtime Flow Per Layer</h2>
+            <p>This flow is why adapters and graph kinds matter: a model may only use the graph path it explicitly registered for.</p>
+          </div>
+        </div>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 1120 560" role="img" aria-label="MoE hot-cache runtime flow diagram">
+            <defs>
+              <marker id="arrowFlow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8797"></path>
+              </marker>
+            </defs>
+
+            <text class="lane-label" x="36" y="50">Model hook</text>
+            <text class="lane-label" x="36" y="205">Parallel compute</text>
+            <text class="lane-label" x="36" y="405">After request</text>
+
+            <path class="arrow" marker-end="url(#arrowFlow)" d="M 168 92 C 220 92 220 92 272 92"></path>
+            <path class="arrow" marker-end="url(#arrowFlow)" d="M 408 92 C 460 92 460 92 512 92"></path>
+            <path class="arrow" marker-end="url(#arrowFlow)" d="M 648 92 C 700 92 700 92 752 92"></path>
+            <path class="arrow hot" marker-end="url(#arrowFlow)" d="M 842 142 C 842 180 842 180 842 218"></path>
+            <path class="arrow cold" marker-end="url(#arrowFlow)" d="M 842 142 C 842 300 842 300 842 344"></path>
+            <path class="arrow hot" marker-end="url(#arrowFlow)" d="M 935 258 C 984 258 984 258 1032 258"></path>
+            <path class="arrow cold" marker-end="url(#arrowFlow)" d="M 935 384 C 984 384 984 314 1032 314"></path>
+            <path class="arrow green" marker-end="url(#arrowFlow)" d="M 1042 350 C 1010 442 856 442 790 442"></path>
+            <path class="arrow green" marker-end="url(#arrowFlow)" d="M 620 442 C 520 442 520 442 420 442"></path>
+            <path class="arrow green" marker-end="url(#arrowFlow)" d="M 272 442 C 210 442 210 92 168 92"></path>
+
+            <g class="flow-step" transform="translate(42 68)">
+              <rect width="126" height="70"></rect>
+              <text x="16" y="29">Layer hook</text>
+              <text class="sub" x="16" y="50">small core touch</text>
+            </g>
+            <g class="flow-step" transform="translate(272 68)">
+              <rect width="136" height="70"></rect>
+              <text x="16" y="29">Adapter Gate</text>
+              <text class="sub" x="16" y="50">arch + graph_kind</text>
+            </g>
+            <g class="flow-step" transform="translate(512 68)">
+              <rect width="136" height="70"></rect>
+              <text x="16" y="29">Router logits</text>
+              <text class="sub" x="16" y="50">top-k experts</text>
+            </g>
+            <g class="flow-step" transform="translate(752 68)">
+              <rect width="180" height="74"></rect>
+              <text x="16" y="29">Worklist</text>
+              <text class="sub" x="16" y="50">capacity = tokens * used</text>
+            </g>
+
+            <g class="flow-step hot" transform="translate(700 218)">
+              <rect width="235" height="80"></rect>
+              <text x="16" y="31">Hot lane</text>
+              <text class="sub" x="16" y="52">VRAM cache, CUDA0, cached experts</text>
+            </g>
+            <g class="flow-step cold" transform="translate(700 344)">
+              <rect width="235" height="80"></rect>
+              <text x="16" y="31">Cold lane</text>
+              <text class="sub" x="16" y="52">original experts, usually CPU/RAM</text>
+            </g>
+            <g class="flow-step purple" transform="translate(1032 246)">
+              <rect width="74" height="80"></rect>
+              <text x="12" y="31">Merge</text>
+              <text class="sub" x="12" y="52">add</text>
+            </g>
+
+            <g class="flow-step green" transform="translate(620 408)">
+              <rect width="170" height="70"></rect>
+              <text x="16" y="29">Perf counters</text>
+              <text class="sub" x="16" y="50">hits, slots, lane time</text>
+            </g>
+            <g class="flow-step green" transform="translate(272 408)">
+              <rect width="148" height="70"></rect>
+              <text x="16" y="29">Update</text>
+              <text class="sub" x="16" y="50">optional slot exchange</text>
+            </g>
+          </svg>
+        </div>
+        <div class="note">
+          Prompt processing can send many tokens through the same hot/cold path.
+          Decode is usually one token, while Qwen3Next has shown small batches of up to four tokens.
+        </div>
+      </section>
+
+      <section class="panel doc-panel" id="senior-notes">
+        <div class="panel-head">
+          <div>
+            <h2>Senior Engineering Notes</h2>
+            <p>These are the invariants and risk points that matter when reviewing or extending the hot-cache path.</p>
+          </div>
+        </div>
+        <div class="doc-grid">
+          <div class="doc-copy">
+            <ol class="model-steps">
+              <li>
+                <b>The adapter is the compatibility boundary.</b>
+                Core hooks should only ask whether <code>arch + graph_kind</code> is supported. Model-specific graph decisions belong in <code>llama-moe-hot-cache-adapter.cpp</code>, not in scattered model code.
+              </li>
+              <li>
+                <b>The scheduler relies on graph shape.</b>
+                The split must remain hot lane, cold lane, then join. If node order changes, the parallel region should fallback instead of silently producing a wrong graph.
+              </li>
+              <li>
+                <b>The cache is additive memory.</b>
+                The original CPU/RAM tensors are still required. The VRAM cache holds selected expert slices plus maps and masks; dynamic update mutates contents and maps, not tensor shapes.
+              </li>
+              <li>
+                <b>Prompt processing and decode have different economics.</b>
+                PP amortizes routing and merge work over many tokens. Decode is overhead-sensitive, so tiny shortcuts such as CPU routing and direct merge can matter more than raw matmul speed.
+              </li>
+              <li>
+                <b>Perf collection changes runtime cost.</b>
+                Full counters are best for diagnosis. Update mode keeps only what dynamic replacement needs. Off mode should remove measurable counter overhead from the hot path.
+              </li>
+              <li>
+                <b>Dynamic update must preserve capacity.</b>
+                Updates should exchange experts inside the existing budget. Reallocation during request processing would make latency and OOM behavior much harder to reason about.
+              </li>
+            </ol>
+          </div>
+          <div class="checklist">
+            <div class="check-row"><b>Hard graph contract</b><span>Hot branch, cold branch, join. Any mismatch increments fallback counters and should be visible in <code>/moe-layer-perf</code>.</span></div>
+            <div class="check-row"><b>Model isolation</b><span>Qwen, Gemma, and Qwen3Next use adapter profiles so one model's shortcut does not leak into another model.</span></div>
+            <div class="check-row"><b>Memory safety</b><span>Auto sizing must leave enough reserve for KV, compute buffers, warmup, and optional draft/MTP contexts.</span></div>
+            <div class="check-row"><b>Correctness first</b><span>Gibberish output is usually a graph-shape, expert-order, weight, or shared-expert integration bug, not a cache hit-rate issue.</span></div>
+            <div class="check-row"><b>Review targets</b><span>Check adapter registration, layer-active guard, worklist construction, merge shape, fallback counters, and unit tests.</span></div>
+            <div class="check-row"><b>Recommended validation</b><span>Run a learn pass, a hot-cache pass with perf full, a pass with perf off, and compare output quality plus TG/PP rates.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel doc-panel" id="add-model">
+        <div class="panel-head">
+          <div>
+            <h2>Add a New MoE Model</h2>
+            <p>The goal is one new adapter and a very small model hook, with no scattered logic in the llama core.</p>
+          </div>
+        </div>
+        <div class="doc-grid">
+          <div class="doc-copy">
+            <ol class="model-steps">
+              <li>
+                <b>Confirm the MoE shape.</b>
+                In the model code, locate router logits, <code>n_expert</code>, <code>n_expert_used</code>, and the gate, up, and down expert tensors.
+              </li>
+              <li>
+                <b>Choose the graph kind.</b>
+                Use <code>logits</code> when the model already has router logits before the MoE FFN. Use a custom graph kind only when the hot graph must build the router logits itself.
+              </li>
+              <li>
+                <b>Register the adapter.</b>
+                Add the model to <code>ADAPTERS</code> and provide <code>arch</code>, name, <code>graph_kind</code>, and <code>ffn_op</code>.
+                <code class="code">{ LLM_ARCH_NEWMODEL, "newmodel", llama_moe_hot_cache_graph_kind::logits, LLM_FFN_SILU }</code>
+              </li>
+              <li>
+                <b>Encapsulate the profile.</b>
+                Put CPU routing limits, direct merge, branch reduce, and PP reduce decisions into the adapter profile.
+              </li>
+              <li>
+                <b>Keep the model hook small.</b>
+                Model code should only check whether the layer is active for this graph kind. The actual hot/cold logic stays in the hot-cache folder.
+                <code class="code">if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
+    cur_moe = build_layer_moe_hot(cur_moe, logits, il);
+}</code>
+              </li>
+              <li>
+                <b>Extend tests.</b>
+                At minimum, <code>tests/test-moe-hot-cache-adapter.cpp</code> must verify the new adapter. Add specialized tests if JSON parsing, weighting, or planning behaves differently.
+              </li>
+              <li>
+                <b>Validate with a learn run.</b>
+                First write an expert list without the hot cache, then start with the hot cache and inspect <code>/moe-layer-perf</code> for hits, fallbacks, and lane timings.
+              </li>
+            </ol>
+          </div>
+          <div class="checklist">
+            <div class="check-row"><b>Source of Truth</b><span><code>llama-moe-hot-cache-adapter.cpp</code> decides which model may use which hot graph.</span></div>
+            <div class="check-row"><b>No Side Effects</b><span>A Qwen-specific graph kind must not automatically apply to Gemma or a new model.</span></div>
+            <div class="check-row"><b>Fallback Is Normal</b><span>If no adapter matches or the layer is inactive, the existing model path continues.</span></div>
+            <div class="check-row"><b>PP Differs From Decode</b><span>Prompt processing can have large batches. Decode usually has tiny batches and is more overhead-sensitive.</span></div>
+            <div class="check-row"><b>Minimum Test</b><span><code>ctest --test-dir build -R test-moe-hot-cache --output-on-failure</code></span></div>
+            <div class="check-row"><b>Build</b><span><code>cmake --build build -j8 --target llama-server</code></span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel doc-panel" id="agent-runbook">
+        <div class="panel-head">
+          <div>
+            <h2>LLM Agent Runbook: Add a Model</h2>
+            <p>This section is written for coding agents. Follow it in order and keep the patch small, reviewable, and isolated.</p>
+          </div>
+        </div>
+        <div class="doc-grid">
+          <div class="doc-copy">
+            <ol class="model-steps">
+              <li>
+                <b>Identify the MoE implementation before editing.</b>
+                Search the model file for <code>build_moe_ffn</code>, <code>ffn_gate_inp</code>, <code>n_expert</code>, <code>n_expert_used</code>, and expert tensors. Do not assume Qwen, Gemma, and the new model share tensor layout.
+              </li>
+              <li>
+                <b>Choose the smallest supported graph kind.</b>
+                Prefer <code>llama_moe_hot_cache_graph_kind::logits</code> when router logits are already available. Create a new graph kind only if the model cannot call the generic logits builder safely.
+              </li>
+              <li>
+                <b>Add exactly one adapter entry.</b>
+                Edit <code>src/moe-hot-cache/llama-moe-hot-cache-adapter.cpp</code>. Add the <code>LLM_ARCH_*</code>, adapter name, graph kind, and <code>LLM_FFN_*</code> operation. Put model-specific shortcut choices in the profile function.
+              </li>
+              <li>
+                <b>Add one tiny model hook.</b>
+                In the model file, guard the hot path with <code>llama_moe_hot_cache_layer_active_for_graph(model, il, graph_kind)</code>. The hook should route to a hot-cache builder and otherwise leave the existing path unchanged.
+              </li>
+              <li>
+                <b>Preserve non-MoE branches.</b>
+                Shared experts, dense FFN branches, residual adds, norms, and multimodal side paths must remain exactly where they were unless the model specifically requires otherwise.
+              </li>
+              <li>
+                <b>Add focused tests.</b>
+                Update <code>tests/test-moe-hot-cache-adapter.cpp</code> so unsupported graph kinds are rejected and the new adapter profile has expected defaults. Add a specialized test only if parser, planner, weighting, or worklist behavior changes.
+              </li>
+              <li>
+                <b>Validate in three stages.</b>
+                First build and run unit tests. Then run a learn pass to create JSON. Then run hot-cache inference and inspect <code>/moe-layer-perf</code> for hit rate, fallbacks, lane timings, and output quality.
+              </li>
+              <li>
+                <b>Stop when correctness is unclear.</b>
+                If output becomes gibberish, fallbacks climb, graph shape changes unexpectedly, or shared-expert behavior is uncertain, stop and document the failure instead of adding more shortcuts.
+              </li>
+            </ol>
+          </div>
+          <div class="checklist">
+            <div class="check-row"><b>Preferred edit locations</b><span><code>src/moe-hot-cache/*</code>, one model hook file, and targeted <code>tests/test-moe-hot-cache-*.cpp</code>.</span></div>
+            <div class="check-row"><b>Avoid broad core edits</b><span>Do not modify scheduler, GGML CUDA kernels, or unrelated model code unless the requested model cannot work without it.</span></div>
+            <div class="check-row"><b>Required guard</b><span>Use <code>llama_moe_hot_cache_layer_active_for_graph</code>, not a loose architecture check.</span></div>
+            <div class="check-row"><b>Build command</b><span><code>cmake --build build -j8 --target test-moe-hot-cache-adapter llama-server</code></span></div>
+            <div class="check-row"><b>Test command</b><span><code>ctest --test-dir build -R test-moe-hot-cache --output-on-failure</code></span></div>
+            <div class="check-row"><b>Runtime checks</b><span>Watch <code>parallel_fallbacks</code>, <code>hot_slots_total</code>, <code>cold_slots_total</code>, branch timings, and whether generated text remains sane.</span></div>
+            <div class="check-row"><b>Patch review question</b><span>Could this change alter Qwen, Gemma, or Qwen3Next when the new model is not loaded? If yes, isolate it further.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel file-map" id="files">
+        <h2>Files for Orientation</h2>
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Responsibility</th>
+              <th>Plain-English Explanation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache.cpp</code></a></td>
+              <td>Lifecycle orchestration and public hot-cache entry points</td>
+              <td>Coordinates parser, weighting, budget, planner, builder, updater, and layer-active checks.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-parser.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-parser.cpp</code></a></td>
+              <td>Parser class for perf JSON and slot totals</td>
+              <td>Turns JSON into typed observations used by cache construction and updates.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-adapter.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-adapter.cpp</code></a></td>
+              <td>Model adapter, graph kind, profile, and tweak defaults</td>
+              <td>This is the central allow-list: only registered models may use the hot graph.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache.h</code></a></td>
+              <td>Data structures for cache, layers, worklists, and update stats</td>
+              <td>This is the shared vocabulary of the feature.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-graph.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-graph.cpp</code></a></td>
+              <td>Hot/cold graph, worklist nodes, and merge paths</td>
+              <td>Turns the feature design into a GGML graph that can compute.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-builder.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-builder.cpp</code></a></td>
+              <td>Create cache tensors and copy expert slices</td>
+              <td>Translates the plan into real VRAM buffers.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-worklist.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-worklist.cpp</code></a></td>
+              <td>Build hot/cold slot lists from router results</td>
+              <td>Creates the per-layer list consumed by the hot and cold lanes.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-perf.cpp</code></a></td>
+              <td>Perf mode, graph callbacks, and scheduler metric collection</td>
+              <td>Coordinates when counters are active and connects GGML execution back to perf state.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-state.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-perf-state.cpp</code></a></td>
+              <td>Thread-safe state for performance counters</td>
+              <td>Collects hits, hot/cold slots, timings, and fallback counters.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-json.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-perf-json.cpp</code></a></td>
+              <td>JSON serialization for <code>/moe-layer-perf</code></td>
+              <td>Turns the current perf snapshot into the JSON used by the UI, learn files, and dynamic updates.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-nodes.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-perf-nodes.cpp</code></a></td>
+              <td>GGML node classification</td>
+              <td>Maps tensor names to routing, worklist, branch, matmul, gather/scatter, merge, and update timing buckets.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-reader.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-perf-reader.cpp</code></a></td>
+              <td>Backend tensor readback for perf counters</td>
+              <td>Reads Top-K and worklist tensors after execution so experts and hot/cold slots can be counted.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-weighting.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-weighting.cpp</code></a></td>
+              <td>Generic expert weighting and layer curves</td>
+              <td>Turns hits and layer pressure into a cache ranking.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-planner.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-planner.cpp</code></a></td>
+              <td>Expert sizes and budget selection</td>
+              <td>Decides which experts fit into the given MiB budget.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-budget.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-budget.cpp</code></a></td>
+              <td>GPU selection and automatic VRAM budget</td>
+              <td>When <code>-1</code> is used, this computes how much VRAM remains after reserves.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-updater.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-updater.cpp</code></a></td>
+              <td>Dynamic cache replacement after a request</td>
+              <td>Decides which hot experts are evicted and which experts move in.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen35moe-hot-cache.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen35moe-hot-cache.cpp</code></a></td>
+              <td>Qwen compatibility wrapper for weighting</td>
+              <td>Old Qwen API names remain stable while the logic lives in the hot-cache folder.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/gemma4-hot-cache.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/gemma4-hot-cache.cpp</code></a></td>
+              <td>Gemma4 weighting wrapper</td>
+              <td>Uses generic weighting while allowing the Gemma-specific layer-curve environment override.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen35moe.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen35moe.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/gemma4.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/gemma4.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen3next.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen3next.cpp</code></a></td>
+              <td>Small model hooks</td>
+              <td>These files should only check whether the adapter allows the matching graph kind.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/ggml/src/ggml-backend-moe-hot-cache.inc" target="_blank" rel="noopener noreferrer"><code>ggml/src/ggml-backend-moe-hot-cache.inc</code></a></td>
+              <td>Scheduler extension for parallel hot/cold regions</td>
+              <td>Connects the parallel execution path to GGML.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/ggml/include/ggml-backend-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>ggml/include/ggml-backend-moe-hot-cache.h</code></a></td>
+              <td>Public scheduler metric structures</td>
+              <td>Defines the parallel-region perf data read by the llama-side perf collector.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/tools/server/server-context.cpp" target="_blank" rel="noopener noreferrer"><code>tools/server/server-context.cpp</code></a></td>
+              <td>Perf file output and post-request update</td>
+              <td>Marks hot-cache updates pending, logs hit rate, writes perf output, and runs slot replacement after a request.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/tools/server/server.cpp" target="_blank" rel="noopener noreferrer"><code>tools/server/server.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/tools/server/server-models.cpp" target="_blank" rel="noopener noreferrer"><code>tools/server/server-models.cpp</code></a></td>
+              <td><code>/moe-layer-perf</code> GET/POST routing</td>
+              <td>Expose the live perf JSON and runtime perf-mode switch through HTTP.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/common/common.h" target="_blank" rel="noopener noreferrer"><code>common/common.h</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/include/llama.h" target="_blank" rel="noopener noreferrer"><code>include/llama.h</code></a></td>
+              <td>CLI and public parameter storage</td>
+              <td>Carry hot-cache path, max MiB, auto reserve, weighting, layer curve, and perf output settings into model initialization.</td>
+            </tr>
+            <tr>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/tree/cached-experts-v2/tests" target="_blank" rel="noopener noreferrer"><code>tests/test-moe-hot-cache-*.cpp</code></a></td>
+              <td>Specialized unit tests per component</td>
+              <td>New models should at least get adapter tests, plus targeted tests for special logic.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const details = {
+      overview: {
+        title: "Overview",
+        text: "This feature is an additive path. Without the hot cache, llama.cpp runs normally. With the hot cache, the original MoE experts stay in the model and selected experts are additionally copied into VRAM.",
+        code: "Start: --cpu-moe --moe-hot-cache file.json --moe-hot-cache-max-mib -1",
+      },
+      perf: {
+        title: "Perf JSON",
+        text: "The learn run records which experts were used per layer. That file is the basis for the initial cache fill.",
+        code: "--moe-layer-perf-out moe-hot-cache.json\nGET /moe-layer-perf",
+      },
+      parser: {
+        title: "Parser",
+        text: "The parser is the llama_moe_hot_cache_perf_json_parser class in src/moe-hot-cache/llama-moe-hot-cache-parser.cpp. It reads raw expert lists, hot/cold lists, and timing fields so learn runs and later hot-cache runs use the same JSON logic.",
+        code: "llama_moe_hot_cache_perf_json_parser::parse_observations(json)",
+      },
+      planner: {
+        title: "Planner",
+        text: "The planner sorts experts by weighting, computes the memory cost per expert, and packs as many experts as can fit safely into the budget.",
+        code: "llama_moe_hot_cache_weighting::score_observations(...)\nllama_moe_hot_cache_select(...)",
+      },
+      cache: {
+        title: "Hot Cache",
+        text: "The hot cache contains an additional VRAM copy of selected expert slices. The CPU copy still remains available.",
+        code: "copy_expert_slice(src, dst, src_expert, dst_expert)",
+      },
+      token: {
+        title: "Token",
+        text: "Decode usually processes one token at a time. That is why every small overhead matters.",
+        code: "decode: n_tokens == 1",
+      },
+      router: {
+        title: "Router",
+        text: "The router computes scores for all experts and selects the top-k experts for the current token.",
+        code: "selected_experts + weights",
+      },
+      hotlane: {
+        title: "Hot Lane",
+        text: "Hot slots use cached experts in VRAM. This is the fast CUDA0 path.",
+        code: "hot_id_map[expert] -> cache_id",
+      },
+      coldlane: {
+        title: "Cold Lane",
+        text: "Cold slots use the original experts through the normal model path. With --cpu-moe, that path is CPU/RAM.",
+        code: "cold_mask[expert] -> original expert tensor",
+      },
+      scheduler: {
+        title: "Join and Merge",
+        text: "The scheduler detects the hot/cold region, launches both lanes in parallel, and then joins the outputs.",
+        code: "ggml_backend_sched_moe_hot_cache_parallel_region(...)",
+      },
+      next: {
+        title: "Next Layer",
+        text: "After the merge, the rest of the transformer sees a normal layer output again. The next layer does not need to know about the split.",
+        code: "cur = hot_output + cold_output",
+      },
+      counters: {
+        title: "Counters",
+        text: "The performance counters measure hits, hot/cold slots, lane timings, overlap, and join wait. They show where time is being spent.",
+        code: "llama_moe_layer_perf_json(ctx)",
+      },
+      dynamic: {
+        title: "Dynamic Update",
+        text: "After a request, part of the cache slots can be exchanged. The buffers keep the same size; only contents and maps change.",
+        code: "--moe-hot-cache-update-rate 0.10\nllama_moe_hot_cache_update_from_perf_json(...)",
+      },
+      normal: {
+        title: "Normal Path",
+        text: "If the hot cache is inactive or a layer has no cache, the existing model path continues.",
+        code: "if (!llama_moe_hot_cache_layer_active_for_graph(model, il, graph_kind))\n    build_moe_ffn(...)",
+      },
+    };
+
+    const phaseDetails = {
+      learn: details.perf,
+      startup: details.planner,
+      decode: details.scheduler,
+      update: details.dynamic,
+      overview: details.overview,
+    };
+
+    const nodes = Array.from(document.querySelectorAll(".node"));
+    const arrows = Array.from(document.querySelectorAll(".hero .arrow"));
+    const title = document.getElementById("detailTitle");
+    const text = document.getElementById("detailText");
+    const code = document.getElementById("detailCode");
+    const phaseButtons = document.getElementById("phaseButtons");
+    const stepCards = document.getElementById("stepCards");
+    const overallArchitecture = document.getElementById("overall-architecture");
+
+    function showDetail(key) {
+      const detail = details[key] || details.overview;
+      title.textContent = detail.title;
+      text.textContent = detail.text;
+      code.textContent = detail.code;
+
+      nodes.forEach((node) => {
+        node.classList.toggle("active", node.dataset.node === key);
+      });
+    }
+
+    function setPhase(phase) {
+      const wanted = phase === "overview" ? null : phase;
+
+      document.querySelectorAll("[data-phase]").forEach((item) => {
+        item.classList.toggle("active", item.dataset.phase === phase);
+      });
+
+      nodes.forEach((node) => {
+        const phases = (node.dataset.phases || "").split(/\s+/);
+        node.style.opacity = !wanted || phases.includes(wanted) ? "1" : "0.28";
+      });
+
+      arrows.forEach((arrow) => {
+        const keep = !wanted || arrow.classList.contains(`${wanted}-edge`);
+        arrow.classList.toggle("dim", !keep);
+      });
+
+      const detailKey = phase === "overview" ? "overview" : null;
+      if (detailKey) {
+        showDetail(detailKey);
+      } else {
+        const detail = phaseDetails[phase] || details.overview;
+        title.textContent = detail.title;
+        text.textContent = detail.text;
+        code.textContent = detail.code;
+        nodes.forEach((node) => node.classList.remove("active"));
+      }
+    }
+
+    function ensureOverallArchitectureVisible() {
+      if (!overallArchitecture) {
+        return;
+      }
+
+      const rect = overallArchitecture.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      const hasUsefulView = rect.top >= 0 && rect.top < viewportHeight * 0.45;
+
+      if (!hasUsefulView) {
+        overallArchitecture.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+
+    nodes.forEach((node) => {
+      node.style.cursor = "pointer";
+      node.addEventListener("click", () => showDetail(node.dataset.node));
+    });
+
+    phaseButtons.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-phase]");
+      if (button) {
+        setPhase(button.dataset.phase);
+        ensureOverallArchitectureVisible();
+      }
+    });
+
+    stepCards.addEventListener("click", (event) => {
+      const card = event.target.closest(".step-card[data-phase]");
+      if (card) {
+        setPhase(card.dataset.phase);
+      }
+    });
+
+    setPhase("overview");
+  </script>
+</body>
+</html>

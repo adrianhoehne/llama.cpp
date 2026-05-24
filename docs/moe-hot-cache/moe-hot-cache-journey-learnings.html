@@ -1,0 +1,906 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoE Hot-Cache Journey and Learnings</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --ink: #152033;
+      --muted: #5f6b7d;
+      --panel: #ffffff;
+      --line: #cbd5e1;
+      --soft: #eef2f7;
+      --hot: #cf3f36;
+      --cold: #2568c7;
+      --green: #16825f;
+      --amber: #b45309;
+      --purple: #6854b8;
+      --shadow: 0 14px 32px rgba(23, 35, 52, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: #1d4ed8;
+    }
+
+    code,
+    pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      color: #0f3d70;
+      background: #edf2f7;
+      border: 1px solid #dbe3ef;
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-size: 0.92em;
+    }
+
+    .doc-topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 24px;
+      background: #101827;
+      border-bottom: 1px solid #0b1020;
+      color: #f9fafb;
+      flex-wrap: wrap;
+    }
+
+    .doc-topbar a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f9fafb;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .doc-topbar a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
+      min-height: calc(100vh - 59px);
+    }
+
+    aside {
+      position: sticky;
+      top: 59px;
+      height: calc(100vh - 59px);
+      overflow: auto;
+      padding: 24px;
+      color: #f9fafb;
+      background: #101827;
+    }
+
+    aside h1 {
+      margin: 0 0 10px;
+      font-size: 26px;
+      line-height: 1.12;
+    }
+
+    aside p {
+      margin: 0 0 18px;
+      color: #cbd5e1;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    nav.page-nav {
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.14);
+      padding-top: 18px;
+      margin-top: 18px;
+    }
+
+    nav.page-nav a {
+      color: #f9fafb;
+      text-decoration: none;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-size: 13px;
+    }
+
+    main {
+      min-width: 0;
+      padding: 28px;
+    }
+
+    .hero,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      margin-bottom: 18px;
+    }
+
+    .hero {
+      padding: 24px;
+    }
+
+    .hero h2,
+    .panel h2 {
+      margin: 0 0 10px;
+      font-size: 24px;
+      line-height: 1.18;
+    }
+
+    .hero p,
+    .panel p,
+    .panel li {
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .hero p {
+      max-width: 940px;
+    }
+
+    .metric-grid,
+    .learning-grid,
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      padding: 18px;
+    }
+
+    .metric,
+    .learning,
+    .decision {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcff;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .metric span,
+    .learning span,
+    .decision span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .metric b {
+      display: block;
+      font-size: 24px;
+      margin-bottom: 6px;
+      color: var(--ink);
+    }
+
+    .learning b,
+    .decision b {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+
+    .timeline {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .timeline-label {
+      display: grid;
+      place-items: center;
+      text-align: center;
+      border-radius: 8px;
+      background: #e8edf5;
+      color: #314057;
+      font-weight: 800;
+      font-size: 13px;
+      padding: 10px;
+    }
+
+    .timeline-body {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 12px 14px;
+    }
+
+    .timeline-body h3 {
+      margin: 0 0 6px;
+      font-size: 16px;
+    }
+
+    .timeline-body p {
+      margin: 0;
+    }
+
+    .panel-head {
+      padding: 18px 18px 0;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 18px;
+    }
+
+    .list-panel {
+      padding: 18px;
+    }
+
+    .list-panel h2 {
+      margin-top: 0;
+    }
+
+    .list-panel ul,
+    .list-panel ol {
+      margin: 0;
+      padding-left: 22px;
+    }
+
+    .list-panel li {
+      margin-bottom: 10px;
+    }
+
+    .note {
+      margin: 0 18px 18px;
+      border-left: 4px solid var(--amber);
+      background: #fff8df;
+      border-radius: 6px;
+      padding: 12px 14px;
+      color: #5d4a04;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .flow {
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .flow svg {
+      min-width: 960px;
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .box rect {
+      fill: #ffffff;
+      stroke: #aeb9c9;
+      stroke-width: 1.4;
+      rx: 8;
+    }
+
+    .box.hot rect {
+      fill: #fff0ef;
+      stroke: var(--hot);
+    }
+
+    .box.cold rect {
+      fill: #eef5ff;
+      stroke: var(--cold);
+    }
+
+    .box.green rect {
+      fill: #edf9f4;
+      stroke: var(--green);
+    }
+
+    .box.purple rect {
+      fill: #f2eefb;
+      stroke: var(--purple);
+    }
+
+    .box text {
+      fill: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .box .sub {
+      fill: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .arrow {
+      fill: none;
+      stroke: #7b8797;
+      stroke-width: 2;
+      marker-end: url(#arrow);
+    }
+
+    .arrow.hot {
+      stroke: var(--hot);
+    }
+
+    .arrow.cold {
+      stroke: var(--cold);
+    }
+
+    .arrow.green {
+      stroke: var(--green);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    th {
+      background: #f2f5f9;
+      color: #344154;
+    }
+
+    .table-wrap {
+      padding: 0 18px 18px;
+      overflow: auto;
+    }
+
+    @media (max-width: 1040px) {
+      .layout,
+      .two-col,
+      .metric-grid,
+      .learning-grid,
+      .decision-grid {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+
+      .timeline-item {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="doc-topbar" aria-label="Documentation pages">
+    <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
+    <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
+    <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
+    <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
+  </nav>
+
+  <div class="layout">
+    <aside>
+      <h1>Journey and Learnings</h1>
+      <p>
+        A compact narrative of how the MoE hot-cache path evolved: what worked,
+        what failed, and which design rules survived the experiments.
+      </p>
+      <nav class="page-nav" aria-label="Page sections">
+        <a href="#summary">Summary</a>
+        <a href="#timeline">Timeline</a>
+        <a href="#performance">Performance Arc</a>
+        <a href="#architecture">Architecture Lessons</a>
+        <a href="#dead-ends">Dead Ends</a>
+        <a href="#mtp">MTP Lessons</a>
+        <a href="#warm-lane">Warm Lane</a>
+        <a href="#rebuild">Rebuild Checklist</a>
+        <a href="#migrated-notes">Migrated Notes</a>
+      </nav>
+    </aside>
+
+    <main>
+      <section class="hero" id="summary">
+        <h2>From slow CPU-bound MoE decode to a gated hot/cold graph</h2>
+        <p>
+          The work started with one practical problem: large MoE models such as Qwen3.5/Qwen3.6
+          could run on a small GPU only when most experts stayed in RAM. The GPU was not the only
+          bottleneck. Decode waited on CPU expert work, routing overhead, merge overhead, and
+          scheduler synchronization. The final direction was therefore not "put everything on the GPU",
+          but "copy the right experts into VRAM, keep the original experts on CPU, split the work, and
+          make the split cheap enough to win".
+        </p>
+      </section>
+
+      <section class="panel" id="performance">
+        <div class="panel-head">
+          <h2>Performance Arc</h2>
+          <p>These are development observations, not a clean benchmark suite. They show the shape of the progress.</p>
+        </div>
+        <div class="metric-grid">
+          <div class="metric">
+            <span>Early non-parallel reference</span>
+            <b>19.7 t/s</b>
+            <p>Simple prompt before the hot/cold parallel path became useful.</p>
+          </div>
+          <div class="metric">
+            <span>First working but poorly matched hot list</span>
+            <b>13.96 t/s</b>
+            <p>The graph worked, but the selected experts were wrong for the workload.</p>
+          </div>
+          <div class="metric">
+            <span>After routing, scheduler, merge, and cold-path work</span>
+            <b>28.09 t/s</b>
+            <p>The Qwen3.6 path became faster than the original router setup.</p>
+          </div>
+          <div class="metric">
+            <span>Qwen3.6 standard llama router baseline</span>
+            <b>22.2 t/s</b>
+            <p>Router-mode reference for the Snake coding prompt at 100k context.</p>
+          </div>
+          <div class="metric">
+            <span>Break-even hit rate</span>
+            <b>45.89%</b>
+            <p>The hot cache needed roughly this real hit rate to beat the baseline.</p>
+          </div>
+          <div class="metric">
+            <span>Observed practical hit-rate ceiling</span>
+            <b>~70%</b>
+            <p>That made overhead reduction as important as selecting more hot experts.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="timeline">
+        <div class="panel-head">
+          <h2>Timeline</h2>
+          <p>The path was iterative: first correctness, then visibility, then targeted overhead removal.</p>
+        </div>
+        <div class="timeline">
+          <div class="timeline-item">
+            <div class="timeline-label">1. Baseline</div>
+            <div class="timeline-body">
+              <h3>CPU/RAM experts made decode CPU-bound</h3>
+              <p>The target hardware could not keep all useful MoE expert tensors in VRAM. The useful split was GPU for hot expert copies and CPU for the unavoidable cold misses.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-label">2. Hot cache</div>
+            <div class="timeline-body">
+              <h3>Selected expert slices were copied into VRAM</h3>
+              <p>The original expert tensors stayed in the model. The hot cache became an additional VRAM copy, not a replacement. This kept cold fallback and dynamic updates possible.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-label">3. Worklist</div>
+            <div class="timeline-body">
+              <h3>Top-k expert slots were split into hot and cold work</h3>
+              <p>The graph needed a compact worklist with IDs, source slots, token IDs, weights, and counts. Without this split, the scheduler could not run the two lanes independently.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-label">4. Scheduler</div>
+            <div class="timeline-body">
+              <h3>Hot branch, cold branch, join became a strict region</h3>
+              <p>The scheduler only parallelizes the graph when node order and backend placement match the expected hot/cold/join shape. Bad regions fallback instead of silently producing wrong output.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-label">5. Measurements</div>
+            <div class="timeline-body">
+              <h3>Perf JSON changed from visualization to optimization data</h3>
+              <p>Useful tuning required hit rates, branch timings, overlap, join wait, fallback reasons, and expert lists. Full counters became optional because they also cost performance.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-label">6. Defaults</div>
+            <div class="timeline-body">
+              <h3>Flat weighting and conservative auto-sizing became safer defaults</h3>
+              <p>Even layer coverage proved more stable than over-favoring a few layers. Auto sizing needed a reserve to avoid CUDA OOM during warmup and transient compute buffers.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-label">7. Separation</div>
+            <div class="timeline-body">
+              <h3>The feature was refactored into a hot-cache package</h3>
+              <p>Parser, weighting, planner, budget, builder, worklist, adapter, perf, and updater moved behind focused components to reduce rebase conflicts and model side effects.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="architecture">
+        <div class="panel-head">
+          <h2>Architecture Lessons</h2>
+          <p>The stable design rules that survived the experiments.</p>
+        </div>
+        <div class="learning-grid">
+          <div class="learning">
+            <span>Memory model</span>
+            <b>The cache is additive</b>
+            <p>Hot experts are extra VRAM copies. RAM use remains because cold experts and dynamic replacement still need the original tensors.</p>
+          </div>
+          <div class="learning">
+            <span>Placement</span>
+            <b><code>--cpu-moe</code> is part of the model</b>
+            <p>The intended graph expects cold experts on the CPU/RAM path. Random offload layouts do not provide the same controlled hot/cold split.</p>
+          </div>
+          <div class="learning">
+            <span>Routing</span>
+            <b>Decode overhead is not small</b>
+            <p>For one-token decode, routing, worklist creation, views, and merge work can dominate enough that CPU decode routing and direct merge shortcuts matter.</p>
+          </div>
+          <div class="learning">
+            <span>Hit rate</span>
+            <b>A 100% hit rate is not realistic</b>
+            <p>The useful target was not perfect cache coverage. With a practical ceiling near 70%, the cold lane had to become cheaper.</p>
+          </div>
+          <div class="learning">
+            <span>Prompt processing</span>
+            <b>PP is a different workload</b>
+            <p>Prompt processing can push many tokens through the path at once. PP reduce-merge helps by reducing branch outputs before the final merge.</p>
+          </div>
+          <div class="learning">
+            <span>Model support</span>
+            <b>Adapters prevent accidental side effects</b>
+            <p>Each supported model registers its graph kind and profile. Qwen, Gemma, and Qwen3Next can tune behavior independently.</p>
+          </div>
+        </div>
+        <div class="flow">
+          <svg viewBox="0 0 1040 290" role="img" aria-label="Hot-cache journey flow">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8797"></path>
+              </marker>
+            </defs>
+            <path class="arrow" d="M 152 106 C 190 106 190 106 228 106"></path>
+            <path class="arrow" d="M 376 106 C 414 106 414 106 452 106"></path>
+            <path class="arrow hot" d="M 600 92 C 642 62 690 62 734 92"></path>
+            <path class="arrow cold" d="M 600 120 C 642 154 690 154 734 120"></path>
+            <path class="arrow" d="M 882 106 C 920 106 920 106 958 106"></path>
+
+            <g class="box green" transform="translate(26 54)">
+              <rect width="126" height="104"></rect>
+              <text x="16" y="34">Perf JSON</text>
+              <text class="sub" x="16" y="58">expert usage</text>
+              <text class="sub" x="16" y="76">timings</text>
+            </g>
+            <g class="box green" transform="translate(228 54)">
+              <rect width="148" height="104"></rect>
+              <text x="16" y="34">Planner</text>
+              <text class="sub" x="16" y="58">weighting</text>
+              <text class="sub" x="16" y="76">VRAM budget</text>
+            </g>
+            <g class="box purple" transform="translate(452 54)">
+              <rect width="148" height="104"></rect>
+              <text x="16" y="34">Worklist</text>
+              <text class="sub" x="16" y="58">hot slots</text>
+              <text class="sub" x="16" y="76">cold slots</text>
+            </g>
+            <g class="box hot" transform="translate(734 30)">
+              <rect width="148" height="74"></rect>
+              <text x="16" y="31">Hot lane</text>
+              <text class="sub" x="16" y="52">GPU cache</text>
+            </g>
+            <g class="box cold" transform="translate(734 116)">
+              <rect width="148" height="74"></rect>
+              <text x="16" y="31">Cold lane</text>
+              <text class="sub" x="16" y="52">CPU experts</text>
+            </g>
+            <g class="box purple" transform="translate(958 54)">
+              <rect width="62" height="104"></rect>
+              <text x="12" y="47">Join</text>
+              <text class="sub" x="12" y="68">merge</text>
+            </g>
+          </svg>
+        </div>
+      </section>
+
+      <section class="two-col" id="dead-ends">
+        <div class="panel list-panel">
+          <h2>Dead Ends And Why They Mattered</h2>
+          <ul>
+            <li><b>Unfavorable hot lists:</b> the first successful graph could be slower than baseline when the cache reflected the wrong workload.</li>
+            <li><b>Full layer overrides:</b> putting whole weak layers on the GPU consumed too much VRAM and still left hot/cold overhead unless a dedicated bypass existed.</li>
+            <li><b>MTP on 12 GB VRAM:</b> high draft acceptance did not compensate for the extra MTP context and compute memory. One observed MTP run reached about <code>25.33 t/s</code>, below strong non-MTP hot-cache runs.</li>
+            <li><b>Random fallback for missing MTP layer data:</b> removed because it made behavior non-deterministic and hid bad profiling data.</li>
+            <li><b>Quadro M1200 warm lane:</b> a second slower GPU added synchronization and transfer pressure back to CUDA0, so CPU cold lane remained better on this hardware.</li>
+          </ul>
+        </div>
+        <div class="panel list-panel">
+          <h2>What Stayed</h2>
+          <ul>
+            <li><b>Gated activation:</b> without <code>--moe-hot-cache</code> and a non-zero budget, normal llama.cpp behavior remains the default.</li>
+            <li><b>Adapter allow-list:</b> each model must explicitly opt in to a graph kind and profile.</li>
+            <li><b>Flat weighting default:</b> spread the budget across layers first, then optimize within each layer.</li>
+            <li><b>Runtime perf modes:</b> full diagnostics when tuning, update-only counters for adaptive cache changes, off for raw throughput tests.</li>
+            <li><b>Auto-size reserve:</b> keep enough VRAM for KV, warmup, CUDA compute buffers, and transient allocations.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="panel" id="mtp">
+        <div class="panel-head">
+          <h2>MTP Lessons</h2>
+          <p>The MTP experiment was useful, but it did not become the recommended path for the local 12 GB setup.</p>
+        </div>
+        <div class="learning-grid">
+          <div class="learning">
+            <span>Observed result</span>
+            <b>High acceptance was not enough</b>
+            <p>One run reached about <code>25.33 t/s</code> with <code>94.1%</code> draft acceptance, while non-MTP hot-cache runs were faster on the same class of workload.</p>
+          </div>
+          <div class="learning">
+            <span>Memory pressure</span>
+            <b>MTP creates another context</b>
+            <p><code>draft-mtp</code> creates a draft context against the target model after the target context exists. A failed run needed another <code>800 MiB</code> CUDA compute buffer and hit OOM.</p>
+          </div>
+          <div class="learning">
+            <span>Layer behavior</span>
+            <b>The MTP block is a real extra layer</b>
+            <p>For Qwen3.6-35B-A3B the MTP layer was layer <code>40</code>: forty normal transformer layers plus one NextN/MTP layer.</p>
+          </div>
+          <div class="learning">
+            <span>Selection rule</span>
+            <b>Do not randomly fill missing layers</b>
+            <p>Random fallback for missing MTP perf data was removed because it hid bad profiles and made benchmark runs non-reproducible.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Answer Learned From The Experiment</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Why did MTP fail without the hot cache?</td>
+                <td>The coarse tensor override placed several full MoE layers plus the full MTP layer on CUDA0. Normal inference could fit, but the later MTP context and graph reserve needed additional memory and failed.</td>
+              </tr>
+              <tr>
+                <td>Why was the MTP layer initially cold?</td>
+                <td>The startup perf JSON had no layer-40 data. A fully inactive hot-cache layer has no hot slots, so the dynamic update path cannot replace entries inside it later.</td>
+              </tr>
+              <tr>
+                <td>What would a deterministic MTP retry need?</td>
+                <td>An explicit MTP priority ratio, detected from real NextN/MTP layers, not a broad random fallback. With MTP active, a conservative reserve around <code>1600 MiB</code> is safer than the normal <code>1024 MiB</code>.</td>
+              </tr>
+              <tr>
+                <td>Why was the local MTP code not kept as the default?</td>
+                <td>It increased VRAM pressure, reduced room for the hot cache, and did not beat the best non-MTP hot-cache throughput on the RTX 2060 setup.</td>
+              </tr>
+              <tr>
+                <td>What is the rebase lesson?</td>
+                <td>Do not put broad MTP workarounds in speculative or model core code. If MTP hot-cache is revisited, keep the model hook narrow and place selection, budget, and graph behavior inside the hot-cache package.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" id="warm-lane">
+        <div class="panel-head">
+          <h2>Second GPU Warm-Lane Lessons</h2>
+          <p>The Quadro M1200 experiment tested whether a slow secondary GPU could replace part of the CPU cold lane.</p>
+        </div>
+        <div class="note">
+          The tested data flow was: hot experts on <code>CUDA0</code>, warm experts on <code>CUDA1</code>,
+          cold experts on CPU, and final join/merge back on <code>CUDA0</code>. The warm cache used the same
+          <code>/moe-layer-perf</code> data as the hot cache. No separate expert list was useful.
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Slot Split</th>
+                <th>Timing</th>
+                <th>Interpretation</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Broad warm lane</td>
+                <td><code>84.73%</code> hot, <code>7.11%</code> warm, <code>8.16%</code> cold</td>
+                <td><code>1444.87 us</code> total MoE/call, <code>557.67 us</code> join wait</td>
+                <td>CUDA1 was slower than CPU cold on average once transfer, bridge, and synchronization were included.</td>
+              </tr>
+              <tr>
+                <td>Timing-gated warm lane</td>
+                <td><code>83.70%</code> hot, <code>2.61%</code> warm, <code>13.69%</code> cold</td>
+                <td><code>1192.73 us</code> total MoE/call, <code>472.26 us</code> join wait</td>
+                <td>Removing the worst warm layers helped, but the remaining warm-enabled layers became slower than CPU cold after the distribution changed.</td>
+              </tr>
+              <tr>
+                <td>Second-stage no-warm result</td>
+                <td><code>83.49%</code> hot, <code>0.00%</code> warm, <code>16.51%</code> cold</td>
+                <td><code>1085.95 us</code> total MoE/call, <code>423.56 us</code> join wait</td>
+                <td>The best tested state for Gemma4 on this hardware pair was CUDA0 hot cache plus CPU cold branch, with CUDA1 warm disabled.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="learning-grid">
+          <div class="learning">
+            <span>Main caveat</span>
+            <b>A second GPU is not a free cold lane</b>
+            <p>The final merge happened on CUDA0. CUDA1 work had to cross a bridge path and could delay the same join that the CPU cold lane already used.</p>
+          </div>
+          <div class="learning">
+            <span>Decision rule</span>
+            <b>Validate twice</b>
+            <p>Enable warm only for layers where warm is clearly faster than cold, then rerun and re-evaluate. If warm loses after redistribution, disable it.</p>
+          </div>
+          <div class="learning">
+            <span>Practical result</span>
+            <b>Keep the warm lane out by default</b>
+            <p>For RTX 2060 plus Quadro M1200, the sync and transfer cost outweighed the saved CPU expert work.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Key Decisions</h2>
+          <p>These decisions are the practical design contract for future work.</p>
+        </div>
+        <div class="decision-grid">
+          <div class="decision">
+            <span>Correctness boundary</span>
+            <b>Fallback beats silent graph drift</b>
+            <p>If the scheduler cannot prove hot, cold, and join order, it falls back and reports a reason.</p>
+          </div>
+          <div class="decision">
+            <span>Update boundary</span>
+            <b>Replacement keeps tensor shapes stable</b>
+            <p>Dynamic update exchanges expert contents and maps inside existing slots. It does not reallocate the cache mid-run.</p>
+          </div>
+          <div class="decision">
+            <span>Rebase boundary</span>
+            <b>Core hooks stay small</b>
+            <p>Most logic belongs in <code>src/moe-hot-cache</code>; model files should contain narrow guarded hooks.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="rebuild">
+        <div class="panel-head">
+          <h2>If We Had To Rebuild It</h2>
+          <p>The shortest implementation plan that preserves the useful lessons.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Build This</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>1</td>
+                <td>Perf JSON with expert hits, branch slots, timings, and fallback reasons.</td>
+                <td>You cannot optimize a static expert cache without workload-specific data.</td>
+              </tr>
+              <tr>
+                <td>2</td>
+                <td>Parser, weighting, planner, budget, and builder as isolated components.</td>
+                <td>These pieces are testable without running a model and reduce upstream conflicts.</td>
+              </tr>
+              <tr>
+                <td>3</td>
+                <td>Worklist tensor with compact hot and cold prefixes.</td>
+                <td>The graph and scheduler need explicit work boundaries and counts.</td>
+              </tr>
+              <tr>
+                <td>4</td>
+                <td>Adapter profiles per model.</td>
+                <td>Qwen, Gemma, and Qwen3Next have different routing, activation, merge, and tiny-batch behavior.</td>
+              </tr>
+              <tr>
+                <td>5</td>
+                <td>Hot/cold graph with strict scheduler validation.</td>
+                <td>The speedup comes from overlap, but correctness depends on graph shape.</td>
+              </tr>
+              <tr>
+                <td>6</td>
+                <td>Dynamic update after requests, bounded by update rate.</td>
+                <td>It adapts to modest workload drift without changing cache capacity or restarting.</td>
+              </tr>
+              <tr>
+                <td>7</td>
+                <td>Separate PP optimization from decode optimization.</td>
+                <td>Large prompt batches and one-token decode have different bottlenecks.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" id="migrated-notes">
+        <div class="panel-head">
+          <h2>Migrated Notes</h2>
+          <p>The old Markdown notes were folded into the HTML documentation so this folder has one canonical documentation format.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Former Note</th>
+                <th>Where The Information Lives Now</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Parallelization history</td>
+                <td>This Journey page covers the performance arc, implementation timeline, hot/cold worklist, scheduler lessons, bottlenecks, and next levers.</td>
+              </tr>
+              <tr>
+                <td>Developer guide</td>
+                <td>The Architecture Explainer covers data models, class ownership, file map, runtime flow, model adapters, and the LLM-agent runbook. The Usage Guide covers commands, arguments, weighting modes, and environment switches.</td>
+              </tr>
+              <tr>
+                <td>MTP learnings</td>
+                <td>The MTP Lessons section above preserves the memory, layer-selection, deterministic-priority, performance, and rebase-isolation conclusions.</td>
+              </tr>
+              <tr>
+                <td>Runtime switches</td>
+                <td>The Usage Guide's argument and advanced environment tables are the canonical switch reference.</td>
+              </tr>
+              <tr>
+                <td>Warm-lane analysis</td>
+                <td>The Second GPU Warm-Lane Lessons section above preserves the setup, timings, interpretation, and practical decision rule.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          The only Markdown note intentionally kept in this directory is the dense-model TG optimization note,
+          because it is a separate future-work topic and not part of the current MoE hot-cache user/developer docs.
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

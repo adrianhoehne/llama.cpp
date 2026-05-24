@@ -1,0 +1,60 @@
+title: Experimental MoE hot-cache fork
+theme: jekyll-theme-primer
+
+# GitHub Pages otherwise tries to render every Markdown/template file in the
+# llama.cpp repository. Upstream examples intentionally contain strings such as
+# "{{ ... }}", which Jekyll treats as Liquid syntax and the Pages build fails.
+# Keep the Pages site focused on the fork documentation only.
+exclude:
+  - AGENTS.md
+  - AUTHORS
+  - CLAUDE.md
+  - CMakeLists.txt
+  - CMakePresets.json
+  - CODEOWNERS
+  - CONTRIBUTING.md
+  - LICENSE
+  - Makefile
+  - README.md
+  - SECURITY.md
+  - app/
+  - benches/
+  - build/
+  - ci/
+  - cmake/
+  - common/
+  - conversion/
+  - examples/
+  - ggml/
+  - gguf-py/
+  - grammars/
+  - include/
+  - licenses/
+  - media/
+  - models/
+  - pocs/
+  - requirements/
+  - scripts/
+  - src/
+  - tests/
+  - tools/
+  - vendor/
+  - docs/android/
+  - docs/android.md
+  - docs/autoparser.md
+  - docs/backend/
+  - docs/build-riscv64-spacemit.md
+  - docs/build-s390x.md
+  - docs/build.md
+  - docs/development/
+  - docs/docker.md
+  - docs/function-calling.md
+  - docs/install.md
+  - docs/llguidance.md
+  - docs/multi-gpu.md
+  - docs/multimodal/
+  - docs/multimodal.md
+  - docs/ops/
+  - docs/ops.md
+  - docs/preset.md
+  - docs/speculative.md
