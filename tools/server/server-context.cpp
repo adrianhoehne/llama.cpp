@@ -19,6 +19,7 @@
 #include "src/moe-hot-cache/llama-moe-hot-cache-perf.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -668,6 +669,7 @@ private:
     common_params params_base;
 
     bool moe_hot_cache_update_pending = false;
+    mutable std::atomic_bool moe_hot_cache_manual_apply_pending = false;
     mutable std::mutex moe_layer_perf_snapshot_mutex;
     mutable std::string last_moe_layer_perf_json;
 
@@ -2159,6 +2161,61 @@ private:
                     }
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_SET_MOE_HOT_CACHE:
+                {
+                    bool all_idle = true;
+                    for (const server_slot & slot : slots) {
+                        if (slot.is_processing()) {
+                            all_idle = false;
+                            break;
+                        }
+                    }
+
+                    if (!all_idle) {
+                        SRV_DBG("slots are busy, defer MoE hot-cache apply task, id_task = %d\n", task.id);
+                        queue_tasks.defer(std::move(task));
+                        break;
+                    }
+
+                    set_moe_hot_cache_manual_apply_pending(false);
+
+                    if (model_tgt == nullptr) {
+                        send_error(task, "No model loaded", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    moe_hot_cache_update_pending = false;
+
+                    // Manual endpoint applies the provided list with a full delta budget.
+                    // It must stay independent from --moe-hot-cache-update-rate.
+                    const auto stats = llama_moe_hot_cache_apply_json(*model_tgt, task.moe_hot_cache_json);
+                    if (!stats.active) {
+                        send_error(task, "MoE hot-cache is not active or the expert list is invalid", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    SRV_INF("MoE hot-cache apply: mode = manual, rate = %.2f%%, exchanged = %zu/%zu candidates, budget = %zu/%zu hot experts, layers changed = %zu\n",
+                            100.0*stats.update_rate,
+                            stats.exchanged,
+                            stats.candidates,
+                            stats.max_exchange,
+                            stats.hot_experts,
+                            stats.layers_changed);
+
+                    auto res = std::make_unique<server_task_result_json>();
+                    res->id = task.id;
+                    res->data = json {
+                        {"success",        true},
+                        {"active",         stats.active},
+                        {"update_rate",    stats.update_rate},
+                        {"exchanged",      stats.exchanged},
+                        {"candidates",     stats.candidates},
+                        {"max_exchange",   stats.max_exchange},
+                        {"hot_experts",    stats.hot_experts},
+                        {"layers_changed", stats.layers_changed},
+                    };
+                    queue_results.send(std::move(res));
+                } break;
             case SERVER_TASK_TYPE_SLOT_SAVE:
                 {
                     if (!check_no_mtmd(task.id)) {
@@ -3535,12 +3592,25 @@ private:
         forget_moe_layer_perf_json();
     }
 
+    void set_moe_hot_cache_manual_apply_pending(bool pending) const {
+        moe_hot_cache_manual_apply_pending.store(pending, std::memory_order_release);
+    }
+
+    bool has_moe_hot_cache_manual_apply_pending() const {
+        return moe_hot_cache_manual_apply_pending.load(std::memory_order_acquire);
+    }
+
     void update_moe_hot_cache_if_pending() {
         if (!moe_hot_cache_update_pending) {
             return;
         }
 
         moe_hot_cache_update_pending = false;
+
+        if (has_moe_hot_cache_manual_apply_pending()) {
+            SRV_INF("%s", "MoE hot-cache auto update skipped: manual /moe-hot-cache request pending\n");
+            return;
+        }
 
         if (model_tgt == nullptr) {
             return;
@@ -4020,6 +4090,64 @@ void server_routes::init_routes() {
         res->status = 200;
         res->data = ctx_server.get_moe_layer_perf_json();
         return res;
+    };
+
+    auto apply_moe_hot_cache = [this](const server_http_req & req, std::string moe_hot_cache_json) {
+        auto res = create_response();
+
+        if (moe_hot_cache_json.empty()) {
+            res->error(format_error_response("MoE hot-cache JSON is missing", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        try {
+            const json parsed = json::parse(moe_hot_cache_json);
+            GGML_UNUSED(parsed);
+        } catch (const std::exception & e) {
+            res->error(format_error_response(string_format("Invalid MoE hot-cache JSON: %s", e.what()), ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        {
+            ctx_server.set_moe_hot_cache_manual_apply_pending(true);
+            SRV_INF("%s", "MoE hot-cache manual apply requested; auto update will be skipped until it is handled\n");
+
+            server_task task(SERVER_TASK_TYPE_SET_MOE_HOT_CACHE);
+            task.id = res->rd.get_new_id();
+            task.moe_hot_cache_json = std::move(moe_hot_cache_json);
+            res->rd.post_task(std::move(task), true);
+        }
+
+        auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            ctx_server.set_moe_hot_cache_manual_apply_pending(false);
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        res->ok(result->to_json());
+        return res;
+    };
+
+    this->get_moe_hot_cache = [this, apply_moe_hot_cache](const server_http_req & req) -> server_http_res_ptr {
+        std::string moe_hot_cache_json = req.body;
+        if (moe_hot_cache_json.empty()) {
+            moe_hot_cache_json = req.get_param("json");
+        }
+        if (moe_hot_cache_json.empty()) {
+            moe_hot_cache_json = ctx_server.get_moe_layer_perf_json();
+        }
+
+        return apply_moe_hot_cache(req, std::move(moe_hot_cache_json));
+    };
+
+    this->post_moe_hot_cache = [apply_moe_hot_cache](const server_http_req & req) -> server_http_res_ptr {
+        return apply_moe_hot_cache(req, req.body);
     };
 
     this->get_metrics = [this](const server_http_req & req) {

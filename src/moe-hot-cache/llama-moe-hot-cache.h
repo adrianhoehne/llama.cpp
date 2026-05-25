@@ -182,6 +182,10 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
         const std::string & json_str,
         double update_rate);
 
+llama_moe_hot_cache_update_stats llama_moe_hot_cache_apply_json(
+        llama_model & model,
+        const std::string & json_str);
+
 bool llama_moe_hot_cache_layer_active(const llama_model & model, int il);
 bool llama_moe_hot_cache_layer_active_for_graph(
         const llama_model & model,
