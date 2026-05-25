@@ -254,6 +254,34 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
             stats.update_rate);
 }
 
+llama_moe_hot_cache_update_stats llama_moe_hot_cache_apply_json(
+        llama_model & model,
+        const std::string & json_str) {
+    llama_moe_hot_cache_update_stats stats;
+    stats.update_rate = 1.0;
+
+    if (!model.moe_hot_cache || !model.moe_hot_cache->active()) {
+        return stats;
+    }
+
+    std::vector<llama_moe_hot_cache_entry> scored_observed;
+    try {
+        const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
+        scored_observed = score_observations_for_arch(model.arch, observations, &model.get_params());
+    } catch (const std::exception & e) {
+        LLAMA_LOG_WARN("%s: failed to parse MoE hot-cache JSON: %s\n", __func__, e.what());
+        return stats;
+    }
+
+    stats.active = true;
+
+    return llama_moe_hot_cache_update_from_scored_observations(
+            model,
+            {},
+            scored_observed,
+            stats.update_rate);
+}
+
 bool llama_moe_hot_cache_layer_active(const llama_model & model, int il) {
     return llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::none);
 }

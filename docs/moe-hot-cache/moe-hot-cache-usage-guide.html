@@ -481,6 +481,7 @@
         <a href="#minimum">Bare Minimum</a>
         <a href="#workflow">Workflow Details</a>
         <a href="#live-perf">Live Perf UI</a>
+        <a href="#runtime-apply">Runtime Cache Apply</a>
         <a href="#weighting">Weighting Modes</a>
         <a href="#arguments">Arguments</a>
         <a href="#advanced-env">Advanced Env Switches</a>
@@ -663,6 +664,102 @@ cmake --build build -j8
           times, <code>Overlap</code> is time hidden by parallel execution, and <code>Join wait</code>
           is time one lane waits for the other.
         </p>
+      </section>
+
+      <section id="runtime-apply">
+        <div class="section-head">
+          <div>
+            <h2>Apply A New Hot Cache At Runtime</h2>
+            <p>
+              <code>/moe-hot-cache</code> lets you apply a new expert/perf JSON while the server is running.
+              It is meant for UI-driven tuning and for external controllers that already have a better expert list.
+            </p>
+          </div>
+          <span class="tag">GET / POST</span>
+        </div>
+
+        <div class="workflow-grid">
+          <article class="workflow-card">
+            <b>Waits for idle slots</b>
+            <p>If an inference is running, the endpoint task waits in the server queue until all slots are idle. The cache is not mutated while a request is decoding.</p>
+          </article>
+          <article class="workflow-card">
+            <b>Delta replacement only</b>
+            <p>The hot-cache buffer is not deleted or rebuilt. The updater compares current hot experts with the provided list and copies only the changed expert slices.</p>
+          </article>
+          <article class="workflow-card">
+            <b>Manual means full budget</b>
+            <p>The endpoint applies with <code>update_rate = 1.0</code>. <code>--moe-hot-cache-update-rate</code> affects only automatic post-request updates, not this manual apply.</p>
+          </article>
+        </div>
+
+        <p>
+          The JSON body uses the same schema as <code>--moe-hot-cache</code> and <code>/moe-layer-perf</code>.
+          It may contain first-run <code>experts</code> arrays or runtime <code>hot_experts</code> and
+          <code>cold_experts</code> arrays. The existing cache layout stays fixed: the endpoint can replace experts
+          inside the already allocated per-layer hot slots, but it cannot increase the total cache size or create new
+          hot slots for a layer that was not part of the initial cache.
+        </p>
+
+        <pre><code># Preferred: apply an expert/perf JSON file directly.
+curl -sS -X POST http://127.0.0.1:8080/moe-hot-cache \
+  -H 'Content-Type: application/json' \
+  --data-binary @moe-hot-cache.json
+
+# Router mode: target one loaded model explicitly.
+curl -sS -X POST 'http://127.0.0.1:28002/moe-hot-cache?model=unsloth/Qwen3.6-35B-A3B-GGUF:Q6_K_XL' \
+  -H 'Content-Type: application/json' \
+  --data-binary @moe-hot-cache.json
+
+# Apply the server's current /moe-layer-perf snapshot.
+# In router mode, pass ?model=... if more than one model is loaded.
+curl -sS http://127.0.0.1:8080/moe-hot-cache
+
+# GET can also carry a small URL-encoded JSON value.
+# Prefer POST for real expert lists because they are usually large.
+curl -sS --get http://127.0.0.1:8080/moe-hot-cache \
+  --data-urlencode 'json={"schema":"llama.cpp.moe_layer_opt_perf.v1","layers":[{"layer":0,"experts":[[12,100],[42,90]]}]}'
+
+# Copy the live perf endpoint into the manual apply endpoint.
+curl -sS http://127.0.0.1:8080/moe-layer-perf \
+  | curl -sS -X POST http://127.0.0.1:8080/moe-hot-cache \
+      -H 'Content-Type: application/json' \
+      --data-binary @-</code></pre>
+
+        <p>
+          A successful response returns HTTP <code>200</code> and a compact status object:
+        </p>
+
+        <pre><code>{
+  "success": true,
+  "active": true,
+  "update_rate": 1.0,
+  "exchanged": 47,
+  "candidates": 131,
+  "max_exchange": 131,
+  "hot_experts": 469,
+  "layers_changed": 29
+}</code></pre>
+
+        <p>
+          While a manual apply request is pending, the automatic post-request hot-cache update is skipped for that
+          cycle. This prevents the automatic <code>--moe-hot-cache-update-rate</code> update from changing the cache
+          immediately before the manual list is applied.
+        </p>
+
+        <div class="note">
+          <strong>Web UI:</strong>
+          the <code>#/moe-layer-perf</code> page has an <code>Apply cache</code> button. It posts the currently
+          displayed list to <code>/moe-hot-cache</code>, waits for the server response, and then refreshes the view.
+        </div>
+
+        <p>
+          Expected log lines:
+        </p>
+
+        <pre><code>MoE hot-cache manual apply requested; auto update will be skipped until it is handled
+MoE hot-cache auto update skipped: manual /moe-hot-cache request pending
+MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
       </section>
 
       <section id="weighting">
@@ -849,6 +946,11 @@ cmake --build build -j8
                 <td><code>POST /moe-layer-perf</code></td>
                 <td><code>{"mode":"full"}</code>, <code>{"mode":"update"}</code>, or <code>{"mode":"off"}</code></td>
                 <td>Switches live MoE perf collection mode at runtime and resets the current perf window.</td>
+              </tr>
+              <tr>
+                <td><code>GET /moe-hot-cache</code><br><code>POST /moe-hot-cache</code></td>
+                <td>HTTP endpoint</td>
+                <td>Applies a new hot-cache expert list at runtime. <code>POST</code> sends the JSON body explicitly. <code>GET</code> without a JSON body applies the current <code>/moe-layer-perf</code> snapshot. In router mode, pass <code>?model=&lt;name&gt;</code> when multiple models are loaded.</td>
               </tr>
               <tr>
                 <td><code>LLAMA_MOE_LAYER_PERF</code></td>
