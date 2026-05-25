@@ -1156,7 +1156,7 @@
         </div>
         <div class="note">
           The parser lives in <code>llama_moe_hot_cache_perf_json_parser</code>.
-          It is deliberately separated so learn files, <code>/moe-layer-perf</code>, and dynamic updates share the same JSON interpretation.
+          It is deliberately separated so learn files, <code>/moe-layer-perf</code>, manual <code>/moe-hot-cache</code> applies, and automatic updates share the same JSON interpretation.
         </div>
       </section>
 
@@ -1351,7 +1351,7 @@
                 <tr><td><code>hot_slots_total</code>, <code>cold_slots_total</code></td><td>Hot/cold split totals used for hit rate and update decisions.</td></tr>
                 <tr><td><code>*_time_us</code></td><td>MoE, routing, worklist, matmul, branch, gather/scatter, and merge timings.</td></tr>
                 <tr><td><code>parallel_* </code></td><td>Scheduler wall time, lane launches, overlap estimate, join wait, and fallback reasons.</td></tr>
-                <tr><td><code>experts</code>, <code>hot_experts</code>, <code>cold_experts</code></td><td>Per-expert counts for visualization, learning, and dynamic updates.</td></tr>
+                <tr><td><code>experts</code>, <code>hot_experts</code>, <code>cold_experts</code></td><td>Per-expert counts for visualization, learning, manual applies, and automatic updates.</td></tr>
               </tbody>
             </table>
           </article>
@@ -1395,6 +1395,7 @@
                 <tr><td><code>llama_moe_hot_cache_init_after_model_load()</code></td><td>Initializes fixed-size caches before context memory when <code>max_mib &gt; 0</code>.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_init_after_context_memory()</code></td><td>Initializes auto-sized caches after context memory when <code>max_mib == -1</code>.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_update_from_perf_json()</code></td><td>Parses live perf data, scores current observations, and delegates replacement to the updater.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_apply_json()</code></td><td>Parses a manual <code>/moe-hot-cache</code> payload and applies the full delta budget independent of the automatic update rate.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_layer_active_for_graph()</code></td><td>Checks adapter support, layer bounds, runtime cache presence, and graph kind compatibility.</td></tr>
               </tbody>
             </table>
@@ -1402,7 +1403,7 @@
 
           <article class="model-card">
             <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-parser.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-parser.*</code></a></h3>
-            <p>The JSON parser class shared by learn files, <code>/moe-layer-perf</code>, and dynamic updates.</p>
+            <p>The JSON parser class shared by learn files, <code>/moe-layer-perf</code>, manual <code>/moe-hot-cache</code> applies, and automatic updates.</p>
             <table class="field-table">
               <thead><tr><th>Method</th><th>Responsibility</th></tr></thead>
               <tbody>
@@ -1506,7 +1507,7 @@
 
           <article class="model-card">
             <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf.cpp" target="_blank" rel="noopener noreferrer"><code>perf.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-state.cpp" target="_blank" rel="noopener noreferrer"><code>perf-state.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-json.cpp" target="_blank" rel="noopener noreferrer"><code>perf-json.cpp</code></a></h3>
-            <p>Performance collection pipeline for learning, UI visualization, and dynamic updates.</p>
+            <p>Performance collection pipeline for learning, UI visualization, manual applies, and automatic updates.</p>
             <table class="field-table">
               <thead><tr><th>Component</th><th>Responsibility</th></tr></thead>
               <tbody>
@@ -1522,15 +1523,15 @@
 
           <article class="model-card">
             <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-updater.cpp" target="_blank" rel="noopener noreferrer"><code>llama-moe-hot-cache-updater.*</code></a></h3>
-            <p>Dynamic cache replacement after a server request. It changes contents and maps, not tensor shapes.</p>
+            <p>Automatic post-request replacement and manual runtime apply. It changes contents and maps, not tensor shapes.</p>
             <table class="field-table">
               <thead><tr><th>Method</th><th>Responsibility</th></tr></thead>
               <tbody>
                 <tr><td><code>current_hot_experts()</code></td><td>Reconstructs which original experts are currently cached in a layer.</td></tr>
                 <tr><td><code>plan_layer_replacements()</code></td><td>Builds evict/add candidates from current cache contents and observed expert scores.</td></tr>
                 <tr><td><code>sort_replacement_candidates()</code></td><td>Sorts candidates by gain so high-value replacements happen first.</td></tr>
-                <tr><td><code>update_max_exchange()</code></td><td>Applies the configured update rate to cap how many cache slots may change.</td></tr>
-                <tr><td><code>update_from_scored_observations()</code></td><td>Copies new expert slices into existing cache slots and updates hot/cold maps and masks.</td></tr>
+                <tr><td><code>update_max_exchange()</code></td><td>Caps automatic updates by the configured rate; manual <code>/moe-hot-cache</code> applies use rate <code>1.0</code>.</td></tr>
+                <tr><td><code>update_from_scored_observations()</code></td><td>Copies new expert slices into existing cache slots and updates hot/cold maps and masks for both automatic and manual replacement.</td></tr>
               </tbody>
             </table>
           </article>
@@ -1544,8 +1545,8 @@
                 <tr><td><code>src/models/qwen35moe.cpp</code></td><td>Uses the guarded <code>qwen35_ffn</code> path when the adapter and layer cache are active.</td></tr>
                 <tr><td><code>src/models/qwen3next.cpp</code></td><td>Builds router logits, then calls the generic logits hot-cache path when active.</td></tr>
                 <tr><td><code>src/models/gemma4.cpp</code></td><td>Calls the generic logits hot-cache path with Gemma's GELU FFN operation.</td></tr>
-                <tr><td><code>tools/server/server.cpp</code>, <code>server-models.cpp</code></td><td>Expose GET/POST <code>/moe-layer-perf</code> and route requests to the loaded model.</td></tr>
-                <tr><td><code>tools/server/server-context.cpp</code></td><td>Writes perf output, marks update pending, and runs post-request hot-cache replacement.</td></tr>
+                <tr><td><code>tools/server/server.cpp</code>, <code>server-models.cpp</code></td><td>Expose GET/POST <code>/moe-layer-perf</code> and <code>/moe-hot-cache</code>, then route requests to the loaded model.</td></tr>
+                <tr><td><code>tools/server/server-context.cpp</code></td><td>Writes perf output, marks automatic updates pending, queues manual applies until slots are idle, skips automatic updates while a manual apply is pending, and runs cache replacement.</td></tr>
                 <tr><td><code>ggml-backend-moe-hot-cache.*</code></td><td>Scheduler-side support for marked hot/cold parallel regions, metrics, and fallback counters.</td></tr>
               </tbody>
             </table>
@@ -1564,6 +1565,8 @@
                 <tr><td><code>test-moe-hot-cache-adapter</code></td><td>Registered models, graph-kind isolation, profile defaults, and unsupported graph rejection.</td></tr>
                 <tr><td><code>test-moe-hot-cache-perf-*</code></td><td>State lifecycle, node classification, tensor readback, and JSON serialization.</td></tr>
                 <tr><td><code>test-moe-hot-cache-updater</code></td><td>Candidate planning, exchange limits, sorting, and map/mask-safe replacement.</td></tr>
+                <tr><td><code>test-moe-hot-cache-runtime-apply</code></td><td>Manual runtime apply semantics, full-rate exchange limits, and parser/updater compatibility.</td></tr>
+                <tr><td><code>test-moe-hot-cache</code></td><td>Aggregate CMake and CTest target for the complete hot-cache test group.</td></tr>
               </tbody>
             </table>
           </article>
@@ -1751,7 +1754,7 @@
             <div class="check-row"><b>No Side Effects</b><span>A Qwen-specific graph kind must not automatically apply to Gemma or a new model.</span></div>
             <div class="check-row"><b>Fallback Is Normal</b><span>If no adapter matches or the layer is inactive, the existing model path continues.</span></div>
             <div class="check-row"><b>PP Differs From Decode</b><span>Prompt processing can have large batches. Decode usually has tiny batches and is more overhead-sensitive.</span></div>
-            <div class="check-row"><b>Minimum Test</b><span><code>ctest --test-dir build -R test-moe-hot-cache --output-on-failure</code></span></div>
+            <div class="check-row"><b>Minimum Test</b><span><code>ctest --test-dir build -R '^test-moe-hot-cache$' --output-on-failure</code></span></div>
             <div class="check-row"><b>Build</b><span><code>cmake --build build -j8 --target llama-server</code></span></div>
           </div>
         </div>
@@ -1805,8 +1808,8 @@
             <div class="check-row"><b>Preferred edit locations</b><span><code>src/moe-hot-cache/*</code>, one model hook file, and targeted <code>tests/test-moe-hot-cache-*.cpp</code>.</span></div>
             <div class="check-row"><b>Avoid broad core edits</b><span>Do not modify scheduler, GGML CUDA kernels, or unrelated model code unless the requested model cannot work without it.</span></div>
             <div class="check-row"><b>Required guard</b><span>Use <code>llama_moe_hot_cache_layer_active_for_graph</code>, not a loose architecture check.</span></div>
-            <div class="check-row"><b>Build command</b><span><code>cmake --build build -j8 --target test-moe-hot-cache-adapter llama-server</code></span></div>
-            <div class="check-row"><b>Test command</b><span><code>ctest --test-dir build -R test-moe-hot-cache --output-on-failure</code></span></div>
+            <div class="check-row"><b>Build command</b><span><code>cmake --build build -j8 --target test-moe-hot-cache llama-server</code></span></div>
+            <div class="check-row"><b>Test command</b><span><code>ctest --test-dir build -R '^test-moe-hot-cache$' --output-on-failure</code></span></div>
             <div class="check-row"><b>Runtime checks</b><span>Watch <code>parallel_fallbacks</code>, <code>hot_slots_total</code>, <code>cold_slots_total</code>, branch timings, and whether generated text remains sane.</span></div>
             <div class="check-row"><b>Patch review question</b><span>Could this change alter Qwen, Gemma, or Qwen3Next when the new model is not loaded? If yes, isolate it further.</span></div>
           </div>
@@ -1872,7 +1875,7 @@
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-json.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-perf-json.cpp</code></a></td>
               <td>JSON serialization for <code>/moe-layer-perf</code></td>
-              <td>Turns the current perf snapshot into the JSON used by the UI, learn files, and dynamic updates.</td>
+              <td>Turns the current perf snapshot into the JSON used by the UI, learn files, manual applies, and automatic updates.</td>
             </tr>
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-perf-nodes.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-perf-nodes.cpp</code></a></td>
@@ -1901,8 +1904,8 @@
             </tr>
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache-updater.cpp" target="_blank" rel="noopener noreferrer"><code>src/moe-hot-cache/llama-moe-hot-cache-updater.cpp</code></a></td>
-              <td>Dynamic cache replacement after a request</td>
-              <td>Decides which hot experts are evicted and which experts move in.</td>
+              <td>Automatic and manual cache replacement</td>
+              <td>Decides which hot experts are evicted and which experts move in without changing cache tensor shapes.</td>
             </tr>
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen35moe-hot-cache.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen35moe-hot-cache.cpp</code></a></td>
@@ -1931,13 +1934,13 @@
             </tr>
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/tools/server/server-context.cpp" target="_blank" rel="noopener noreferrer"><code>tools/server/server-context.cpp</code></a></td>
-              <td>Perf file output and post-request update</td>
-              <td>Marks hot-cache updates pending, logs hit rate, writes perf output, and runs slot replacement after a request.</td>
+              <td>Perf file output and runtime cache updates</td>
+              <td>Marks automatic updates pending, logs hit rate, writes perf output, queues manual applies until slots are idle, and runs slot replacement.</td>
             </tr>
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/tools/server/server.cpp" target="_blank" rel="noopener noreferrer"><code>tools/server/server.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/tools/server/server-models.cpp" target="_blank" rel="noopener noreferrer"><code>tools/server/server-models.cpp</code></a></td>
-              <td><code>/moe-layer-perf</code> GET/POST routing</td>
-              <td>Expose the live perf JSON and runtime perf-mode switch through HTTP.</td>
+              <td><code>/moe-layer-perf</code> and <code>/moe-hot-cache</code> routing</td>
+              <td>Expose the live perf JSON, runtime perf-mode switch, and manual hot-cache apply endpoint through HTTP.</td>
             </tr>
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/common/common.h" target="_blank" rel="noopener noreferrer"><code>common/common.h</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/include/llama.h" target="_blank" rel="noopener noreferrer"><code>include/llama.h</code></a></td>
@@ -1947,7 +1950,7 @@
             <tr>
               <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/tree/cached-experts-v2/tests" target="_blank" rel="noopener noreferrer"><code>tests/test-moe-hot-cache-*.cpp</code></a></td>
               <td>Specialized unit tests per component</td>
-              <td>New models should at least get adapter tests, plus targeted tests for special logic.</td>
+              <td>New models should at least get adapter tests, plus targeted tests for special logic. The aggregate target is <code>test-moe-hot-cache</code>.</td>
             </tr>
           </tbody>
         </table>
@@ -1964,12 +1967,12 @@
       },
       perf: {
         title: "Perf JSON",
-        text: "The learn run records which experts were used per layer. That file is the basis for the initial cache fill.",
-        code: "--moe-layer-perf-out moe-hot-cache.json\nGET /moe-layer-perf",
+        text: "The learn run and live endpoint record which experts were used per layer. That JSON can fill the initial cache or be applied at runtime.",
+        code: "--moe-layer-perf-out moe-hot-cache.json\nGET /moe-layer-perf\nPOST /moe-hot-cache",
       },
       parser: {
         title: "Parser",
-        text: "The parser is the llama_moe_hot_cache_perf_json_parser class in src/moe-hot-cache/llama-moe-hot-cache-parser.cpp. It reads raw expert lists, hot/cold lists, and timing fields so learn runs and later hot-cache runs use the same JSON logic.",
+        text: "The parser is the llama_moe_hot_cache_perf_json_parser class in src/moe-hot-cache/llama-moe-hot-cache-parser.cpp. It reads raw expert lists, hot/cold lists, and timing fields so learn runs, live perf snapshots, manual applies, and automatic updates use the same JSON logic.",
         code: "llama_moe_hot_cache_perf_json_parser::parse_observations(json)",
       },
       planner: {
@@ -2019,8 +2022,8 @@
       },
       dynamic: {
         title: "Dynamic Update",
-        text: "After a request, part of the cache slots can be exchanged. The buffers keep the same size; only contents and maps change.",
-        code: "--moe-hot-cache-update-rate 0.10\nllama_moe_hot_cache_update_from_perf_json(...)",
+        text: "After a request, automatic update may exchange part of the cache slots. A manual /moe-hot-cache request waits for idle slots and applies the full JSON delta. The buffers keep the same size; only contents and maps change.",
+        code: "--moe-hot-cache-update-rate 0.10\nllama_moe_hot_cache_update_from_perf_json(...)\nllama_moe_hot_cache_apply_json(...)",
       },
       normal: {
         title: "Normal Path",
