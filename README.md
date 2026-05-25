@@ -8,7 +8,11 @@ Start here:
 - [Architecture explainer](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-hot-cache-architecture-explainer.html)
 - [Journey and learnings](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-hot-cache-journey-learnings.html)
 
-The feature is experimental and workload-dependent. Qwen3.5/Qwen3.6 MoE is the primary optimized path; Gemma 4 26B-A4B and Qwen3Next support are experimental.
+The feature is experimental and workload-dependent. 
+Supported:
+- Qwen3.5/Qwen3.6 MoE models
+- Gemma 4 26B-A4B
+- Qwen3Next
 
 These changes will probably never reach upstream llama because I broke the contribution rules hardly. I am a Java developer and the last time I wrote anything in C is, I even don't remember when it was, therefore, the bit of knowlegde of C that I had is gone. Secondly, this is a tool for me, I want it to function, I want it to be easy and I used other tools to create it faster.
 And lastly, I saw some discussions in the PRs and the tone is not what I would expect. I know especially big PRs are hard to overlook, but great features often create big PRs. I also hate big PRs. But, sometimes they are necessary. Anyway, I don't want to have such discussions, it's just a waste of time.
