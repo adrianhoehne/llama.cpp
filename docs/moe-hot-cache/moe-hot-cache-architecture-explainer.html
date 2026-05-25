@@ -824,7 +824,7 @@
             </div>
           </div>
           <div class="diagram-wrap">
-            <svg viewBox="0 0 1120 650" role="img" aria-label="MoE hot-cache architecture diagram">
+            <svg viewBox="0 0 1200 650" role="img" aria-label="MoE hot-cache architecture diagram">
               <defs>
                 <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8797"></path>
@@ -836,11 +836,12 @@
               <path class="arrow startup-edge" d="M 733 112 C 808 112 808 112 884 112"></path>
 
               <path class="arrow decode-edge" d="M 144 326 C 210 326 210 326 276 326"></path>
-              <path class="arrow decode-edge" d="M 424 326 C 478 326 478 270 532 270"></path>
-              <path class="arrow decode-edge cold" d="M 424 326 C 478 326 478 382 532 382"></path>
-              <path class="arrow decode-edge hot" d="M 690 270 C 750 270 750 326 810 326"></path>
-              <path class="arrow decode-edge cold" d="M 690 382 C 750 382 750 326 810 326"></path>
-              <path class="arrow decode-edge" d="M 958 326 C 1004 326 1004 326 1050 326"></path>
+              <path class="arrow decode-edge" d="M 424 326 C 470 326 470 326 516 326"></path>
+              <path class="arrow decode-edge hot" d="M 654 326 C 694 326 694 270 734 270"></path>
+              <path class="arrow decode-edge cold" d="M 654 326 C 694 326 694 382 734 382"></path>
+              <path class="arrow decode-edge hot" d="M 894 270 C 940 270 940 326 986 326"></path>
+              <path class="arrow decode-edge cold" d="M 894 382 C 940 382 940 326 986 326"></path>
+              <path class="arrow decode-edge" d="M 1134 326 C 1162 326 1162 326 1190 326"></path>
 
               <path class="arrow green update-edge" d="M 930 482 C 826 548 686 548 606 482"></path>
               <path class="arrow green update-edge" d="M 460 482 C 350 548 220 548 145 482"></path>
@@ -887,28 +888,35 @@
                 <text class="sub" x="18" y="76">expert ids</text>
               </g>
 
-              <g class="node hot" data-node="hotlane" data-phases="decode" transform="translate(532 220)">
+              <g class="node purple" data-node="worklist" data-phases="decode" transform="translate(516 276)">
+                <rect width="138" height="100"></rect>
+                <text class="label" x="18" y="34">Worklist</text>
+                <text class="sub" x="18" y="58">dispatches</text>
+                <text class="sub" x="18" y="76">hot/cold slots</text>
+              </g>
+
+              <g class="node hot" data-node="hotlane" data-phases="decode" transform="translate(734 220)">
                 <rect width="160" height="100"></rect>
                 <text class="label" x="18" y="34">Hot Lane</text>
                 <text class="sub" x="18" y="58">CUDA0</text>
                 <text class="sub" x="18" y="76">cached experts</text>
               </g>
 
-              <g class="node cold" data-node="coldlane" data-phases="decode" transform="translate(532 332)">
+              <g class="node cold" data-node="coldlane" data-phases="decode" transform="translate(734 332)">
                 <rect width="160" height="100"></rect>
                 <text class="label" x="18" y="34">Cold Lane</text>
                 <text class="sub" x="18" y="58">CPU/RAM</text>
                 <text class="sub" x="18" y="76">original experts</text>
               </g>
 
-              <g class="node purple" data-node="scheduler" data-phases="decode" transform="translate(810 276)">
+              <g class="node purple" data-node="scheduler" data-phases="decode" transform="translate(986 276)">
                 <rect width="150" height="100"></rect>
                 <text class="label" x="18" y="34">Join/Merge</text>
                 <text class="sub" x="18" y="58">parallel region</text>
                 <text class="sub" x="18" y="76">then add output</text>
               </g>
 
-              <g class="node" data-node="next" data-phases="decode" transform="translate(1050 276)">
+              <g class="node" data-node="next" data-phases="decode" transform="translate(1190 276)">
                 <rect width="60" height="100"></rect>
                 <text class="label" x="16" y="48">Next</text>
                 <text class="sub" x="16" y="70">layer</text>
@@ -1992,8 +2000,13 @@
       },
       router: {
         title: "Router",
-        text: "The router computes scores for all experts and selects the top-k experts for the current token.",
-        code: "selected_experts + weights",
+        text: "The router computes one score per expert from the current token representation, then selects the top-k expert IDs and their weights for the MoE FFN.",
+        code: "ffn_gate_inp -> selected_experts + weights",
+      },
+      worklist: {
+        title: "Worklist Dispatcher",
+        text: "The worklist expands the router result into concrete work items. For every token and selected expert, it stores the original source slot, token id, expert weight, and either a hot cache id or a cold expert id. It also writes hot_count and cold_count so the graph knows how many valid rows each lane must process.",
+        code: "for each (token, top_k_slot):\n  if hot_id_map[expert] >= 0 -> hot work item\n  else -> cold work item",
       },
       hotlane: {
         title: "Hot Lane",
