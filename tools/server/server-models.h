@@ -203,6 +203,8 @@ struct server_models_routes {
     server_http_context::handler_t get_router_props;
     server_http_context::handler_t get_moe_layer_perf;
     server_http_context::handler_t post_moe_layer_perf;
+    server_http_context::handler_t get_moe_hot_cache;
+    server_http_context::handler_t post_moe_hot_cache;
     server_http_context::handler_t proxy_get;
     server_http_context::handler_t proxy_post;
     server_http_context::handler_t get_router_models;

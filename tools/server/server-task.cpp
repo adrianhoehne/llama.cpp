@@ -1911,6 +1911,13 @@ json server_task_result_metrics::to_json() {
 }
 
 //
+// server_task_result_json
+//
+json server_task_result_json::to_json() {
+    return data;
+}
+
+//
 // server_task_result_slot_save_load
 //
 json server_task_result_slot_save_load::to_json() {
