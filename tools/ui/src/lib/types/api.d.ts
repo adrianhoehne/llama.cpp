@@ -179,6 +179,17 @@ export interface ApiMoeLayerPerfResponse {
 	layers: ApiMoeLayerPerfLayer[];
 }
 
+export interface ApiMoeHotCacheApplyResponse {
+	success: boolean;
+	active: boolean;
+	update_rate: number;
+	exchanged: number;
+	candidates: number;
+	max_exchange: number;
+	hot_experts: number;
+	layers_changed: number;
+}
+
 export interface ApiLlamaCppServerProps {
 	default_generation_settings: {
 		id: number;

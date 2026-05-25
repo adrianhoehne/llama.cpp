@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ArrowLeft } from '@lucide/svelte';
+	import { ArrowLeft, UploadCloud } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -218,6 +218,9 @@
 	let previousPerf = $state<ApiMoeLayerPerfResponse | null>(null);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+	let applyError = $state<string | null>(null);
+	let applyStatus = $state<string | null>(null);
+	let applyingHotCache = $state(false);
 	let lastUpdated = $state<Date | null>(null);
 	let updateIntervalSeconds = $state(1);
 	let mounted = $state(false);
@@ -523,6 +526,26 @@
 		}
 	}
 
+	async function applyVisibleHotCache() {
+		if (!perf || applyingHotCache) {
+			return;
+		}
+
+		applyingHotCache = true;
+		applyError = null;
+		applyStatus = null;
+
+		try {
+			const result = await MoeLayerPerfService.applyHotCache(perf, requestModel);
+			applyStatus = `Applied ${formatInteger(result.exchanged)} of ${formatInteger(result.candidates)} deltas across ${formatInteger(result.layers_changed)} layers`;
+			await refresh();
+		} catch (cause) {
+			applyError = cause instanceof Error ? cause.message : 'Failed to apply MoE hot-cache';
+		} finally {
+			applyingHotCache = false;
+		}
+	}
+
 	onMount(() => {
 		mounted = true;
 		void refresh();
@@ -605,6 +628,16 @@
 			</div>
 
 			<div class="flex flex-wrap items-center gap-3">
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={applyVisibleHotCache}
+					disabled={!perf || !perf.enabled || applyingHotCache}
+				>
+					<UploadCloud class="h-4 w-4" />
+					<span>{applyingHotCache ? 'Applying' : 'Apply cache'}</span>
+				</Button>
+
 				<div class="flex items-center gap-2 text-xs text-muted-foreground">
 					<span>Update</span>
 					<Input
@@ -729,6 +762,16 @@
 			{#if error}
 				<div class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
 					{error}
+				</div>
+			{/if}
+
+			{#if applyError}
+				<div class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+					{applyError}
+				</div>
+			{:else if applyStatus}
+				<div class="rounded-md border bg-muted-foreground/5 p-3 text-sm text-muted-foreground">
+					{applyStatus}
 				</div>
 			{/if}
 

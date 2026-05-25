@@ -1,7 +1,12 @@
 import { apiFetch, apiFetchWithParams } from '$lib/utils';
-import type { ApiMoeLayerPerfMode, ApiMoeLayerPerfResponse } from '$lib/types/api';
+import type {
+	ApiMoeHotCacheApplyResponse,
+	ApiMoeLayerPerfMode,
+	ApiMoeLayerPerfResponse
+} from '$lib/types/api';
 
 const MOE_LAYER_PERF_ENDPOINT = '/moe-layer-perf';
+const MOE_HOT_CACHE_ENDPOINT = '/moe-hot-cache';
 
 export class MoeLayerPerfService {
 	static async get(model?: string | null): Promise<ApiMoeLayerPerfResponse> {
@@ -36,5 +41,28 @@ export class MoeLayerPerfService {
 		}
 
 		return apiFetch<ApiMoeLayerPerfResponse>(MOE_LAYER_PERF_ENDPOINT, options);
+	}
+
+	static async applyHotCache(
+		perf: ApiMoeLayerPerfResponse,
+		model?: string | null
+	): Promise<ApiMoeHotCacheApplyResponse> {
+		const options = {
+			method: 'POST',
+			body: JSON.stringify(perf)
+		};
+
+		if (model) {
+			return apiFetchWithParams<ApiMoeHotCacheApplyResponse>(
+				MOE_HOT_CACHE_ENDPOINT,
+				{
+					model,
+					autoload: 'false'
+				},
+				options
+			);
+		}
+
+		return apiFetch<ApiMoeHotCacheApplyResponse>(MOE_HOT_CACHE_ENDPOINT, options);
 	}
 }
