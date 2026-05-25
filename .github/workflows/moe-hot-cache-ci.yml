@@ -69,7 +69,7 @@ jobs:
   hot-cache-cuda:
     name: Hot-cache unit test (CUDA compile)
     runs-on: ubuntu-24.04
-    container: nvidia/cuda:12.8.1-devel-ubuntu24.04
+    container: nvidia/cuda:12.8.2-devel-ubuntu24.04
 
     steps:
       - name: Check out repository
@@ -88,7 +88,8 @@ jobs:
             git \
             libgomp1 \
             libssl-dev \
-            ninja-build
+            ninja-build \
+            cuda-runtime-12-8
 
       - name: Configure
         env:
@@ -107,8 +108,8 @@ jobs:
             -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_SERVER=OFF
 
-      - name: Build hot-cache test
+      - name: Build hot-cache tests
         run: cmake --build build --config Release --target test-moe-hot-cache -j 8
 
-      - name: Run hot-cache test
-        run: ctest --test-dir build -R '^test-moe-hot-cache$' --output-on-failure --timeout 120
+      - name: Run hot-cache tests
+        run: ctest --test-dir build -R 'test-moe-hot-cache' --output-on-failure --timeout 120
