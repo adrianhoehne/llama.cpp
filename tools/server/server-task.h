@@ -21,6 +21,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
     SERVER_TASK_TYPE_METRICS,
+    SERVER_TASK_TYPE_SET_MOE_HOT_CACHE,
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
@@ -163,6 +164,9 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
+
+    // used by SERVER_TASK_TYPE_SET_MOE_HOT_CACHE
+    std::string moe_hot_cache_json;
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
@@ -530,6 +534,12 @@ struct server_task_result_metrics : server_task_result {
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_json : server_task_result {
+    json data;
 
     virtual json to_json() override;
 };

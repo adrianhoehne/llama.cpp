@@ -151,6 +151,8 @@ int llama_server(int argc, char ** argv) {
         routes.get_metrics                 = models_routes->proxy_get;
         routes.get_moe_layer_perf          = models_routes->get_moe_layer_perf;
         routes.post_moe_layer_perf         = models_routes->post_moe_layer_perf;
+        routes.get_moe_hot_cache           = models_routes->get_moe_hot_cache;
+        routes.post_moe_hot_cache          = models_routes->post_moe_hot_cache;
         routes.post_props                  = models_routes->proxy_post;
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
@@ -184,6 +186,8 @@ int llama_server(int argc, char ** argv) {
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
     ctx_http.get ("/moe-layer-perf",           ex_wrapper(routes.get_moe_layer_perf));
     ctx_http.post("/moe-layer-perf",           ex_wrapper(routes.post_moe_layer_perf));
+    ctx_http.get ("/moe-hot-cache",            ex_wrapper(routes.get_moe_hot_cache));
+    ctx_http.post("/moe-hot-cache",            ex_wrapper(routes.post_moe_hot_cache));
     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
     ctx_http.post("/props",                    ex_wrapper(routes.post_props));
     ctx_http.get ("/models",                   ex_wrapper(routes.get_models)); // public endpoint (no API key check)
