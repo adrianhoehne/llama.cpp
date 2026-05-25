@@ -227,6 +227,35 @@ llama_build(test-moe-hot-cache-weighting.cpp)
 llama_test(test-moe-hot-cache-weighting)
 llama_build(test-moe-hot-cache-worklist.cpp)
 llama_test(test-moe-hot-cache-worklist)
+
+set(LLAMA_MOE_HOT_CACHE_TEST_TARGETS
+    test-moe-hot-cache-adapter
+    test-moe-hot-cache-builder
+    test-moe-hot-cache-budget
+    test-moe-hot-cache-parser
+    test-moe-hot-cache-perf-json
+    test-moe-hot-cache-perf-nodes
+    test-moe-hot-cache-perf-reader
+    test-moe-hot-cache-perf-state
+    test-moe-hot-cache-planner
+    test-moe-hot-cache-runtime-apply
+    test-moe-hot-cache-updater
+    test-moe-hot-cache-weighting
+    test-moe-hot-cache-worklist
+)
+
+add_custom_target(test-moe-hot-cache
+    DEPENDS ${LLAMA_MOE_HOT_CACHE_TEST_TARGETS}
+)
+
+add_test(
+    NAME test-moe-hot-cache
+    COMMAND ${CMAKE_CTEST_COMMAND}
+        --test-dir ${CMAKE_BINARY_DIR}
+        -R "^test-moe-hot-cache-"
+        --output-on-failure
+)
+set_property(TEST test-moe-hot-cache PROPERTY LABELS main)
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp
