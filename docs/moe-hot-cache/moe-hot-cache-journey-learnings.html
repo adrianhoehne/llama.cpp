@@ -652,6 +652,7 @@
             <li><b>Adapter allow-list:</b> each model must explicitly opt in to a graph kind and profile.</li>
             <li><b>Flat weighting default:</b> spread the budget across layers first, then optimize within each layer.</li>
             <li><b>Runtime perf modes:</b> full diagnostics when tuning, update-only counters for adaptive cache changes, off for raw throughput tests.</li>
+            <li><b>Manual runtime apply:</b> <code>/moe-hot-cache</code> can apply a new expert JSON while the server is running, waits for idle slots, and changes only cache deltas.</li>
             <li><b>Auto-size reserve:</b> keep enough VRAM for KV, warmup, CUDA compute buffers, and transient allocations.</li>
           </ul>
         </div>
