@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoE Hot Cache PP Journey</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --ink: #172033;
+      --muted: #5d687b;
+      --panel: #ffffff;
+      --line: #cfd7e5;
+      --soft: #eef3f8;
+      --green: #177d5b;
+      --red: #c93f35;
+      --blue: #2869c8;
+      --amber: #b7791f;
+      --dark: #101827;
+      --shadow: 0 14px 34px rgba(22, 31, 49, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.94em;
+      background: #edf2f7;
+      border: 1px solid #d8e0ea;
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+
+    .doc-topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 24px;
+      background: var(--dark);
+      border-bottom: 1px solid #0b1020;
+      color: #f9fafb;
+      flex-wrap: wrap;
+    }
+
+    .doc-topbar a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f9fafb;
+      text-decoration: none;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .doc-topbar a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+      min-height: calc(100vh - 59px);
+    }
+
+    aside {
+      position: sticky;
+      top: 59px;
+      height: calc(100vh - 59px);
+      overflow: auto;
+      background: var(--dark);
+      color: #f8fafc;
+      padding: 24px;
+    }
+
+    main {
+      min-width: 0;
+      padding: 24px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: 30px;
+      line-height: 1.12;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      font-size: 21px;
+      margin-bottom: 10px;
+    }
+
+    h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    p,
+    li {
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    aside p,
+    aside li {
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    .side-links {
+      display: grid;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .side-links a {
+      display: block;
+      text-decoration: none;
+      color: #f8fafc;
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 6px;
+      padding: 9px 10px;
+      font-size: 13px;
+    }
+
+    .side-links a:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 18px;
+      min-width: 0;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .mini {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcff;
+      padding: 14px;
+    }
+
+    .mini p:last-child,
+    .panel p:last-child {
+      margin-bottom: 0;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 0 8px;
+      border-radius: 5px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .badge.keep {
+      color: #0f5f43;
+      background: #e5f7ef;
+      border-color: #b6e2cf;
+    }
+
+    .badge.drop {
+      color: #7f1d1d;
+      background: #fde8e6;
+      border-color: #f4b9b4;
+    }
+
+    .badge.neutral {
+      color: #63410d;
+      background: #fff8e8;
+      border-color: #ecd197;
+    }
+
+    .badge-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #edf2f7;
+      color: #1f2937;
+    }
+
+    .chart {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px;
+      overflow: auto;
+    }
+
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .chart svg {
+      min-width: 880px;
+    }
+
+    .note {
+      border-left: 4px solid var(--amber);
+      background: #fff8e8;
+      padding: 12px 14px;
+      border-radius: 6px;
+      color: #63410d;
+    }
+
+    @media (max-width: 980px) {
+      .layout,
+      .grid-2,
+      .grid-3 {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="doc-topbar" aria-label="Documentation pages">
+    <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
+    <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-pp-architecture.html">PP Architecture</a>
+    <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
+    <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="moe-hot-cache-pp-journey.html">PP Journey</a>
+    <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
+    <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
+  </nav>
+
+  <div class="layout">
+    <aside>
+      <h1>PP Optimization Journey</h1>
+      <p>
+        A visual history of the Qwen3.6 35B prompt-processing optimization path:
+        what was tried, what was kept, what was removed, and why.
+      </p>
+      <div class="side-links">
+        <a href="#overview">Overview</a>
+        <a href="#coverage-sweep">Coverage Sweep</a>
+        <a href="#coverage-threshold">Coverage Guard</a>
+        <a href="#chart">Throughput Chart</a>
+        <a href="#timeline">Experiment Timeline</a>
+        <a href="#kept">Kept Changes</a>
+        <a href="#removed">Removed Experiments</a>
+        <a href="#summary">Result Summary</a>
+      </div>
+    </aside>
+
+    <main>
+      <section class="panel" id="overview">
+        <h2>Benchmark Setup</h2>
+        <p>
+          All hot-cache PP measurements use the Qwen3.6 35B A3B Q6_K_XL model,
+          <code>pp-bench-conversation-code.txt</code>, CUDA0, <code>-cmoe</code>,
+          <code>--moe-hot-cache-auto-reserve-mib 3000</code>,
+          <code>--moe-hot-cache-max-mib -1</code>, and the same
+          <code>qwen36</code> expert list unless noted otherwise.
+          The <code>tg128</code> rows are synthetic <code>llama-bench</code>
+          generation runs. They are useful for checking that PP changes do not
+          move decode behavior, but their absolute value depends on whether the
+          generated tokens hit experts represented in the hot-cache list.
+        </p>
+        <div class="grid-3">
+          <div class="mini">
+            <h3>Baseline PP</h3>
+            <p><b>75.67 t/s</b> with standard llama.cpp placement using <code>-ncmoe 31</code>.</p>
+          </div>
+          <div class="mini">
+            <h3>Best Kept PP</h3>
+            <p><b>108.58 t/s</b> after compact cold reduce, memory cleanup, and stack offset tables.</p>
+          </div>
+          <div class="mini">
+            <h3>Net PP Change</h3>
+            <p><b>+43.5%</b> compared with the standard baseline in this benchmark path.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="coverage-sweep">
+        <h2>Coverage Sweep</h2>
+        <p>
+          A separate fixed-reserve sweep measured how much Qwen3.6 PP depends on
+          real hot-slot hit rate. Raw expert coverage is only a rough proxy; the
+          useful signal is how many actually selected expert slots hit the hot
+          cache after routing.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Cache</th>
+              <th>Hot Experts</th>
+              <th>Raw Expert Coverage</th>
+              <th>Hot-Slot Hit Rate</th>
+              <th>PP Throughput</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>512 MiB</td><td>148 / 10240</td><td>1.45%</td><td>12.01%</td><td>60.42 t/s</td></tr>
+            <tr><td>1024 MiB</td><td>337 / 10240</td><td>3.29%</td><td>21.65%</td><td>67.63 t/s</td></tr>
+            <tr><td>1536 MiB</td><td>525 / 10240</td><td>5.13%</td><td>28.08%</td><td>72.42 t/s</td></tr>
+            <tr><td>1792 MiB</td><td>620 / 10240</td><td>6.05%</td><td>30.26%</td><td>74.45 t/s</td></tr>
+            <tr><td>2048 MiB</td><td>714 / 10240</td><td>6.97%</td><td>32.62%</td><td>76.45 t/s</td></tr>
+            <tr><td>3072 MiB</td><td>1091 / 10240</td><td>10.65%</td><td>39.81%</td><td>83.87 t/s</td></tr>
+            <tr><td>4096 MiB</td><td>1468 / 10240</td><td>14.34%</td><td>45.40%</td><td>90.16 t/s</td></tr>
+          </tbody>
+        </table>
+        <p class="note">
+          In this sweep, break-even against the <code>-ncmoe 31</code> baseline
+          was around 31-32% hot-slot hit rate. That corresponds to only about 7%
+          raw expert coverage for this Qwen3.6 run.
+        </p>
+      </section>
+
+      <section class="panel" id="coverage-threshold">
+        <h2>Static Coverage Guard</h2>
+        <p>
+          The optional <code>LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO</code>
+          guard bypasses the hot-cache graph during prompt processing when a
+          layer has too few hot experts. Decode and warmup are not affected.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Ratio</th>
+              <th>Cache</th>
+              <th>PP Throughput</th>
+              <th>Interpretation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>0.07</td><td>1536 MiB</td><td>60.69 t/s</td><td>Too aggressive; bypasses useful hot-cache work.</td></tr>
+            <tr><td>0.07</td><td>1792 MiB</td><td>60.69 t/s</td><td>Still below the useful hot-cache path.</td></tr>
+            <tr><td>0.07</td><td>2048 MiB</td><td>72.46 t/s</td><td>Improves with more cache, but remains a blunt guard.</td></tr>
+            <tr><td>0.02</td><td>512 MiB</td><td>60.68 t/s</td><td>Acts as a small-cache safety guard.</td></tr>
+            <tr><td>0.02</td><td>1024 MiB</td><td>67.53 t/s</td><td>Leaves behavior effectively unchanged at this size.</td></tr>
+          </tbody>
+        </table>
+        <p class="note">
+          Runtime hot-slot hit rate is the better signal, but it is only known
+          after top-k routing and dispatch. The static ratio guard is therefore
+          only a coarse pre-routing fallback.
+        </p>
+      </section>
+
+      <section class="panel" id="chart">
+        <h2>PP Throughput Progression</h2>
+        <p>
+          Bars marked as removed were measured but not kept because the runtime
+          gain did not justify the complexity or rebase risk.
+        </p>
+        <div class="chart">
+          <svg viewBox="0 0 1180 540" role="img" aria-label="PP throughput progression chart">
+            <defs>
+              <style>
+                .axis { stroke: #748093; stroke-width: 2; }
+                .grid { stroke: #d8e0ea; stroke-width: 1; }
+                .bar { fill: #2869c8; }
+                .keep { fill: #177d5b; }
+                .drop { fill: #c93f35; }
+                .neutral { fill: #b7791f; }
+                .label { font: 12px sans-serif; fill: #526174; }
+                .value { font: 700 13px sans-serif; fill: #172033; }
+                .title { font: 700 15px sans-serif; fill: #172033; }
+              </style>
+            </defs>
+
+            <line class="axis" x1="70" y1="455" x2="1135" y2="455"></line>
+            <line class="axis" x1="70" y1="60" x2="70" y2="455"></line>
+            <line class="grid" x1="70" y1="382" x2="1135" y2="382"></line>
+            <line class="grid" x1="70" y1="309" x2="1135" y2="309"></line>
+            <line class="grid" x1="70" y1="236" x2="1135" y2="236"></line>
+            <line class="grid" x1="70" y1="163" x2="1135" y2="163"></line>
+            <text class="label" x="24" y="459">70</text>
+            <text class="label" x="24" y="386">80</text>
+            <text class="label" x="24" y="313">90</text>
+            <text class="label" x="18" y="240">100</text>
+            <text class="label" x="18" y="167">110</text>
+
+            <rect class="bar" x="95" y="414" width="72" height="41" rx="4"></rect>
+            <text class="value" x="101" y="404">75.67</text>
+            <text class="label" x="82" y="485">baseline</text>
+
+            <rect class="bar" x="210" y="334" width="72" height="121" rx="4"></rect>
+            <text class="value" x="217" y="324">86.61</text>
+            <text class="label" x="191" y="485">hot-cache</text>
+
+            <rect class="keep" x="325" y="284" width="72" height="171" rx="4"></rect>
+            <text class="value" x="332" y="274">93.55</text>
+            <text class="label" x="300" y="485">PP reduce</text>
+
+            <rect class="keep" x="440" y="280" width="72" height="175" rx="4"></rect>
+            <text class="value" x="447" y="270">94.13</text>
+            <text class="label" x="410" y="485">expert-major</text>
+
+            <rect class="keep" x="555" y="272" width="72" height="183" rx="4"></rect>
+            <text class="value" x="562" y="262">95.15</text>
+            <text class="label" x="540" y="485">ubatch 1024</text>
+
+            <rect class="keep" x="670" y="189" width="72" height="266" rx="4"></rect>
+            <text class="value" x="677" y="179">106.58</text>
+            <text class="label" x="650" y="485">cold reduce</text>
+
+            <rect class="drop" x="785" y="186" width="72" height="269" rx="4"></rect>
+            <text class="value" x="792" y="176">106.96</text>
+            <text class="label" x="773" y="485">scatter drop</text>
+
+            <rect class="keep" x="900" y="174" width="72" height="281" rx="4"></rect>
+            <text class="value" x="907" y="164">108.51</text>
+            <text class="label" x="878" y="485">memory cleanup</text>
+
+            <rect class="drop" x="1015" y="173" width="72" height="282" rx="4"></rect>
+            <text class="value" x="1022" y="163">108.65</text>
+            <text class="label" x="1002" y="485">field flags drop</text>
+
+            <rect class="neutral" x="1100" y="173" width="54" height="282" rx="4"></rect>
+            <text class="value" x="1097" y="163">108.58</text>
+            <text class="label" x="1088" y="485">stack arrays</text>
+          </svg>
+        </div>
+      </section>
+
+      <section class="panel" id="timeline">
+        <h2>Experiment Timeline</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>PP t/s</th>
+              <th>TG t/s</th>
+              <th>Status</th>
+              <th>Decision</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Standard llama.cpp baseline, <code>-ncmoe 31</code></td>
+              <td>75.67 +/- 0.01</td>
+              <td>22.14 +/- 0.10</td>
+              <td><span class="badge">baseline</span></td>
+              <td>Reference point for PP and synthetic TG.</td>
+            </tr>
+            <tr>
+              <td>Hot-cache without PP reduce merge</td>
+              <td>86.61 +/- 0.31</td>
+              <td>18.47 +/- 0.17</td>
+              <td><span class="badge keep">kept baseline</span></td>
+              <td>Shows PP gain; TG is limited by synthetic expert mismatch.</td>
+            </tr>
+            <tr>
+              <td>PP reduce merge on</td>
+              <td>93.55 +/- 0.70</td>
+              <td>18.56 +/- 0.25</td>
+              <td><span class="badge keep">kept</span></td>
+              <td>Clear PP win, TG stable.</td>
+            </tr>
+            <tr>
+              <td>Expert-major PP worklist</td>
+              <td>94.13 +/- 0.29</td>
+              <td>18.48 +/- 0.17</td>
+              <td><span class="badge keep">kept</span></td>
+              <td>Small PP win, decode remains token-major.</td>
+            </tr>
+            <tr>
+              <td>Runtime test: <code>-ub 1024</code></td>
+              <td>95.15 +/- 0.77</td>
+              <td>18.55 +/- 0.24</td>
+              <td><span class="badge neutral">runtime option</span></td>
+              <td>Useful for large prompts, not a code change.</td>
+            </tr>
+            <tr>
+              <td>Compact cold reduce</td>
+              <td>106.58 +/- 0.52</td>
+              <td>18.56 +/- 0.08</td>
+              <td><span class="badge keep">kept</span></td>
+              <td>Largest PP code win, local to hot-cache code.</td>
+            </tr>
+            <tr>
+              <td>Hot branch scatter-add</td>
+              <td>106.96 +/- 0.34</td>
+              <td>18.50 +/- 0.16</td>
+              <td><span class="badge drop">removed</span></td>
+              <td>Too little gain, touched ggml core, high rebase risk.</td>
+            </tr>
+            <tr>
+              <td>Compact cold reduce memory cleanup</td>
+              <td>108.51 +/- 0.39</td>
+              <td>18.76 +/- 0.36</td>
+              <td><span class="badge keep">kept</span></td>
+              <td>Small but real PP win from better memory access.</td>
+            </tr>
+            <tr>
+              <td>Compact PP worklist field flags</td>
+              <td>108.65 +/- 0.44</td>
+              <td>18.73 +/- 0.37</td>
+              <td><span class="badge drop">removed</span></td>
+              <td>No measurable gain, added graph/template complexity.</td>
+            </tr>
+            <tr>
+              <td>Stack offset tables</td>
+              <td>108.58 +/- 0.20</td>
+              <td>18.68 +/- 0.31</td>
+              <td><span class="badge neutral">kept as cleanup</span></td>
+              <td>No speed claim, but removes allocator activity from PP worklist path.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="kept">
+        <h2>Kept Changes</h2>
+        <div class="grid-2">
+          <div class="mini">
+            <div class="badge-row"><span class="badge keep">kept</span></div>
+            <h3>PP Reduce Merge</h3>
+            <p>
+              Reduces branch outputs earlier during PP. This was the first
+              clear PP-specific win and remains gated by
+              <code>--moe-hot-cache-pp-reduce-merge</code>.
+            </p>
+          </div>
+          <div class="mini">
+            <div class="badge-row"><span class="badge keep">kept</span></div>
+            <h3>Expert-Major Worklist</h3>
+            <p>
+              Groups PP slots by expert to improve locality. Decode and warmup
+              stay token-major.
+            </p>
+          </div>
+          <div class="mini">
+            <div class="badge-row"><span class="badge keep">kept</span></div>
+            <h3>Compact Cold Reduce</h3>
+            <p>
+              Avoids materializing a large cold slot tensor before merge. This
+              was the largest measured PP improvement.
+            </p>
+          </div>
+          <div class="mini">
+            <div class="badge-row"><span class="badge keep">kept</span></div>
+            <h3>Memory Cleanup</h3>
+            <p>
+              Uses contiguous zeroing, direct row pointers, and field-wise
+              worklist initialization. Small measured gain, low risk.
+            </p>
+          </div>
+          <div class="mini">
+            <div class="badge-row"><span class="badge neutral">cleanup</span></div>
+            <h3>Stack Offset Tables</h3>
+            <p>
+              Replaces per-layer offset vectors with fixed local arrays. No
+              measurable speedup, but less allocator noise and simpler hotpath
+              state.
+            </p>
+          </div>
+          <div class="mini">
+            <div class="badge-row"><span class="badge keep">kept</span></div>
+            <h3>Explicit PP/TG Phase</h3>
+            <p>
+              Passes a graph phase from <code>llama_context</code> through
+              <code>llm_graph_params</code>. A one-token PP tail stays on the PP
+              path, while tiny multi-token TG stays on the decode path.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="removed">
+        <h2>Removed Experiments</h2>
+        <div class="grid-2">
+          <div class="mini">
+            <div class="badge-row"><span class="badge drop">removed</span></div>
+            <h3>Hot Branch Scatter-Add</h3>
+            <p>
+              It tried to add accumulate behavior to <code>set_rows</code> for
+              the hot branch. The gain was only about 0.4% and it touched ggml
+              CPU/CUDA core files, so the rebase risk was not justified.
+            </p>
+          </div>
+          <div class="mini">
+            <div class="badge-row"><span class="badge drop">removed</span></div>
+            <h3>Compact Worklist Field Flags</h3>
+            <p>
+              It skipped unused worklist fields in the PP compact path. The
+              result overlapped with measurement noise and added graph dispatch
+              complexity, so it was removed.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="summary">
+        <h2>What We Learned</h2>
+        <ul>
+          <li>PP is dominated by large intermediate slot and merge costs more than by tiny builder details.</li>
+          <li>The cold branch was the right first target because compact cold reduction removed a large materialization step.</li>
+          <li>Hot-slot hit rate predicts PP wins better than raw expert coverage.</li>
+          <li>Small CPU cleanups can help, but only when they reduce memory traffic in a measured path.</li>
+          <li>Changes that touch ggml core need a much larger win to justify rebase risk.</li>
+          <li>Token count alone is not a safe phase signal; graph phase must travel with the graph parameters.</li>
+          <li>The lower <code>tg128</code> values are not caused by the PP work; the synthetic TG tokens hit experts that the measured hot-cache list does not cover well.</li>
+          <li>For future large gains, the likely direction is CUDA-side routing/reduction or a better PP-specific expert selection strategy.</li>
+        </ul>
+        <p class="note">
+          The detailed raw Markdown record remains in
+          <code>qwen36-pp-benchmark-path.md</code>. This page is the visual
+          summary intended for browsing and review.
+        </p>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -468,8 +468,10 @@
   <nav class="doc-topbar" aria-label="Documentation pages">
     <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
     <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-pp-architecture.html">PP Architecture</a>
     <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
     <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="moe-hot-cache-pp-journey.html">PP Journey</a>
     <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
     <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
   </nav>
@@ -621,6 +623,11 @@ cmake --build build -j8
         <div class="note">
           <strong>Important:</strong>
           <code>--moe-layer-perf-out</code> is only for the learning run. Do not use it for final speed measurements, and do not use <code>--no-perf</code> while learning the first expert file.
+        </div>
+
+        <div class="note">
+          <strong>Benchmarking:</strong>
+          <code>llama-bench</code> also accepts <code>--moe-layer-perf-out FNAME</code>. It resets MoE perf counters after warmup, runs the measured benchmark repetitions, and writes the same JSON schema as <code>GET /moe-layer-perf</code>. Use this when you need repeatable PP/TG measurements without running <code>llama-server</code>. Treat synthetic TG runs as a hit-rate check: generated benchmark tokens can select experts that are not well represented in a hot-cache file learned from a different prompt.
         </div>
       </section>
 
@@ -878,7 +885,7 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
                 <td><code>--moe-layer-perf-out FNAME</code></td>
                 <td><code>moe-layer-perf-out = FNAME</code><br><code>LLAMA_ARG_MOE_LAYER_PERF_OUT</code></td>
                 <td>Path, default unset</td>
-                <td>First-run profiling helper. Enables MoE perf collection and writes the current <code>/moe-layer-perf</code> JSON after completed requests and during shutdown.</td>
+                <td>First-run profiling helper. In <code>llama-server</code>, enables MoE perf collection and writes the current <code>/moe-layer-perf</code> JSON after completed requests and during shutdown. In <code>llama-bench</code>, writes the same JSON after each measured benchmark test, with warmup counters excluded.</td>
               </tr>
               <tr>
                 <td><code>--moe-hot-cache FNAME</code></td>
@@ -920,7 +927,7 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
                 <td><code>--moe-hot-cache-pp-reduce-merge MODE</code></td>
                 <td><code>moe-hot-cache-pp-reduce-merge = MODE</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_PP_REDUCE_MERGE</code><br><code>LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE</code></td>
                 <td><code>off</code>, <code>on</code>, <code>auto</code>. Default <code>off</code>.</td>
-                <td>Prompt-processing optimization. Reduces each hot/cold branch to <code>[n_embd, n_tokens]</code> before the final merge. In <code>auto</code>, it enables only for larger PP shapes: <code>n_tokens &gt;= 32</code> and capacity <code>&gt;= 64</code>. Decode is unchanged.</td>
+                <td>Prompt-processing optimization. Reduces each hot/cold branch to <code>[n_embd, n_tokens]</code> before the final merge. In <code>auto</code>, it enables only for larger PP shapes: <code>n_tokens &gt;= 32</code> and capacity <code>&gt;= 64</code>. The graph phase is explicit, so a one-token PP tail remains PP while tiny multi-token TG remains decode.</td>
               </tr>
             </tbody>
           </table>
@@ -1082,7 +1089,7 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
               <tr>
                 <td><code>LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING</code></td>
                 <td>Boolean, default on</td>
-                <td>Moves decode-time hot/cold routing and worklist creation into a CPU custom operation for tiny decode batches. This avoids building larger GPU-side helper graphs for one-token decode, which is usually faster for the supported MoE paths. Disabling it forces the more graph-heavy route and is mostly useful for debugging routing differences.</td>
+                <td>Moves decode-time hot/cold routing and worklist creation into a CPU custom operation for tiny decode batches. This avoids building larger GPU-side helper graphs for decode, which is usually faster for the supported MoE paths. The shortcut is gated by the explicit graph phase and the adapter's <code>cpu_decode_routing_max_tokens</code>, so prompt-processing tails do not use it. Disabling it forces the more graph-heavy route and is mostly useful for debugging routing differences.</td>
               </tr>
               <tr>
                 <td><code>LLAMA_MOE_HOT_CACHE_DECODE_DIRECT_MERGE</code></td>

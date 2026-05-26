@@ -192,17 +192,26 @@ bool llama_moe_hot_cache_layer_active_for_graph(
         int il,
         llama_moe_hot_cache_graph_kind graph_kind);
 
+enum class llama_moe_hot_cache_worklist_order {
+    token_major,
+    expert_major,
+};
+
+const char * llama_moe_hot_cache_worklist_order_name(llama_moe_hot_cache_worklist_order order);
+
 void llama_moe_hot_cache_build_worklist(
         ggml_tensor * dst,
         const ggml_tensor * selected_experts,
         const ggml_tensor * weights,
         const llama_moe_hot_cache_layer & layer,
         int ith,
-        int nth);
+        int nth,
+        llama_moe_hot_cache_worklist_order order = llama_moe_hot_cache_worklist_order::token_major);
 
 void llama_moe_hot_cache_build_worklist_from_logits(
         ggml_tensor * dst,
         const ggml_tensor * logits,
         const llama_moe_hot_cache_layer & layer,
         int ith,
-        int nth);
+        int nth,
+        llama_moe_hot_cache_worklist_order order = llama_moe_hot_cache_worklist_order::token_major);

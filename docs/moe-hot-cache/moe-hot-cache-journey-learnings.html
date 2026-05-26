@@ -411,8 +411,10 @@
   <nav class="doc-topbar" aria-label="Documentation pages">
     <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
     <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-pp-architecture.html">PP Architecture</a>
     <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
     <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="moe-hot-cache-pp-journey.html">PP Journey</a>
     <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
     <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
   </nav>
@@ -852,7 +854,12 @@
               <tr>
                 <td>7</td>
                 <td>Separate PP optimization from decode optimization.</td>
-                <td>Large prompt batches and one-token decode have different bottlenecks.</td>
+                <td>Large prompt batches and decode have different bottlenecks. The implementation now carries an explicit graph phase so one-token PP tails and tiny multi-token TG batches do not swap paths.</td>
+              </tr>
+              <tr>
+                <td>8</td>
+                <td>Do not use token count as the only phase signal.</td>
+                <td><code>llm_graph_phase</code> is part of graph parameters and graph reuse, then hot-cache policy derives warmup, PP, or decode behavior from that phase.</td>
               </tr>
             </tbody>
           </table>

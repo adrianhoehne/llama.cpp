@@ -33,6 +33,7 @@ add_library(llama
             llama-model-saver.cpp
             llama-model.cpp
             moe-hot-cache/llama-moe-hot-cache-adapter.cpp
+            moe-hot-cache/llama-moe-hot-cache-branch-reduce.cpp
             moe-hot-cache/llama-moe-hot-cache-budget.cpp
             moe-hot-cache/llama-moe-hot-cache-builder.cpp
             moe-hot-cache/llama-moe-hot-cache.cpp
@@ -44,6 +45,7 @@ add_library(llama
             moe-hot-cache/llama-moe-hot-cache-perf-reader.cpp
             moe-hot-cache/llama-moe-hot-cache-perf-state.cpp
             moe-hot-cache/llama-moe-hot-cache-planner.cpp
+            moe-hot-cache/llama-moe-hot-cache-pp.cpp
             moe-hot-cache/llama-moe-hot-cache-updater.cpp
             moe-hot-cache/llama-moe-hot-cache-weighting.cpp
             moe-hot-cache/llama-moe-hot-cache-worklist.cpp

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <numeric>
@@ -25,6 +26,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "../../src/moe-hot-cache/llama-moe-hot-cache-perf.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -113,6 +115,35 @@ template <typename T> static T stdev(const std::vector<T> & v) {
     T sq_sum = std::inner_product(v.begin(), v.end(), v.begin(), T(0));
     T stdev  = std::sqrt(sq_sum / (T) (v.size() - 1) - mean * mean * (T) v.size() / (T) (v.size() - 1));
     return stdev;
+}
+
+static std::string read_text_file(const std::string & path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("failed to open prompt file: " + path);
+    }
+
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    if (!file.good() && !file.eof()) {
+        throw std::runtime_error("failed to read prompt file: " + path);
+    }
+    return ss.str();
+}
+
+static void write_text_file(const std::string & path, const std::string & text) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        throw std::runtime_error("failed to open output file: " + path);
+    }
+
+    file << text;
+    if (!text.empty() && text.back() != '\n') {
+        file << '\n';
+    }
+    if (!file) {
+        throw std::runtime_error("failed to write output file: " + path);
+    }
 }
 
 static std::string get_cpu_info() {
@@ -321,6 +352,8 @@ struct cmd_params {
     std::vector<std::string>         hf_file;
     std::string                      hf_token;
     std::vector<int>                 n_prompt;
+    bool                             n_prompt_set;
+    std::vector<std::string>         prompt_file;
     std::vector<int>                 n_gen;
     std::vector<std::pair<int, int>> n_pg;
     std::vector<int>                 n_depth;
@@ -333,6 +366,7 @@ struct cmd_params {
     std::vector<bool>                cpu_strict;
     std::vector<int>                 poll;
     std::vector<int>                 n_gpu_layers;
+    std::vector<bool>                cpu_moe;
     std::vector<int>                 n_cpu_moe;
     std::vector<llama_split_mode>    split_mode;
     std::vector<int>                 main_gpu;
@@ -346,6 +380,13 @@ struct cmd_params {
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
     std::vector<bool>                no_host;
+    std::vector<std::string>         moe_hot_cache;
+    std::vector<int64_t>             moe_hot_cache_max_mib;
+    std::vector<uint64_t>            moe_hot_cache_auto_reserve_mib;
+    std::vector<float>               moe_hot_cache_layer_curve;
+    std::vector<std::string>         moe_hot_cache_weighting;
+    std::string                      moe_hot_cache_pp_reduce_merge;
+    std::string                      moe_layer_perf_out;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
     ggml_numa_strategy               numa;
@@ -365,6 +406,8 @@ static const cmd_params cmd_params_defaults = {
     /* hf_file              */ {},
     /* hf_token             */ "",
     /* n_prompt             */ { 512 },
+    /* n_prompt_set         */ false,
+    /* prompt_file          */ { "" },
     /* n_gen                */ { 128 },
     /* n_pg                 */ {},
     /* n_depth              */ { 0 },
@@ -377,6 +420,7 @@ static const cmd_params cmd_params_defaults = {
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
     /* n_gpu_layers         */ { 99 },
+    /* cpu_moe              */ { false },
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* main_gpu             */ { 0 },
@@ -390,6 +434,13 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
+    /* moe_hot_cache        */ { "" },
+    /* moe_hot_cache_max_mib*/ { 0 },
+    /* moe_hot_cache_auto_reserve_mib */ { 1024 },
+    /* moe_hot_cache_layer_curve */ { 0.5f },
+    /* moe_hot_cache_weighting */ { "" },
+    /* moe_hot_cache_pp_reduce_merge */ "off",
+    /* moe_layer_perf_out  */ "",
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
@@ -435,6 +486,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -hft, --hf-token <token>                    Hugging Face access token\n");
     printf("                                              (default: value from HF_TOKEN environment variable)\n");
     printf("  -p, --n-prompt <n>                          (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
+    printf("  --prompt-file <filename>                    tokenize this file and use it for prompt-processing tests\n");
+    printf("                                              if -p is set, use exactly the first n-prompt tokens; otherwise use the full file\n");
     printf("  -n, --n-gen <n>                             (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
     printf("  -pg <pp,tg>                                 (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
     printf("  -d, --n-depth <n>                           (default: %s)\n", join(cmd_params_defaults.n_depth, ",").c_str());
@@ -447,6 +500,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --cpu-strict <0|1>                          (default: %s)\n", join(cmd_params_defaults.cpu_strict, ",").c_str());
     printf("  --poll <0...100>                            (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                    (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
+    printf("  -cmoe, --cpu-moe                            keep all MoE expert weights in the CPU (default: %s)\n", join(cmd_params_defaults.cpu_moe, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>                     (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row|tensor>   (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                         (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
@@ -461,6 +515,21 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("                                              (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
+    printf("  --moe-hot-cache <filename>                  path to /moe-layer-perf JSON for the MoE hot expert cache\n");
+    printf("                                              (default: disabled)\n");
+    printf("  --moe-hot-cache-max-mib <N>                 max MiB for MoE hot expert cache; 0 = disabled, -1 = auto\n");
+    printf("                                              (default: %s)\n", join(cmd_params_defaults.moe_hot_cache_max_mib, ",").c_str());
+    printf("  --moe-hot-cache-auto-reserve-mib <N>        MiB to keep free when --moe-hot-cache-max-mib is -1\n");
+    printf("                                              (default: %s)\n", join(cmd_params_defaults.moe_hot_cache_auto_reserve_mib, ",").c_str());
+    printf("  --moe-hot-cache-layer-curve <0.0...1.0>     layer-pressure weighting curve for the hot-cache planner\n");
+    printf("                                              (default: %s)\n", join(cmd_params_defaults.moe_hot_cache_layer_curve, ",").c_str());
+    printf("  --moe-hot-cache-weighting <mode>            hot-cache weighting: flat, pressure, smooth, time, or balanced\n");
+    printf("                                              (default: flat)\n");
+    printf("  --moe-hot-cache-pp-reduce-merge <off|on|auto>\n");
+    printf("                                              reduce hot/cold branches before merging during prompt processing\n");
+    printf("                                              (default: %s)\n", cmd_params_defaults.moe_hot_cache_pp_reduce_merge.c_str());
+    printf("  --moe-layer-perf-out <filename>             write MoE layer performance JSON after each benchmark test\n");
+    printf("                                              (default: disabled)\n");
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -497,6 +566,70 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     return GGML_TYPE_COUNT;
 }
 
+static std::vector<int64_t> parse_moe_hot_cache_max_mib_list(const std::string & value, char split_delim) {
+    std::vector<int64_t> result;
+    for (const auto & part : string_split<std::string>(value, split_delim)) {
+        const int64_t parsed = std::stoll(part);
+        if (parsed < -1) {
+            throw std::invalid_argument("--moe-hot-cache-max-mib must be >= -1");
+        }
+        result.push_back(parsed);
+    }
+    return result;
+}
+
+static std::vector<uint64_t> parse_moe_hot_cache_reserve_mib_list(const std::string & value, char split_delim) {
+    std::vector<uint64_t> result;
+    for (const auto & part : string_split<std::string>(value, split_delim)) {
+        const int64_t parsed = std::stoll(part);
+        if (parsed < 0) {
+            throw std::invalid_argument("--moe-hot-cache-auto-reserve-mib must be >= 0");
+        }
+        result.push_back((uint64_t) parsed);
+    }
+    return result;
+}
+
+static std::vector<float> parse_moe_hot_cache_layer_curve_list(const std::string & value, char split_delim) {
+    std::vector<float> result;
+    for (const auto & part : string_split<std::string>(value, split_delim)) {
+        const float parsed = std::stof(part);
+        if (parsed < 0.0f || parsed > 1.0f) {
+            throw std::invalid_argument("--moe-hot-cache-layer-curve must be between 0.0 and 1.0");
+        }
+        result.push_back(parsed);
+    }
+    return result;
+}
+
+static bool moe_hot_cache_weighting_valid(const std::string & value) {
+    return value == "pressure" || value == "smooth" || value == "smooth-pressure" ||
+           value == "capped" || value == "capped-pressure" || value == "soft-pressure" ||
+           value == "time" || value == "moe-time" || value == "decode-time" ||
+           value == "balanced" || value == "rank" || value == "layer-rank" ||
+           value == "flat";
+}
+
+static bool moe_hot_cache_pp_reduce_merge_valid(const std::string & value) {
+    return value == "off" || value == "0" || value == "false" ||
+           value == "on" || value == "1" || value == "true" ||
+           value == "auto";
+}
+
+static void set_env(const char * name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+static void set_env_float(const char * name, float value) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.6g", (double) value);
+    set_env(name, buf);
+}
+
 static cmd_params parse_cmd_params(int argc, char ** argv) {
     cmd_params        params;
     std::string       arg;
@@ -508,6 +641,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.output_format        = cmd_params_defaults.output_format;
     params.output_format_stderr = cmd_params_defaults.output_format_stderr;
     params.reps                 = cmd_params_defaults.reps;
+    params.n_prompt_set         = cmd_params_defaults.n_prompt_set;
     params.numa                 = cmd_params_defaults.numa;
     params.prio                 = cmd_params_defaults.prio;
     params.delay                = cmd_params_defaults.delay;
@@ -562,6 +696,14 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_prompt.insert(params.n_prompt.end(), p.begin(), p.end());
+                params.n_prompt_set = true;
+            } else if (arg == "--prompt-file") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.prompt_file.insert(params.prompt_file.end(), p.begin(), p.end());
             } else if (arg == "-n" || arg == "--n-gen") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -712,6 +854,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_gpu_layers.insert(params.n_gpu_layers.end(), p.begin(), p.end());
+            } else if (arg == "-cmoe" || arg == "--cpu-moe") {
+                params.cpu_moe.push_back(true);
             } else if (arg == "-ncmoe" || arg == "--n-cpu-moe") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -830,6 +974,63 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_host.insert(params.no_host.end(), p.begin(), p.end());
+            } else if (arg == "--moe-hot-cache") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.moe_hot_cache.insert(params.moe_hot_cache.end(), p.begin(), p.end());
+            } else if (arg == "--moe-hot-cache-max-mib") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_moe_hot_cache_max_mib_list(argv[i], split_delim);
+                params.moe_hot_cache_max_mib.insert(params.moe_hot_cache_max_mib.end(), p.begin(), p.end());
+            } else if (arg == "--moe-hot-cache-auto-reserve-mib") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_moe_hot_cache_reserve_mib_list(argv[i], split_delim);
+                params.moe_hot_cache_auto_reserve_mib.insert(params.moe_hot_cache_auto_reserve_mib.end(), p.begin(), p.end());
+            } else if (arg == "--moe-hot-cache-layer-curve" || arg == "--moe-hot-cache-qwen-layer-curve") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_moe_hot_cache_layer_curve_list(argv[i], split_delim);
+                params.moe_hot_cache_layer_curve.insert(params.moe_hot_cache_layer_curve.end(), p.begin(), p.end());
+            } else if (arg == "--moe-hot-cache-weighting" || arg == "--moe-hot-cache-qwen-weighting") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                for (const auto & value : p) {
+                    if (!moe_hot_cache_weighting_valid(value)) {
+                        throw std::invalid_argument("--moe-hot-cache-weighting must be one of: pressure, smooth, time, balanced, flat");
+                    }
+                }
+                params.moe_hot_cache_weighting.insert(params.moe_hot_cache_weighting.end(), p.begin(), p.end());
+            } else if (arg == "--moe-hot-cache-pp-reduce-merge") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                std::string value(argv[i]);
+                if (!moe_hot_cache_pp_reduce_merge_valid(value)) {
+                    throw std::invalid_argument("--moe-hot-cache-pp-reduce-merge must be one of: off, on, auto");
+                }
+                params.moe_hot_cache_pp_reduce_merge = value;
+                set_env("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", value);
+            } else if (arg == "--moe-layer-perf-out") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.moe_layer_perf_out = argv[i];
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1032,6 +1233,14 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.model.empty()) {
         params.model = cmd_params_defaults.model;
     }
+    if (params.prompt_file.empty()) {
+        params.prompt_file = cmd_params_defaults.prompt_file;
+    }
+    if (params.n_prompt.empty() && !params.n_prompt_set &&
+            std::any_of(params.prompt_file.begin(), params.prompt_file.end(),
+                [](const std::string & value) { return !value.empty(); })) {
+        params.n_prompt = { -1 };
+    }
     if (params.n_prompt.empty()) {
         params.n_prompt = cmd_params_defaults.n_prompt;
     }
@@ -1058,6 +1267,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.n_gpu_layers.empty()) {
         params.n_gpu_layers = cmd_params_defaults.n_gpu_layers;
+    }
+    if (params.cpu_moe.empty()) {
+        params.cpu_moe = cmd_params_defaults.cpu_moe;
     }
     if (params.n_cpu_moe.empty()) {
         params.n_cpu_moe = cmd_params_defaults.n_cpu_moe;
@@ -1098,6 +1310,36 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_host.empty()) {
         params.no_host = cmd_params_defaults.no_host;
     }
+    if (params.moe_hot_cache.empty()) {
+        params.moe_hot_cache = cmd_params_defaults.moe_hot_cache;
+    }
+    if (params.moe_hot_cache_max_mib.empty()) {
+        params.moe_hot_cache_max_mib = cmd_params_defaults.moe_hot_cache_max_mib;
+    }
+    if (params.moe_hot_cache_auto_reserve_mib.empty()) {
+        params.moe_hot_cache_auto_reserve_mib = cmd_params_defaults.moe_hot_cache_auto_reserve_mib;
+    }
+    if (params.moe_hot_cache_layer_curve.empty()) {
+        params.moe_hot_cache_layer_curve = cmd_params_defaults.moe_hot_cache_layer_curve;
+    }
+    if (params.moe_hot_cache_weighting.empty()) {
+        params.moe_hot_cache_weighting = cmd_params_defaults.moe_hot_cache_weighting;
+    }
+    if (params.moe_hot_cache_pp_reduce_merge.empty()) {
+        params.moe_hot_cache_pp_reduce_merge = cmd_params_defaults.moe_hot_cache_pp_reduce_merge;
+    }
+    if (params.moe_layer_perf_out.empty()) {
+        params.moe_layer_perf_out = cmd_params_defaults.moe_layer_perf_out;
+    }
+    const bool moe_hot_cache_enabled = std::any_of(
+            params.moe_hot_cache_max_mib.begin(), params.moe_hot_cache_max_mib.end(),
+            [](int64_t value) { return value != 0; });
+    if (moe_hot_cache_enabled &&
+            std::any_of(params.moe_hot_cache.begin(), params.moe_hot_cache.end(),
+                [](const std::string & value) { return value.empty(); })) {
+        fprintf(stderr, "error: --moe-hot-cache is required when --moe-hot-cache-max-mib is not 0\n");
+        exit(1);
+    }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
     }
@@ -1123,6 +1365,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 struct cmd_params_instance {
     std::string        model;
     int                n_prompt;
+    std::string        prompt_file;
+    std::string        prompt_text;
     int                n_gen;
     int                n_depth;
     int                n_batch;
@@ -1134,6 +1378,7 @@ struct cmd_params_instance {
     bool               cpu_strict;
     int                poll;
     int                n_gpu_layers;
+    bool               cpu_moe;
     int                n_cpu_moe;
     llama_split_mode   split_mode;
     int                main_gpu;
@@ -1147,8 +1392,29 @@ struct cmd_params_instance {
     bool               embeddings;
     bool               no_op_offload;
     bool               no_host;
+    std::string        moe_hot_cache;
+    int64_t            moe_hot_cache_max_mib;
+    uint64_t           moe_hot_cache_auto_reserve_mib;
+    float              moe_hot_cache_layer_curve;
+    std::string        moe_hot_cache_weighting;
+    std::string        moe_layer_perf_out;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
+
+    int prompt_context_size_estimate() const {
+        if (n_prompt >= 0) {
+            return n_prompt;
+        }
+        if (!prompt_text.empty()) {
+            return (int) std::min<size_t>(prompt_text.size() + 2, (size_t) INT32_MAX);
+        }
+        return 0;
+    }
+
+    void apply_env_tweaks() const {
+        set_env_float("LLAMA_MOE_HOT_CACHE_LAYER_CURVE", moe_hot_cache_layer_curve);
+        set_env("LLAMA_MOE_HOT_CACHE_WEIGHTING", moe_hot_cache_weighting.empty() ? "flat" : moe_hot_cache_weighting);
+    }
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1163,8 +1429,22 @@ struct cmd_params_instance {
         mparams.use_mmap      = use_mmap;
         mparams.use_direct_io = use_direct_io;
         mparams.no_host       = no_host;
+        mparams.moe_hot_cache_max_mib = moe_hot_cache_max_mib;
+        mparams.moe_hot_cache_path = moe_hot_cache.empty() ? nullptr : moe_hot_cache.c_str();
+        mparams.moe_hot_cache_auto_n_ctx = (uint32_t) std::max(0, prompt_context_size_estimate() + n_gen + n_depth);
+        mparams.moe_hot_cache_auto_n_seq_max = 1;
+        mparams.moe_hot_cache_auto_n_ubatch = (uint32_t) std::max(1, n_ubatch);
+        mparams.moe_hot_cache_auto_reserve_mib = moe_hot_cache_auto_reserve_mib;
+        mparams.moe_hot_cache_auto_type_k = type_k;
+        mparams.moe_hot_cache_auto_type_v = type_v;
+        mparams.moe_hot_cache_auto_flash_attn_type = flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        mparams.moe_hot_cache_auto_offload_kqv = !no_kv_offload;
+        mparams.moe_hot_cache_auto_swa_full = false;
+        mparams.moe_hot_cache_auto_kv_unified = false;
+        mparams.moe_hot_cache_layer_curve = moe_hot_cache_layer_curve;
+        mparams.moe_hot_cache_weighting = moe_hot_cache_weighting.empty() ? nullptr : moe_hot_cache_weighting.c_str();
 
-        if (n_cpu_moe <= 0) {
+        if (!cpu_moe && n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
                 mparams.tensor_buft_overrides = nullptr;
             } else {
@@ -1186,10 +1466,14 @@ struct cmd_params_instance {
             }
             merged.insert(merged.end(), first, last);
 
-            patterns.reserve((size_t) n_cpu_moe);
-            merged.reserve(merged.size() + (size_t) n_cpu_moe + 1);
+            patterns.reserve((size_t) std::max(n_cpu_moe, 0));
+            merged.reserve(merged.size() + (size_t) std::max(n_cpu_moe, 0) + (cpu_moe ? 2 : 1));
 
-            for (int i = 0; i < n_cpu_moe; ++i) {
+            if (cpu_moe) {
+                merged.push_back(llm_ffn_exps_cpu_override());
+            }
+
+            for (int i = 0; !cpu_moe && i < n_cpu_moe; ++i) {
                 patterns.push_back(llm_ffn_exps_block_regex(i));
                 merged.push_back({ patterns.back().c_str(),
                                 ggml_backend_cpu_buffer_type() });
@@ -1204,10 +1488,25 @@ struct cmd_params_instance {
     }
 
     bool equal_mparams(const cmd_params_instance & other) const {
-        return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
+        const bool same_auto_hot_cache_shape =
+            (moe_hot_cache_max_mib >= 0 && other.moe_hot_cache_max_mib >= 0) ? true :
+            (prompt_context_size_estimate() + n_gen + n_depth == other.prompt_context_size_estimate() + other.n_gen + other.n_depth &&
+            n_ubatch == other.n_ubatch &&
+            type_k == other.type_k &&
+            type_v == other.type_v &&
+            no_kv_offload == other.no_kv_offload &&
+            flash_attn == other.flash_attn);
+
+        return model == other.model && n_gpu_layers == other.n_gpu_layers && cpu_moe == other.cpu_moe &&
+               n_cpu_moe == other.n_cpu_moe &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
                use_mmap == other.use_mmap && use_direct_io == other.use_direct_io &&
+               moe_hot_cache == other.moe_hot_cache && moe_hot_cache_max_mib == other.moe_hot_cache_max_mib &&
+               moe_hot_cache_auto_reserve_mib == other.moe_hot_cache_auto_reserve_mib &&
+               moe_hot_cache_layer_curve == other.moe_hot_cache_layer_curve &&
+               moe_hot_cache_weighting == other.moe_hot_cache_weighting &&
+               same_auto_hot_cache_shape &&
                devices == other.devices &&
                no_host == other.no_host &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
@@ -1216,7 +1515,7 @@ struct cmd_params_instance {
     llama_context_params to_llama_cparams() const {
         llama_context_params cparams = llama_context_default_params();
 
-        cparams.n_ctx           = n_prompt + n_gen + n_depth;
+        cparams.n_ctx           = prompt_context_size_estimate() + n_gen + n_depth;
         cparams.n_batch         = n_batch;
         cparams.n_ubatch        = n_ubatch;
         cparams.type_k          = type_k;
@@ -1240,6 +1539,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & fpt : params.fit_params_target)
     for (const auto & fpc : params.fit_params_min_ctx)
     for (const auto & nl : params.n_gpu_layers)
+    for (const auto & cmoe : params.cpu_moe)
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
     for (const auto & mg : params.main_gpu)
@@ -1260,7 +1560,13 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nt : params.n_threads)
     for (const auto & cm : params.cpu_mask)
     for (const auto & cs : params.cpu_strict)
+    for (const auto & pf : params.prompt_file)
     for (const auto & nd : params.n_depth)
+    for (const auto & mhc : params.moe_hot_cache)
+    for (const auto & mhcm : params.moe_hot_cache_max_mib)
+    for (const auto & mhcar : params.moe_hot_cache_auto_reserve_mib)
+    for (const auto & mhclc : params.moe_hot_cache_layer_curve)
+    for (const auto & mhcw : params.moe_hot_cache_weighting)
     for (const auto & pl : params.poll) {
         for (const auto & n_prompt : params.n_prompt) {
             if (n_prompt == 0) {
@@ -1269,6 +1575,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_prompt,
+                /* .prompt_file  = */ pf,
+                /* .prompt_text  = */ pf.empty() ? std::string() : read_text_file(pf),
                 /* .n_gen        = */ 0,
                 /* .n_depth      = */ nd,
                 /* .n_batch      = */ nb,
@@ -1280,6 +1588,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
+                /* .cpu_moe      = */ cmoe,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
@@ -1293,6 +1602,12 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
+                /* .moe_hot_cache = */ mhc,
+                /* .moe_hot_cache_max_mib = */ mhcm,
+                /* .moe_hot_cache_auto_reserve_mib = */ mhcar,
+                /* .moe_hot_cache_layer_curve = */ mhclc,
+                /* .moe_hot_cache_weighting = */ mhcw,
+                /* .moe_layer_perf_out = */ params.moe_layer_perf_out,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
             };
@@ -1306,6 +1621,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model        = */ m,
                 /* .n_prompt     = */ 0,
+                /* .prompt_file  = */ pf,
+                /* .prompt_text  = */ std::string(),
                 /* .n_gen        = */ n_gen,
                 /* .n_depth      = */ nd,
                 /* .n_batch      = */ nb,
@@ -1317,6 +1634,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
+                /* .cpu_moe      = */ cmoe,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
@@ -1330,6 +1648,12 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
+                /* .moe_hot_cache = */ mhc,
+                /* .moe_hot_cache_max_mib = */ mhcm,
+                /* .moe_hot_cache_auto_reserve_mib = */ mhcar,
+                /* .moe_hot_cache_layer_curve = */ mhclc,
+                /* .moe_hot_cache_weighting = */ mhcw,
+                /* .moe_layer_perf_out = */ params.moe_layer_perf_out,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
             };
@@ -1343,6 +1667,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_pg.first,
+                /* .prompt_file  = */ pf,
+                /* .prompt_text  = */ pf.empty() ? std::string() : read_text_file(pf),
                 /* .n_gen        = */ n_pg.second,
                 /* .n_depth      = */ nd,
                 /* .n_batch      = */ nb,
@@ -1354,6 +1680,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
+                /* .cpu_moe      = */ cmoe,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
@@ -1367,6 +1694,12 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
+                /* .moe_hot_cache = */ mhc,
+                /* .moe_hot_cache_max_mib = */ mhcm,
+                /* .moe_hot_cache_auto_reserve_mib = */ mhcar,
+                /* .moe_hot_cache_layer_curve = */ mhclc,
+                /* .moe_hot_cache_weighting = */ mhcw,
+                /* .moe_layer_perf_out = */ params.moe_layer_perf_out,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
             };
@@ -1387,6 +1720,7 @@ struct test {
     std::string              model_type;
     uint64_t                 model_size;
     uint64_t                 model_n_params;
+    std::string              prompt_file;
     int                      n_batch;
     int                      n_ubatch;
     int                      n_threads;
@@ -1396,6 +1730,7 @@ struct test {
     ggml_type                type_k;
     ggml_type                type_v;
     int                      n_gpu_layers;
+    bool                     cpu_moe;
     int                      n_cpu_moe;
     llama_split_mode         split_mode;
     int                      main_gpu;
@@ -1409,6 +1744,11 @@ struct test {
     bool                     embeddings;
     bool                     no_op_offload;
     bool                     no_host;
+    std::string              moe_hot_cache;
+    int64_t                  moe_hot_cache_max_mib;
+    uint64_t                 moe_hot_cache_auto_reserve_mib;
+    float                    moe_hot_cache_layer_curve;
+    std::string              moe_hot_cache_weighting;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
     int                      n_prompt;
@@ -1427,6 +1767,7 @@ struct test {
         model_type     = buf;
         model_size     = llama_model_size(lmodel);
         model_n_params = llama_model_n_params(lmodel);
+        prompt_file    = inst.prompt_file;
         n_batch        = inst.n_batch;
         n_ubatch       = inst.n_ubatch;
         n_threads      = inst.n_threads;
@@ -1436,6 +1777,7 @@ struct test {
         type_k         = inst.type_k;
         type_v         = inst.type_v;
         n_gpu_layers   = inst.n_gpu_layers;
+        cpu_moe        = inst.cpu_moe;
         n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
         main_gpu       = inst.main_gpu;
@@ -1449,6 +1791,11 @@ struct test {
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
         no_host        = inst.no_host;
+        moe_hot_cache  = inst.moe_hot_cache;
+        moe_hot_cache_max_mib = inst.moe_hot_cache_max_mib;
+        moe_hot_cache_auto_reserve_mib = inst.moe_hot_cache_auto_reserve_mib;
+        moe_hot_cache_layer_curve = inst.moe_hot_cache_layer_curve;
+        moe_hot_cache_weighting = inst.moe_hot_cache_weighting;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;
         n_prompt       = inst.n_prompt;
@@ -1503,12 +1850,15 @@ struct test {
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
             "build_commit",   "build_number",   "cpu_info",      "gpu_info",       "backends",
-            "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
+            "model_filename", "model_type",     "model_size",    "model_n_params", "prompt_file",
+            "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
-            "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
+            "type_k",         "type_v",         "n_gpu_layers",  "cpu_moe",        "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
-            "no_op_offload",  "no_host",        "fit_target",     "fit_min_ctx",
+            "no_op_offload",  "no_host",        "moe_hot_cache",  "moe_hot_cache_max_mib",
+            "moe_hot_cache_auto_reserve_mib",   "moe_hot_cache_layer_curve",
+            "moe_hot_cache_weighting",          "fit_target",     "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1522,14 +1872,16 @@ struct test {
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
             field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
+            field == "moe_hot_cache_max_mib" || field == "moe_hot_cache_auto_reserve_mib" ||
             field == "fit_target" || field == "fit_min_ctx") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
-            field == "use_mmap" || field == "use_direct_io" || field == "embeddings" || field == "no_host") {
+            field == "cpu_moe" || field == "use_mmap" || field == "use_direct_io" || field == "embeddings" ||
+            field == "no_host") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "moe_hot_cache_layer_curve") {
             return FLOAT;
         }
         return STRING;
@@ -1581,6 +1933,7 @@ struct test {
                                             model_type,
                                             std::to_string(model_size),
                                             std::to_string(model_n_params),
+                                            prompt_file.empty() ? "none" : prompt_file,
                                             std::to_string(n_batch),
                                             std::to_string(n_ubatch),
                                             std::to_string(n_threads),
@@ -1590,6 +1943,7 @@ struct test {
                                             ggml_type_name(type_k),
                                             ggml_type_name(type_v),
                                             std::to_string(n_gpu_layers),
+                                            std::to_string(cpu_moe),
                                             std::to_string(n_cpu_moe),
                                             split_mode_str(split_mode),
                                             std::to_string(main_gpu),
@@ -1603,6 +1957,11 @@ struct test {
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
+                                            moe_hot_cache.empty() ? "none" : moe_hot_cache,
+                                            std::to_string(moe_hot_cache_max_mib),
+                                            std::to_string(moe_hot_cache_auto_reserve_mib),
+                                            std::to_string(moe_hot_cache_layer_curve),
+                                            moe_hot_cache_weighting.empty() ? "default" : moe_hot_cache_weighting,
                                             std::to_string(fit_target),
                                             std::to_string(fit_min_ctx),
                                             std::to_string(n_prompt),
@@ -1754,6 +2113,9 @@ struct markdown_printer : public printer {
         if (field == "model") {
             return -30;
         }
+        if (field == "prompt_file") {
+            return -12;
+        }
         if (field == "t/s") {
             return 20;
         }
@@ -1799,6 +2161,18 @@ struct markdown_printer : public printer {
         if (field == "no_host") {
             return 4;
         }
+        if (field == "moe_hot_cache") {
+            return -12;
+        }
+        if (field == "moe_hot_cache_max_mib" || field == "moe_hot_cache_auto_reserve_mib") {
+            return 8;
+        }
+        if (field == "moe_hot_cache_layer_curve") {
+            return 9;
+        }
+        if (field == "moe_hot_cache_weighting") {
+            return -9;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1811,6 +2185,12 @@ struct markdown_printer : public printer {
     static std::string get_field_display_name(const std::string & field) {
         if (field == "n_gpu_layers") {
             return "ngl";
+        }
+        if (field == "cpu_moe") {
+            return "cmoe";
+        }
+        if (field == "prompt_file") {
+            return "pf";
         }
         if (field == "split_mode") {
             return "sm";
@@ -1854,6 +2234,21 @@ struct markdown_printer : public printer {
         if (field == "fit_min_ctx") {
             return "fitc";
         }
+        if (field == "moe_hot_cache") {
+            return "mhc";
+        }
+        if (field == "moe_hot_cache_max_mib") {
+            return "mhc_mib";
+        }
+        if (field == "moe_hot_cache_auto_reserve_mib") {
+            return "mhc_res";
+        }
+        if (field == "moe_hot_cache_layer_curve") {
+            return "mhc_curve";
+        }
+        if (field == "moe_hot_cache_weighting") {
+            return "mhc_w";
+        }
         return field;
     }
 
@@ -1868,6 +2263,12 @@ struct markdown_printer : public printer {
                               test::get_backend().find("ZenDNN") != std::string::npos;
         if (!is_cpu_backend) {
             fields.emplace_back("n_gpu_layers");
+        }
+        if (params.cpu_moe.size() > 1 || params.cpu_moe != cmd_params_defaults.cpu_moe) {
+            fields.emplace_back("cpu_moe");
+        }
+        if (params.prompt_file.size() > 1 || params.prompt_file != cmd_params_defaults.prompt_file) {
+            fields.emplace_back("prompt_file");
         }
         if (params.n_cpu_moe.size() > 1 || params.n_cpu_moe != cmd_params_defaults.n_cpu_moe) {
             fields.emplace_back("n_cpu_moe");
@@ -1931,6 +2332,21 @@ struct markdown_printer : public printer {
         }
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");
+        }
+        if (params.moe_hot_cache.size() > 1 || params.moe_hot_cache != cmd_params_defaults.moe_hot_cache) {
+            fields.emplace_back("moe_hot_cache");
+        }
+        if (params.moe_hot_cache_max_mib.size() > 1 || params.moe_hot_cache_max_mib != cmd_params_defaults.moe_hot_cache_max_mib) {
+            fields.emplace_back("moe_hot_cache_max_mib");
+        }
+        if (params.moe_hot_cache_auto_reserve_mib.size() > 1 || params.moe_hot_cache_auto_reserve_mib != cmd_params_defaults.moe_hot_cache_auto_reserve_mib) {
+            fields.emplace_back("moe_hot_cache_auto_reserve_mib");
+        }
+        if (params.moe_hot_cache_layer_curve.size() > 1 || params.moe_hot_cache_layer_curve != cmd_params_defaults.moe_hot_cache_layer_curve) {
+            fields.emplace_back("moe_hot_cache_layer_curve");
+        }
+        if (params.moe_hot_cache_weighting.size() > 1 || params.moe_hot_cache_weighting != cmd_params_defaults.moe_hot_cache_weighting) {
+            fields.emplace_back("moe_hot_cache_weighting");
         }
         if (params.fit_params_target.size() > 1 || params.fit_params_target != cmd_params_defaults.fit_params_target) {
             fields.emplace_back("fit_target");
@@ -2091,6 +2507,61 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     return true;
 }
 
+static bool test_prompt_tokens(llama_context * ctx, const std::vector<llama_token> & prompt_tokens, int n_batch, int n_threads) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+
+    int n_processed = 0;
+    const int n_prompt = (int) prompt_tokens.size();
+
+    while (n_processed < n_prompt) {
+        const int n_tokens = std::min(n_prompt - n_processed, n_batch);
+        int res = llama_decode(ctx, llama_batch_get_one(const_cast<llama_token *>(prompt_tokens.data()) + n_processed, n_tokens));
+        if (res != 0) {
+            fprintf(stderr, "%s: failed to decode prompt batch, res = %d\n", __func__, res);
+            return false;
+        }
+        n_processed += n_tokens;
+    }
+
+    llama_synchronize(ctx);
+    return true;
+}
+
+static bool test_prompt(
+        llama_context * ctx,
+        int n_prompt,
+        const std::vector<llama_token> & prompt_tokens,
+        int n_batch,
+        int n_threads) {
+    if (!prompt_tokens.empty()) {
+        return test_prompt_tokens(ctx, prompt_tokens, n_batch, n_threads);
+    }
+    return test_prompt(ctx, n_prompt, n_batch, n_threads);
+}
+
+static std::vector<llama_token> tokenize_prompt_file(const llama_model * model, const cmd_params_instance & inst) {
+    if (inst.prompt_text.empty()) {
+        return {};
+    }
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    std::vector<llama_token> tokens = common_tokenize(vocab, inst.prompt_text, true, false);
+    if (tokens.empty()) {
+        throw std::runtime_error("prompt file tokenized to zero tokens: " + inst.prompt_file);
+    }
+
+    if (inst.n_prompt >= 0) {
+        if ((int) tokens.size() < inst.n_prompt) {
+            throw std::runtime_error(string_format(
+                    "prompt file '%s' has only %zu tokens, but -p/--n-prompt requested %d",
+                    inst.prompt_file.c_str(), tokens.size(), inst.n_prompt));
+        }
+        tokens.resize((size_t) inst.n_prompt);
+    }
+
+    return tokens;
+}
+
 static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
@@ -2161,6 +2632,10 @@ int llama_bench(int argc, char ** argv) {
 
     cmd_params params = parse_cmd_params(argc, argv);
 
+    if (!params.moe_layer_perf_out.empty()) {
+        llama_moe_layer_perf_set_mode(LLAMA_MOE_LAYER_PERF_MODE_FULL);
+    }
+
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
         fprintf(stderr, "%s: error: CPU backend is not loaded\n", __func__);
@@ -2196,7 +2671,13 @@ int llama_bench(int argc, char ** argv) {
         p_err->print_header(params);
     }
 
-    std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
+    std::vector<cmd_params_instance> params_instances;
+    try {
+        params_instances = get_cmd_params_instances(params);
+    } catch (const std::exception & e) {
+        fprintf(stderr, "%s: error: %s\n", __func__, e.what());
+        return 1;
+    }
 
     llama_model *               lmodel    = nullptr;
     const cmd_params_instance * prev_inst = nullptr;
@@ -2212,6 +2693,7 @@ int llama_bench(int argc, char ** argv) {
         if (params.progress) {
             fprintf(stderr, "llama-bench: benchmark %d/%zu: starting\n", params_idx, params_count);
         }
+        inst.apply_env_tweaks();
         auto mparams = inst.to_llama_mparams();
         auto cparams = inst.to_llama_cparams();
 
@@ -2237,7 +2719,7 @@ int llama_bench(int argc, char ** argv) {
 
             std::vector<size_t> margins(llama_max_devices(), inst.fit_target * 1024 * 1024);
 
-            uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
+            uint32_t n_ctx_needed = inst.prompt_context_size_estimate() + inst.n_gen + inst.n_depth;
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
 
             common_fit_params(inst.model.c_str(), &mparams, &cparams,
@@ -2262,6 +2744,23 @@ int llama_bench(int argc, char ** argv) {
             prev_inst = &inst;
         }
 
+        std::vector<llama_token> prompt_tokens;
+        try {
+            prompt_tokens = tokenize_prompt_file(lmodel, inst);
+        } catch (const std::exception & e) {
+            fprintf(stderr, "%s: error: %s\n", __func__, e.what());
+            llama_model_free(lmodel);
+            return 1;
+        }
+
+        const int effective_n_prompt = prompt_tokens.empty() ? inst.n_prompt : (int) prompt_tokens.size();
+        if (effective_n_prompt < 0) {
+            fprintf(stderr, "%s: error: prompt token count is unknown\n", __func__);
+            llama_model_free(lmodel);
+            return 1;
+        }
+        cparams.n_ctx = effective_n_prompt + inst.n_gen + inst.n_depth;
+
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
@@ -2270,6 +2769,7 @@ int llama_bench(int argc, char ** argv) {
         }
 
         test t(inst, lmodel, ctx);
+        t.n_prompt = effective_n_prompt;
 
         llama_memory_clear(llama_get_memory(ctx), false);
 
@@ -2306,7 +2806,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, prompt_tokens, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
                     llama_free(ctx);
@@ -2326,6 +2826,10 @@ int llama_bench(int argc, char ** argv) {
                     exit(1);
                 }
             }
+        }
+
+        if (!inst.moe_layer_perf_out.empty()) {
+            llama_moe_layer_perf_reset();
         }
 
         for (int i = 0; i < params.reps; i++) {
@@ -2375,7 +2879,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, prompt_tokens, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     llama_free(ctx);
@@ -2409,6 +2913,18 @@ int llama_bench(int argc, char ** argv) {
         if (p_err) {
             p_err->print_test(t);
             fflush(p_err->fout);
+        }
+
+        if (!inst.moe_layer_perf_out.empty()) {
+            try {
+                write_text_file(inst.moe_layer_perf_out, llama_moe_layer_perf_json(ctx));
+            } catch (const std::exception & e) {
+                fprintf(stderr, "%s: error: %s\n", __func__, e.what());
+                llama_free(ctx);
+                ggml_threadpool_free_fn(threadpool);
+                llama_model_free(lmodel);
+                return 1;
+            }
         }
 
         llama_perf_context_print(ctx);

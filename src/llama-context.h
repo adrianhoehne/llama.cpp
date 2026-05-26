@@ -132,6 +132,7 @@ struct llama_context {
     llm_graph_result * process_ubatch(
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
+                   llm_graph_phase   gphase,
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
@@ -240,7 +241,8 @@ public:
 
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx,
+        bool split_only = false, size_t * sizes = nullptr, llm_graph_phase gphase = LLM_GRAPH_PHASE_UNKNOWN);
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
@@ -249,7 +251,8 @@ private:
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const;
+                          llm_graph_type   gtype,
+                         llm_graph_phase   gphase = LLM_GRAPH_PHASE_UNKNOWN) const;
 
     llm_graph_cb graph_get_cb() const;
 
