@@ -36,6 +36,13 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DECODER_MTP,
 };
 
+enum llm_graph_phase {
+    LLM_GRAPH_PHASE_UNKNOWN,
+    LLM_GRAPH_PHASE_WARMUP,
+    LLM_GRAPH_PHASE_PROMPT_PROCESSING,
+    LLM_GRAPH_PHASE_DECODE,
+};
+
 enum llm_ffn_op_type {
     LLM_FFN_SILU,
     LLM_FFN_GELU,
@@ -593,6 +600,7 @@ struct llm_graph_params {
     llama_ubatch ubatch; // note: intentionally make a copy
 
     llm_graph_type gtype;
+    llm_graph_phase gphase;
 
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
@@ -686,6 +694,7 @@ struct llm_graph_params {
             cparams.causal_attn == other.cparams.causal_attn &&
             arch  == other.arch  &&
             gtype == other.gtype &&
+            gphase == other.gphase &&
             cvec  == other.cvec  &&
             loras == other.loras &&
             cross == other.cross;
@@ -780,6 +789,7 @@ struct llm_graph_context {
     const llama_hparams & hparams;
     const llama_cparams & cparams;
     const llama_ubatch  & ubatch;
+    const llm_graph_phase gphase;
 
     const int64_t n_embd;
     const int64_t n_layer;
