@@ -1,4 +1,5 @@
 #include "llama-moe-hot-cache-adapter.h"
+#include "llama-moe-hot-cache-pp.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -6,34 +7,10 @@
 
 namespace {
 
-enum pp_reduce_merge_mode {
-    PP_REDUCE_MERGE_OFF,
-    PP_REDUCE_MERGE_ON,
-    PP_REDUCE_MERGE_AUTO,
-};
-
 static bool env_enabled_by_default(const char * name) {
     const char * env = std::getenv(name);
     return env == nullptr || env[0] == '\0' ||
            (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
-}
-
-static pp_reduce_merge_mode pp_reduce_merge_mode_value() {
-    static const pp_reduce_merge_mode mode = []() {
-        const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE");
-        if (env == nullptr || env[0] == '\0' ||
-                std::strcmp(env, "0") == 0 ||
-                std::strcmp(env, "off") == 0 ||
-                std::strcmp(env, "false") == 0) {
-            return PP_REDUCE_MERGE_OFF;
-        }
-        if (std::strcmp(env, "auto") == 0) {
-            return PP_REDUCE_MERGE_AUTO;
-        }
-        return PP_REDUCE_MERGE_ON;
-    }();
-
-    return mode;
 }
 
 static llama_moe_hot_cache_graph_profile qwen35_profile() {
@@ -200,16 +177,7 @@ int llama_moe_hot_cache_graph_tweaks::prefix_reduce_tasks_max() {
 }
 
 bool llama_moe_hot_cache_graph_tweaks::pp_reduce_merge(int64_t n_tokens, int64_t capacity) {
-    switch (pp_reduce_merge_mode_value()) {
-        case PP_REDUCE_MERGE_OFF:
-            return false;
-        case PP_REDUCE_MERGE_ON:
-            return true;
-        case PP_REDUCE_MERGE_AUTO:
-            return n_tokens >= 32 && capacity >= 64;
-    }
-
-    return false;
+    return llama_moe_hot_cache_pp_policy::reduce_merge_enabled(n_tokens, capacity);
 }
 
 llama_moe_hot_cache_graph_profile llama_moe_hot_cache_model_adapter::profile() const {

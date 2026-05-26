@@ -1,6 +1,7 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
 #include "moe-hot-cache/llama-moe-hot-cache.h"
+#include "moe-hot-cache/llama-moe-hot-cache-pp.h"
 
 void llama_model_qwen3next::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
@@ -539,7 +540,10 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
     if (model.layers[il].ffn_gate_inp != nullptr) {
         // MoE branch
         ggml_tensor * moe_out = nullptr;
-        if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
+        const bool hot_cache_active =
+            llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits) &&
+            !llama_moe_hot_cache_pp_policy::bypass_hot_cache_for_prompt_processing(gphase, cparams.warmup, cur->ne[1], 1);
+        if (hot_cache_active) {
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
             cb(logits, "ffn_moe_logits", il);
 

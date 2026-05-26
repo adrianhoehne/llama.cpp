@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoE Hot Cache PP Architecture</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --ink: #172033;
+      --muted: #5d687b;
+      --panel: #ffffff;
+      --line: #cfd7e5;
+      --soft: #eef3f8;
+      --hot: #c93f35;
+      --cold: #2869c8;
+      --green: #177d5b;
+      --amber: #b7791f;
+      --purple: #6b55ad;
+      --dark: #101827;
+      --shadow: 0 14px 34px rgba(22, 31, 49, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.94em;
+      background: #edf2f7;
+      border: 1px solid #d8e0ea;
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+
+    .doc-topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 24px;
+      background: var(--dark);
+      border-bottom: 1px solid #0b1020;
+      color: #f9fafb;
+      flex-wrap: wrap;
+    }
+
+    .doc-topbar a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f9fafb;
+      text-decoration: none;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .doc-topbar a:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+      min-height: calc(100vh - 59px);
+    }
+
+    aside {
+      position: sticky;
+      top: 59px;
+      height: calc(100vh - 59px);
+      overflow: auto;
+      background: var(--dark);
+      color: #f8fafc;
+      padding: 24px;
+    }
+
+    main {
+      min-width: 0;
+      padding: 24px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: 30px;
+      line-height: 1.12;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      font-size: 21px;
+      margin-bottom: 10px;
+    }
+
+    h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    p,
+    li {
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    aside p,
+    aside li {
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    .side-links {
+      display: grid;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .side-links a {
+      display: block;
+      text-decoration: none;
+      color: #f8fafc;
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 6px;
+      padding: 9px 10px;
+      font-size: 13px;
+    }
+
+    .side-links a:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 18px;
+      min-width: 0;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .badge-row,
+    .legend {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 9px;
+      border-radius: 5px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .badge.hot {
+      color: #7f1d1d;
+      background: #fde8e6;
+      border-color: #f4b9b4;
+    }
+
+    .badge.cold {
+      color: #173e78;
+      background: #e7f0ff;
+      border-color: #b7cff8;
+    }
+
+    .badge.green {
+      color: #0f5f43;
+      background: #e5f7ef;
+      border-color: #b6e2cf;
+    }
+
+    .note {
+      border-left: 4px solid var(--amber);
+      background: #fff8e8;
+      padding: 12px 14px;
+      border-radius: 6px;
+      color: #63410d;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .mini {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcff;
+      padding: 14px;
+    }
+
+    .mini p:last-child,
+    .panel p:last-child {
+      margin-bottom: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #edf2f7;
+      color: #1f2937;
+    }
+
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .diagram {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px;
+      overflow: auto;
+    }
+
+    .diagram svg {
+      min-width: 760px;
+    }
+
+    .file-link {
+      text-decoration: none;
+      color: #1d4f91;
+      font-weight: 700;
+    }
+
+    .file-link:hover {
+      text-decoration: underline;
+    }
+
+    @media (max-width: 980px) {
+      .layout,
+      .hero,
+      .grid-2,
+      .grid-3 {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="doc-topbar" aria-label="Documentation pages">
+    <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
+    <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-pp-architecture.html">PP Architecture</a>
+    <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
+    <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="moe-hot-cache-pp-journey.html">PP Journey</a>
+    <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
+    <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
+  </nav>
+
+  <div class="layout">
+    <aside>
+      <h1>PP Hot-Cache Architecture</h1>
+      <p>
+        This page explains the prompt-processing specific hot-cache changes:
+        policy selection, expert-major worklists, compact cold reduction, and
+        the boundaries that keep the code rebase-friendly.
+      </p>
+      <div class="side-links">
+        <a href="#summary">Summary</a>
+        <a href="#phase-model">Phase Model</a>
+        <a href="#routing-prework">Routing Prework</a>
+        <a href="#fusion-detail">CUDA Fusion</a>
+        <a href="#class-diagram">Class Diagram</a>
+        <a href="#runtime-flow">Runtime Flow</a>
+        <a href="#method-reference">Method Reference</a>
+        <a href="#soc-boundaries">SoC Boundaries</a>
+        <a href="#future-routing">Future Routing Refactor</a>
+        <a href="#edge-cases">Edge Cases</a>
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero" id="summary">
+        <div class="panel">
+          <h2>What The PP Changes Do</h2>
+          <p>
+            Prompt processing handles many tokens at once. In MoE models this
+            creates many routed expert slots per layer. The PP work focuses on
+            reducing the cost of sorting, splitting, materializing, and merging
+            those slots while keeping decode behavior separate.
+          </p>
+          <div class="badge-row">
+            <span class="badge green">PP reduce merge</span>
+            <span class="badge green">Compact cold reduce</span>
+            <span class="badge green">Expert-major worklist</span>
+            <span class="badge">Decode stays token-major</span>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Non-Goals</h2>
+          <p>
+            These changes do not alter model weights, training, routing logits,
+            or expert math. They only change how the hot-cache graph organizes
+            work after the router has selected experts.
+          </p>
+          <p class="note">
+            The implementation intentionally stays in <code>src/moe-hot-cache</code>
+            where possible. The graph still has to connect tensors, but policy,
+            worklist construction, and compact reduction live outside model
+            core files.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel" id="phase-model">
+        <h2>Phase Model</h2>
+        <p>
+          The hot-cache graph no longer decides PP versus TG from
+          <code>n_tokens</code> alone. <code>llama_context</code> infers one
+          <code>llm_graph_phase</code> for the whole <code>llama_decode()</code>
+          call and passes it through <code>llm_graph_params.gphase</code>.
+          Every ubatch inside that call inherits the same phase.
+        </p>
+        <p class="note">
+          This matters for two edge cases: a prompt can end with a one-token
+          ubatch, and some generation paths can verify multiple generated tokens
+          in one decode call. The phase keeps both cases on the intended path.
+        </p>
+        <div class="grid-3">
+          <div class="mini">
+            <h3>Warmup</h3>
+            <p>
+              Warmup keeps conservative behavior. Worklist order remains
+              token-major and PP-specific reduce paths stay off.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Prompt Processing</h3>
+            <p>
+              Prompt batches use the PP phase even if the final ubatch has only
+              one token. Large PP shapes can use expert-major worklists, PP
+              reduce merge, and compact cold reduce.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Decode</h3>
+            <p>
+              Decode keeps token-major worklists. One-token decode can use
+              direct merge, prefix merge, repeat hot input, and shared-row
+              shortcuts. Tiny multi-token decode stays decode but only uses the
+              shortcuts whose profile explicitly allows that shape.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="routing-prework">
+        <h2>Routing Prework</h2>
+        <p>
+          The standard MoE path and the hot-cache path should agree
+          mathematically until routing has produced <code>selected_experts</code>
+          and top-k <code>weights</code>. The paths should diverge only after
+          those tensors exist: standard MoE consumes them directly, while the
+          hot-cache path sends them through the worklist dispatcher into hot and
+          cold lanes.
+        </p>
+        <div class="grid-2">
+          <div class="mini">
+            <h3>Standard Path</h3>
+            <p>
+              <code>build_moe_ffn</code> builds router logits, selected experts,
+              normalized top-k weights, and then immediately continues into
+              normal expert execution.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Hot-Cache Path</h3>
+            <p>
+              <code>build_layer_ffn_hot</code> builds equivalent routing
+              tensors, creates a hot/cold worklist, evaluates both lanes, and
+              then reduces or merges the branch outputs.
+            </p>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Standard MoE</th>
+              <th>Hot Cache</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Router</td>
+              <td><code>build_lora_mm(ffn_gate_inp, cur)</code></td>
+              <td><code>build_lora_mm(ffn_gate_inp, cur)</code></td>
+            </tr>
+            <tr>
+              <td>Selection</td>
+              <td><code>softmax(all logits)</code>, then top-k on probabilities</td>
+              <td>top-k directly on logits</td>
+            </tr>
+            <tr>
+              <td>Weights</td>
+              <td>gather top-k weights, normalize, and scale if needed</td>
+              <td>gather top-k logits, softmax over the top-k set, and scale if needed</td>
+            </tr>
+            <tr>
+              <td>Consumer</td>
+              <td>normal expert execution</td>
+              <td>worklist dispatcher, hot lane, cold lane, reduce, merge</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          For softmax routing, top-k on logits and top-k on softmax(logits)
+          produce the same ordering. After top-k renormalization, the global
+          softmax denominator cancels out. That makes the two routing variants
+          equivalent for Qwen3.6, even though the graph node sequence differs.
+        </p>
+      </section>
+
+      <section class="panel" id="fusion-detail">
+        <h2>CUDA Fusion Detail</h2>
+        <p>
+          The standard MoE helper expands weights early so CUDA can detect the
+          <code>topk-moe</code> routing pattern. The relevant backend code lives
+          around <code>ggml/src/ggml-cuda/topk-moe.cu</code> and
+          <code>ggml/src/ggml-cuda/ggml-cuda.cu</code>.
+        </p>
+        <p>
+          The hot-cache graph must feed a dispatcher instead of the normal expert
+          consumer, so it uses a different node sequence. The math can be the
+          same while the backend optimization pattern is not. This is why routing
+          prework is a future refactor target rather than a trivial call into
+          <code>build_moe_ffn</code>.
+        </p>
+      </section>
+
+      <section class="panel" id="class-diagram">
+        <h2>Class And Module Diagram</h2>
+        <p>
+          The PP feature is split into policy, worklist building, graph glue,
+          and compact branch reduction.
+        </p>
+        <div class="diagram">
+          <svg viewBox="0 0 1120 610" role="img" aria-label="PP hot-cache class diagram">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#42526e"></path>
+              </marker>
+              <style>
+                .box { fill: #ffffff; stroke: #b7c2d4; stroke-width: 2; }
+                .policy { fill: #eef8f2; stroke: #60a987; }
+                .graph { fill: #eef4ff; stroke: #6d94d8; }
+                .reduce { fill: #fff5e6; stroke: #d09a3f; }
+                .work { fill: #fdecea; stroke: #c85f58; }
+                .model { fill: #f0edfb; stroke: #8b74c5; }
+                .title { font: 700 17px sans-serif; fill: #172033; }
+                .text { font: 13px sans-serif; fill: #526174; }
+                .small { font: 12px sans-serif; fill: #526174; }
+                .edge { stroke: #42526e; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+              </style>
+            </defs>
+
+            <rect class="box model" x="40" y="40" width="250" height="150" rx="8"></rect>
+            <text class="title" x="60" y="72">Model Adapter/Profile</text>
+            <text class="text" x="60" y="105">llama_moe_hot_cache_model_adapter</text>
+            <text class="text" x="60" y="130">llama_moe_hot_cache_graph_profile</text>
+            <text class="small" x="60" y="160">Declares decode and graph capabilities</text>
+
+            <rect class="box policy" x="430" y="40" width="270" height="170" rx="8"></rect>
+            <text class="title" x="450" y="72">PP Policy</text>
+            <text class="text" x="450" y="105">llama_moe_hot_cache_pp_policy</text>
+            <text class="text" x="450" y="130">llama_moe_hot_cache_pp_execution_plan</text>
+            <text class="small" x="450" y="160">Uses explicit graph phase,</text>
+            <text class="small" x="450" y="180">then chooses reduce merge</text>
+            <text class="small" x="450" y="200">and worklist order</text>
+
+            <rect class="box graph" x="830" y="40" width="250" height="170" rx="8"></rect>
+            <text class="title" x="850" y="72">Graph Glue</text>
+            <text class="text" x="850" y="105">llama-moe-hot-cache-graph.cpp</text>
+            <text class="small" x="850" y="135">Builds tensors and connects</text>
+            <text class="small" x="850" y="155">hot lane, cold lane, merge</text>
+
+            <rect class="box work" x="130" y="300" width="290" height="185" rx="8"></rect>
+            <text class="title" x="150" y="332">Worklist Builder</text>
+            <text class="text" x="150" y="365">llama_moe_hot_cache_build_worklist</text>
+            <text class="text" x="150" y="390">build_worklist_from_logits</text>
+            <text class="small" x="150" y="420">Creates hot/cold ids, token ids,</text>
+            <text class="small" x="150" y="440">weights, counts, source slots</text>
+
+            <rect class="box reduce" x="650" y="300" width="330" height="185" rx="8"></rect>
+            <text class="title" x="670" y="332">Compact Cold Reduce</text>
+            <text class="text" x="670" y="365">llama_moe_hot_cache_build_compact_cold_reduce</text>
+            <text class="text" x="670" y="390">llama_moe_hot_cache_reduce_cold_token_rows</text>
+            <text class="small" x="670" y="420">Accumulates compact cold slots</text>
+            <text class="small" x="670" y="440">directly into token rows</text>
+
+            <path class="edge" d="M290 110 C350 110 370 110 430 110"></path>
+            <path class="edge" d="M700 120 C760 120 780 120 830 120"></path>
+            <path class="edge" d="M955 210 C910 255 850 275 815 300"></path>
+            <path class="edge" d="M830 160 C650 245 500 270 420 340"></path>
+            <path class="edge" d="M420 392 C510 392 560 392 650 392"></path>
+          </svg>
+        </div>
+      </section>
+
+      <section class="panel" id="runtime-flow">
+        <h2>Runtime Flow</h2>
+        <p>
+          This is the hot-cache PP path after the router logits are available.
+          The worklist is the dispatcher: it maps selected experts into hot and
+          cold work and records how the branch outputs must be merged.
+        </p>
+        <div class="diagram">
+          <svg viewBox="0 0 1180 520" role="img" aria-label="PP hot-cache runtime flow">
+            <defs>
+              <marker id="flowArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#42526e"></path>
+              </marker>
+              <style>
+                .node { fill: #ffffff; stroke: #b7c2d4; stroke-width: 2; }
+                .hotnode { fill: #fdecea; stroke: #c93f35; stroke-width: 2; }
+                .coldnode { fill: #e8f1ff; stroke: #2869c8; stroke-width: 2; }
+                .merge { fill: #e8f7ef; stroke: #177d5b; stroke-width: 2; }
+                .flow { stroke: #42526e; stroke-width: 2; fill: none; marker-end: url(#flowArrow); }
+                .label { font: 700 15px sans-serif; fill: #172033; }
+                .small { font: 12px sans-serif; fill: #526174; }
+              </style>
+            </defs>
+
+            <rect class="node" x="40" y="210" width="145" height="80" rx="8"></rect>
+            <text class="label" x="68" y="242">PP UBatch</text>
+            <text class="small" x="62" y="267">phase = PP</text>
+
+            <rect class="node" x="235" y="210" width="145" height="80" rx="8"></rect>
+            <text class="label" x="274" y="242">Router</text>
+            <text class="small" x="254" y="267">logits per token</text>
+
+            <rect class="node" x="430" y="210" width="145" height="80" rx="8"></rect>
+            <text class="label" x="469" y="242">Top-K</text>
+            <text class="small" x="456" y="267">ids + weights</text>
+
+            <rect class="node" x="625" y="210" width="170" height="80" rx="8"></rect>
+            <text class="label" x="662" y="242">Worklist</text>
+            <text class="small" x="647" y="267">expert-major PP</text>
+
+            <rect class="hotnode" x="875" y="90" width="210" height="90" rx="8"></rect>
+            <text class="label" x="928" y="125">Hot Lane</text>
+            <text class="small" x="910" y="152">cached experts on CUDA0</text>
+
+            <rect class="coldnode" x="875" y="310" width="210" height="90" rx="8"></rect>
+            <text class="label" x="925" y="345">Cold Lane</text>
+            <text class="small" x="905" y="372">CPU/RAM expert path</text>
+
+            <rect class="merge" x="930" y="210" width="185" height="80" rx="8"></rect>
+            <text class="label" x="968" y="242">Branch Merge</text>
+            <text class="small" x="948" y="267">hot + compact cold</text>
+
+            <path class="flow" d="M185 250 L235 250"></path>
+            <path class="flow" d="M380 250 L430 250"></path>
+            <path class="flow" d="M575 250 L625 250"></path>
+            <path class="flow" d="M795 235 C830 205 840 150 875 135"></path>
+            <path class="flow" d="M795 265 C830 295 840 350 875 355"></path>
+            <path class="flow" d="M980 180 L1000 210"></path>
+            <path class="flow" d="M980 310 L1000 290"></path>
+          </svg>
+        </div>
+      </section>
+
+      <section class="panel" id="method-reference">
+        <h2>New Method Reference</h2>
+        <p>
+          These are the main methods/classes introduced or changed for the PP
+          work. File links point at the local repository structure.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Method or type</th>
+              <th>File</th>
+              <th>Responsibility</th>
+              <th>Why it helps</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>llm_graph_phase</code></td>
+              <td><a class="file-link" href="../../src/llama-graph.h">llama-graph.h</a></td>
+              <td>Stores <code>warmup</code>, <code>prompt_processing</code>, or <code>decode</code> as graph topology input.</td>
+              <td>Prevents graph reuse and hot-cache policy from mixing PP and TG shapes that happen to have the same token count.</td>
+            </tr>
+            <tr>
+              <td><code>infer_decode_graph_phase</code></td>
+              <td><a class="file-link" href="../../src/llama-context.cpp">llama-context.cpp</a></td>
+              <td>Infers the phase once for a full <code>llama_decode()</code> call before ubatch splitting.</td>
+              <td>Keeps a one-token PP tail in PP and keeps tiny multi-token TG in decode.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_graph_phase_from_llm</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-graph.cpp">llama-moe-hot-cache-graph.cpp</a></td>
+              <td>Converts the core graph phase into the hot-cache local phase enum.</td>
+              <td>Keeps llama core independent from hot-cache policy types.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_pp_policy::build</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-pp.cpp">llama-moe-hot-cache-pp.cpp</a></td>
+              <td>Creates the execution plan from an explicit phase, token count, capacity, cold-lane state, and model profile.</td>
+              <td>Keeps phase-sensitive PP/TG decisions out of the graph glue and makes them unit-testable.</td>
+            </tr>
+            <tr>
+              <td><code>reduce_merge_enabled</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-pp.cpp">llama-moe-hot-cache-pp.cpp</a></td>
+              <td>Reads the PP reduce-merge mode and decides off, on, or auto.</td>
+              <td>Provides the main runtime gate for the PP merge optimization.</td>
+            </tr>
+            <tr>
+              <td><code>compact_cold_reduce_enabled</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-pp.cpp">llama-moe-hot-cache-pp.cpp</a></td>
+              <td>Controls the compact cold reduce sub-feature.</td>
+              <td>Allows the large PP cold-path optimization to be disabled independently.</td>
+            </tr>
+            <tr>
+              <td><code>worklist_order</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-pp.cpp">llama-moe-hot-cache-pp.cpp</a></td>
+              <td>Selects token-major or expert-major worklist order.</td>
+              <td>Lets PP use expert grouping while decode remains token-major.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_build_worklist</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-worklist.cpp">llama-moe-hot-cache-worklist.cpp</a></td>
+              <td>Builds hot/cold worklists from selected expert IDs and weights.</td>
+              <td>Central dispatcher for split, source slots, token IDs, weights, and counts.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_build_worklist_from_logits</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-worklist.cpp">llama-moe-hot-cache-worklist.cpp</a></td>
+              <td>Builds worklists directly from logits for CPU decode routing paths.</td>
+              <td>Keeps logits-based routing in the same builder module.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_build_compact_cold_reduce</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-branch-reduce.cpp">llama-moe-hot-cache-branch-reduce.cpp</a></td>
+              <td>Adds the compact cold reduce op to the graph.</td>
+              <td>Avoids materializing a large cold slot tensor during PP.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_reduce_cold_token_rows</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-branch-reduce.cpp">llama-moe-hot-cache-branch-reduce.cpp</a></td>
+              <td>CPU callback that accumulates compact cold slots into token rows.</td>
+              <td>Implements the actual compact reduction with direct row pointers.</td>
+            </tr>
+            <tr>
+              <td><code>build_layer_ffn_hot</code> graph glue</td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-graph.cpp">llama-moe-hot-cache-graph.cpp</a></td>
+              <td>Connects policy, worklist, hot lane, cold lane, and merge tensors.</td>
+              <td>Contains glue only; feature decisions and low-level work stay in helpers.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="soc-boundaries">
+        <h2>Separation Of Concerns</h2>
+        <div class="grid-2">
+          <div class="mini">
+            <h3>Policy</h3>
+            <p>
+              <code>llama-moe-hot-cache-pp</code> decides what should happen.
+              It does not build tensors.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Worklist</h3>
+            <p>
+              <code>llama-moe-hot-cache-worklist</code> owns worklist layout,
+              token-major/expert-major ordering, and hot/cold split data.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Branch Reduce</h3>
+            <p>
+              <code>llama-moe-hot-cache-branch-reduce</code> owns the compact
+              cold reduce operation and its CPU callback.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Graph Glue</h3>
+            <p>
+              <code>llama-moe-hot-cache-graph</code> wires tensors together.
+              It should avoid owning policy or low-level reduce logic.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="future-routing">
+        <h2>Future Routing Refactor</h2>
+        <p>
+          A clean next step is to extract routing prework from
+          <code>build_moe_ffn</code> into a read-only helper that returns router
+          logits, selected experts, and normalized weights. The standard path
+          would keep its current expert execution, while the hot-cache path would
+          consume the same routing result through the worklist builder.
+        </p>
+        <div class="grid-2">
+          <div class="mini">
+            <h3>Expected Benefits</h3>
+            <ul>
+              <li>Less duplicated routing logic.</li>
+              <li>Lower risk of math drift between standard and hot-cache routing.</li>
+              <li>Better chance to preserve CUDA <code>topk-moe</code> fusion patterns.</li>
+              <li>Cleaner model onboarding because routing behavior is centralized.</li>
+            </ul>
+          </div>
+          <div class="mini">
+            <h3>Risks</h3>
+            <ul>
+              <li><code>build_moe_ffn</code> is shared by many architectures.</li>
+              <li>CUDA fusion depends on exact graph node patterns.</li>
+              <li>Model-specific bias, group routing, sigmoid gating, and scaling must remain unchanged.</li>
+              <li>Decode small-token shortcuts must stay explicit.</li>
+            </ul>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Extract read-only routing helper</td>
+              <td>Keep standard behavior unchanged while exposing reusable routing tensors.</td>
+            </tr>
+            <tr>
+              <td>Verify standard path first</td>
+              <td>Check PP and same-workload TG. For synthetic TG, inspect hot-cache hit rate because generated tokens can select a different expert distribution.</td>
+            </tr>
+            <tr>
+              <td>Rewire hot-cache PP</td>
+              <td>Consume the shared routing result in the worklist builder.</td>
+            </tr>
+            <tr>
+              <td>Re-run fixed-cache Qwen3.6 PP tests</td>
+              <td>Compare 512, 1024, 1536, 1792, 2048, 3072, and 4096 MiB cache sizes.</td>
+            </tr>
+            <tr>
+              <td>Check CUDA fusion</td>
+              <td>Confirm the standard path still triggers the intended top-k MoE fusion.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          The immediate goal is not to make dynamic graph decisions after top-k.
+          First make routing shared and reliable; later threshold work can build
+          on the same optimized routing path as standard llama.cpp.
+        </p>
+      </section>
+
+      <section class="panel" id="edge-cases">
+        <h2>Resolved Edge Cases</h2>
+        <div class="grid-2">
+          <div class="mini">
+            <h3>One-Token PP Tail</h3>
+            <p>
+              If a prompt is split as <code>512 + 1</code>, the final ubatch has
+              <code>n_tokens == 1</code>, but the enclosing
+              <code>llama_decode()</code> call is still classified as prompt
+              processing. Decode-only shortcuts stay off for that tail.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Multi-Token Decode</h3>
+            <p>
+              Models or modes that decode multiple tokens at once can have
+              <code>n_tokens &gt; 1</code> during TG. Small verification batches
+              are classified as decode, so they do not accidentally use PP
+              worklist and reduce rules.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
