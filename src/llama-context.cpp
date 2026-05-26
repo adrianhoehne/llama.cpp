@@ -38,6 +38,33 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     throw std::runtime_error("Unsupported ctx type");
 }
 
+static llm_graph_phase infer_decode_graph_phase(
+        uint32_t n_tokens_all,
+        uint32_t n_outputs_all,
+        uint32_t n_ubatch,
+            bool output_all) {
+    if (n_tokens_all <= 1) {
+        return LLM_GRAPH_PHASE_DECODE;
+    }
+
+    // Speculative and multi-token generation paths can verify a small number of
+    // generated tokens in one decode call. Keep those in the TG phase instead
+    // of classifying them as prompt processing only because n_tokens > 1.
+    if (n_tokens_all <= 4 && n_tokens_all <= n_ubatch) {
+        return LLM_GRAPH_PHASE_DECODE;
+    }
+
+    if (!output_all && n_outputs_all < n_tokens_all) {
+        return LLM_GRAPH_PHASE_PROMPT_PROCESSING;
+    }
+
+    if (n_tokens_all > n_ubatch) {
+        return LLM_GRAPH_PHASE_PROMPT_PROCESSING;
+    }
+
+    return LLM_GRAPH_PHASE_DECODE;
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -590,13 +617,15 @@ void llama_context::sched_reserve() {
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
         auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
-                model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
+                model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr,
+                LLM_GRAPH_PHASE_PROMPT_PROCESSING);
         if (!gf) {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
-                gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+                gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), false, nullptr,
+                        LLM_GRAPH_PHASE_PROMPT_PROCESSING);
             }
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
@@ -609,7 +638,8 @@ void llama_context::sched_reserve() {
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
     {
-        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc);
+        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc, nullptr,
+                LLM_GRAPH_PHASE_DECODE);
         if (!gf) {
             throw std::runtime_error("failed to allocate compute tg buffers");
         }
@@ -624,7 +654,8 @@ void llama_context::sched_reserve() {
         //
         // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
         //
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), model.hparams.no_alloc);
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), model.hparams.no_alloc, nullptr,
+                LLM_GRAPH_PHASE_PROMPT_PROCESSING);
         if (!gf) {
             throw std::runtime_error("failed to allocate compute pp buffers");
         }
@@ -785,7 +816,8 @@ bool llama_context::memory_update(bool optimize) {
         const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), false, nullptr,
+                LLM_GRAPH_PHASE_PROMPT_PROCESSING);
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
         }
@@ -1257,7 +1289,12 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+llm_graph_result * llama_context::process_ubatch(
+        const llama_ubatch & ubatch,
+            llm_graph_type   gtype,
+           llm_graph_phase   gphase,
+    llama_memory_context_i * mctx,
+               ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1269,7 +1306,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
-    const auto gparams = graph_params(res, ubatch, mctx, gtype);
+    const auto gparams = graph_params(res, ubatch, mctx, gtype, gphase);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -1390,7 +1427,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     cparams.causal_attn = false;
 
     ggml_status status;
-    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
+    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, LLM_GRAPH_PHASE_PROMPT_PROCESSING, nullptr, status);
 
     cparams.causal_attn = causal_attn_org;
 
@@ -1773,6 +1810,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
+    const llm_graph_phase gphase = infer_decode_graph_phase(n_tokens_all, n_outputs_all, cparams.n_ubatch, output_all);
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -1795,7 +1833,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         ggml_status status;
 
-        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), gphase, mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2237,7 +2275,8 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 }
 
 ggml_cgraph * llama_context::graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx,
+        bool split_only, size_t * sizes, llm_graph_phase gphase) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
@@ -2273,7 +2312,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
+    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type), gphase);
 
     res->reset();
 
@@ -2301,13 +2340,15 @@ llm_graph_params llama_context::graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const {
+                          llm_graph_type   gtype,
+                         llm_graph_phase   gphase) const {
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
         /*.cparams     =*/ cparams,
         /*.ubatch      =*/ ubatch,
         /*.gtype       =*/ gtype,
+        /*.gphase      =*/ cparams.warmup ? LLM_GRAPH_PHASE_WARMUP : gphase,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,
         /*.cvec        =*/ cvec.get(),

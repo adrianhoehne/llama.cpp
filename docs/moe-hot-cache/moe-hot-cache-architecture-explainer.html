@@ -759,8 +759,10 @@
   <nav class="doc-topbar" aria-label="Documentation pages">
     <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
     <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-pp-architecture.html">PP Architecture</a>
     <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
     <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="moe-hot-cache-pp-journey.html">PP Journey</a>
     <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
     <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
   </nav>
@@ -1289,6 +1291,20 @@
           </article>
 
           <article class="model-card">
+            <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/llama-graph.h" target="_blank" rel="noopener noreferrer"><code>llm_graph_phase</code></a></h3>
+            <p>Core graph phase passed through <code>llm_graph_params</code>.</p>
+            <table class="field-table">
+              <thead><tr><th>Value</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>LLM_GRAPH_PHASE_WARMUP</code></td><td>Conservative warmup graph, no PP-specific hot-cache shortcuts.</td></tr>
+                <tr><td><code>LLM_GRAPH_PHASE_PROMPT_PROCESSING</code></td><td>Prompt-processing call. All ubatches from that call stay PP, including a one-token tail.</td></tr>
+                <tr><td><code>LLM_GRAPH_PHASE_DECODE</code></td><td>Token-generation call. Tiny multi-token verification batches remain TG instead of falling into PP.</td></tr>
+                <tr><td><code>LLM_GRAPH_PHASE_UNKNOWN</code></td><td>Fallback for callers that do not provide a phase; hot-cache code keeps the old token-count fallback only there.</td></tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="model-card">
             <h3><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/moe-hot-cache/llama-moe-hot-cache.h" target="_blank" rel="noopener noreferrer"><code>llama_moe_hot_cache</code></a></h3>
             <p>Top-level runtime object attached to the model.</p>
             <table class="field-table">
@@ -1487,6 +1503,7 @@
               <thead><tr><th>Function</th><th>Responsibility</th></tr></thead>
               <tbody>
                 <tr><td><code>*_build_worklist_op()</code></td><td>Wraps the C++ worklist builders as custom GGML nodes.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_graph_phase_from_llm()</code></td><td>Maps the core <code>llm_graph_phase</code> to the hot-cache policy phase.</td></tr>
                 <tr><td><code>sum_prefix_rows</code>, <code>sum_weighted_prefix_rows</code>, <code>first_row_input</code></td><td>Decode and prefix-reduce helpers that reduce cold-lane merge overhead.</td></tr>
                 <tr><td><code>set_mul_mat_id_flags()</code></td><td>Stores hot-cache flags in <code>ggml_mul_mat_id</code> operation params.</td></tr>
                 <tr><td><code>build_lora_mm_id()</code></td><td>Builds LoRA-compatible <code>mul_mat_id</code> nodes for selected expert IDs.</td></tr>
@@ -1690,7 +1707,7 @@
               </li>
               <li>
                 <b>Prompt processing and decode have different economics.</b>
-                PP amortizes routing and merge work over many tokens. Decode is overhead-sensitive, so tiny shortcuts such as CPU routing and direct merge can matter more than raw matmul speed.
+                PP amortizes routing and merge work over many tokens. Decode is overhead-sensitive, so tiny shortcuts such as CPU routing and direct merge can matter more than raw matmul speed. The graph phase is explicit, so a one-token PP tail and a tiny multi-token decode batch do not accidentally swap paths.
               </li>
               <li>
                 <b>Perf collection changes runtime cost.</b>
@@ -1707,7 +1724,7 @@
             <div class="check-row"><b>Model isolation</b><span>Qwen, Gemma, and Qwen3Next use adapter profiles so one model's shortcut does not leak into another model.</span></div>
             <div class="check-row"><b>Memory safety</b><span>Auto sizing must leave enough reserve for KV, compute buffers, warmup, and optional draft/MTP contexts.</span></div>
             <div class="check-row"><b>Correctness first</b><span>Gibberish output is usually a graph-shape, expert-order, weight, or shared-expert integration bug, not a cache hit-rate issue.</span></div>
-            <div class="check-row"><b>Review targets</b><span>Check adapter registration, layer-active guard, worklist construction, merge shape, fallback counters, and unit tests.</span></div>
+            <div class="check-row"><b>Review targets</b><span>Check adapter registration, graph phase propagation, layer-active guard, worklist construction, merge shape, fallback counters, and unit tests.</span></div>
             <div class="check-row"><b>Recommended validation</b><span>Run a learn pass, a hot-cache pass with perf full, a pass with perf off, and compare output quality plus TG/PP rates.</span></div>
           </div>
         </div>
@@ -1761,7 +1778,7 @@
             <div class="check-row"><b>Source of Truth</b><span><code>llama-moe-hot-cache-adapter.cpp</code> decides which model may use which hot graph.</span></div>
             <div class="check-row"><b>No Side Effects</b><span>A Qwen-specific graph kind must not automatically apply to Gemma or a new model.</span></div>
             <div class="check-row"><b>Fallback Is Normal</b><span>If no adapter matches or the layer is inactive, the existing model path continues.</span></div>
-            <div class="check-row"><b>PP Differs From Decode</b><span>Prompt processing can have large batches. Decode usually has tiny batches and is more overhead-sensitive.</span></div>
+            <div class="check-row"><b>PP Differs From Decode</b><span>Prompt processing can have large batches and decode usually has tiny batches, but the phase is now explicit instead of being derived only from token count.</span></div>
             <div class="check-row"><b>Minimum Test</b><span><code>ctest --test-dir build -R '^test-moe-hot-cache$' --output-on-failure</code></span></div>
             <div class="check-row"><b>Build</b><span><code>cmake --build build -j8 --target llama-server</code></span></div>
           </div>
@@ -1995,8 +2012,8 @@
       },
       token: {
         title: "Token",
-        text: "Decode usually processes one token at a time. That is why every small overhead matters.",
-        code: "decode: n_tokens == 1",
+        text: "Each ubatch carries a graph phase from the enclosing llama_decode call. Decode usually processes one token at a time, but tiny multi-token decode batches stay in the TG phase.",
+        code: "gphase = DECODE or PROMPT_PROCESSING",
       },
       router: {
         title: "Router",
