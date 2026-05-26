@@ -765,8 +765,10 @@
   <nav class="doc-topbar" aria-label="Documentation pages">
     <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
     <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-pp-architecture.html">PP Architecture</a>
     <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
     <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="moe-hot-cache-pp-journey.html">PP Journey</a>
     <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
     <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
   </nav>
@@ -776,6 +778,8 @@
       <p>
         This interactive view shows how the hot cache computes active MoE experts on the GPU first
         while cold experts run in parallel on the CPU.
+        In the real graph, prompt processing and token generation are separated by an explicit
+        graph phase before the worklist is built.
       </p>
 
       <div class="control-group">

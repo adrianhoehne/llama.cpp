@@ -1,6 +1,8 @@
 #include "llama-moe-hot-cache.h"
 #include "llama-moe-hot-cache-adapter.h"
+#include "llama-moe-hot-cache-branch-reduce.h"
 #include "llama-moe-hot-cache-perf.h"
+#include "llama-moe-hot-cache-pp.h"
 #include "ggml-backend-moe-hot-cache.h"
 #include "models/models.h"
 
@@ -27,6 +29,31 @@ static const llama_moe_hot_cache_model_adapter & llama_moe_hot_cache_require_mod
     return *adapter;
 }
 
+static llama_moe_hot_cache_graph_phase llama_moe_hot_cache_graph_phase_from_llm(
+        llm_graph_phase phase,
+        bool warmup,
+        int64_t n_tokens) {
+    if (warmup || phase == LLM_GRAPH_PHASE_WARMUP) {
+        return llama_moe_hot_cache_graph_phase::warmup;
+    }
+
+    switch (phase) {
+        case LLM_GRAPH_PHASE_PROMPT_PROCESSING:
+            return llama_moe_hot_cache_graph_phase::prompt_processing;
+        case LLM_GRAPH_PHASE_DECODE:
+            return llama_moe_hot_cache_graph_phase::decode;
+        case LLM_GRAPH_PHASE_UNKNOWN:
+            return n_tokens > 1
+                ? llama_moe_hot_cache_graph_phase::prompt_processing
+                : llama_moe_hot_cache_graph_phase::decode;
+        case LLM_GRAPH_PHASE_WARMUP:
+            return llama_moe_hot_cache_graph_phase::warmup;
+    }
+
+    return llama_moe_hot_cache_graph_phase::decode;
+}
+
+template<llama_moe_hot_cache_worklist_order order>
 static void llama_qwen35moe_hot_cache_build_worklist_op(
         ggml_tensor * dst,
         const ggml_tensor * src0,
@@ -39,9 +66,10 @@ static void llama_qwen35moe_hot_cache_build_worklist_op(
 
     const auto * layer = static_cast<const llama_moe_hot_cache_layer *>(userdata);
     GGML_ASSERT(layer != nullptr);
-    llama_moe_hot_cache_build_worklist(dst, selected_experts, weights, *layer, ith, nth);
+    llama_moe_hot_cache_build_worklist(dst, selected_experts, weights, *layer, ith, nth, order);
 }
 
+template<llama_moe_hot_cache_worklist_order order>
 static void llama_qwen35moe_hot_cache_build_worklist_from_logits_op(
         ggml_tensor * dst,
         const ggml_tensor * src0,
@@ -53,7 +81,19 @@ static void llama_qwen35moe_hot_cache_build_worklist_from_logits_op(
 
     const auto * layer = static_cast<const llama_moe_hot_cache_layer *>(userdata);
     GGML_ASSERT(layer != nullptr);
-    llama_moe_hot_cache_build_worklist_from_logits(dst, logits, *layer, ith, nth);
+    llama_moe_hot_cache_build_worklist_from_logits(dst, logits, *layer, ith, nth, order);
+}
+
+static ggml_custom3_op_t llama_moe_hot_cache_select_worklist_op(llama_moe_hot_cache_worklist_order order) {
+    return order == llama_moe_hot_cache_worklist_order::expert_major
+        ? llama_qwen35moe_hot_cache_build_worklist_op<llama_moe_hot_cache_worklist_order::expert_major>
+        : llama_qwen35moe_hot_cache_build_worklist_op<llama_moe_hot_cache_worklist_order::token_major>;
+}
+
+static ggml_custom2_op_t llama_moe_hot_cache_select_worklist_from_logits_op(llama_moe_hot_cache_worklist_order order) {
+    return order == llama_moe_hot_cache_worklist_order::expert_major
+        ? llama_qwen35moe_hot_cache_build_worklist_from_logits_op<llama_moe_hot_cache_worklist_order::expert_major>
+        : llama_qwen35moe_hot_cache_build_worklist_from_logits_op<llama_moe_hot_cache_worklist_order::token_major>;
 }
 
 static void llama_qwen35moe_hot_cache_sum_prefix_rows_op(
@@ -454,6 +494,10 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
     const auto & layer = model.layers[il];
     const auto & cache = model.moe_hot_cache->layers[il];
     const llama_moe_hot_cache_graph_profile profile = adapter.profile();
+    const llama_moe_hot_cache_graph_phase graph_phase =
+        llama_moe_hot_cache_graph_phase_from_llm(graph.gphase, cparams.warmup, n_tokens);
+    const bool is_decode_phase = graph_phase == llama_moe_hot_cache_graph_phase::decode;
+    const bool is_warmup_phase = graph_phase == llama_moe_hot_cache_graph_phase::warmup;
 
     GGML_ASSERT(adapter.graph_kind == llama_moe_hot_cache_graph_kind::logits);
     GGML_ASSERT(!cache.hot_id_map_host.empty());
@@ -461,18 +505,47 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
     GGML_ASSERT(n_moe_slots <= LLAMA_MAX_EXPERTS);
 
     const int64_t capacity = n_moe_slots*n_tokens;
+    const llama_moe_hot_cache_pp_execution_plan pp_plan = llama_moe_hot_cache_pp_policy::build(
+            graph_phase,
+            n_tokens,
+            capacity,
+            cache.n_hot != cache.n_expert,
+            n_moe_slots,
+            profile);
+    const int parallel_mode = llama_moe_hot_cache_graph_tweaks::parallel_mode();
+    const int64_t parallel_min_slots = llama_moe_hot_cache_graph_tweaks::parallel_min_slots();
+    const bool annotate_parallel_region =
+        parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
+    const bool decode_direct_merge =
+        is_decode_phase && n_tokens == 1 && profile.decode_direct_merge;
+    const bool cold_prefix_merge =
+        cache.n_hot != cache.n_expert && decode_direct_merge && profile.cold_prefix_sum;
+    const bool cold_prefix_weighted_sum =
+        cold_prefix_merge && profile.cold_prefix_weighted_sum;
+    const bool cold_shared_input_row =
+        cache.n_hot != cache.n_expert && is_decode_phase && n_tokens == 1 && profile.shared_input_row;
+    const bool cold_first_row_input =
+        cold_shared_input_row && profile.cold_first_row_input;
+    const bool perf_expert_counts = llama_moe_layer_perf_needs_expert_counts(cparams.no_perf);
+    const bool compact_cold_reduce = pp_plan.compact_cold_reduce;
+    const bool perf_or_parallel_counts =
+        !is_warmup_phase && (perf_expert_counts || compact_cold_reduce || (parallel_mode != 0 && annotate_parallel_region));
+    const bool repeat_hot_input =
+        is_decode_phase && n_tokens == 1 && profile.decode_repeat_hot_input;
+    const bool branch_reduce_merge = !decode_direct_merge && pp_plan.branch_reduce_merge;
+    const bool use_compact_cold_reduce = branch_reduce_merge && compact_cold_reduce;
 
     ggml_tensor * worklist_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
     ggml_tensor * worklist = nullptr;
     const bool cpu_decode_routing =
-        !cparams.warmup && profile.cpu_decode_routing &&
+        is_decode_phase && profile.cpu_decode_routing &&
         n_tokens >= 1 && n_tokens <= profile.cpu_decode_routing_max_tokens;
     if (cpu_decode_routing) {
         worklist = ggml_map_custom2(
                 ctx0,
                 worklist_shape,
                 logits,
-                llama_qwen35moe_hot_cache_build_worklist_from_logits_op,
+                llama_moe_hot_cache_select_worklist_from_logits_op(pp_plan.worklist_order),
                 1,
                 const_cast<llama_moe_hot_cache_layer *>(&cache));
     } else {
@@ -500,7 +573,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
                 worklist_shape,
                 selected_experts,
                 weights,
-                llama_qwen35moe_hot_cache_build_worklist_op,
+                llama_moe_hot_cache_select_worklist_op(pp_plan.worklist_order),
                 1,
                 const_cast<llama_moe_hot_cache_layer *>(&cache));
     }
@@ -514,30 +587,6 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
     const auto view_worklist_field = [&](int32_t field) {
         return ggml_view_1d(ctx0, worklist, capacity, field*worklist->nb[1]);
     };
-
-    const int parallel_mode = llama_moe_hot_cache_graph_tweaks::parallel_mode();
-    const int64_t parallel_min_slots = llama_moe_hot_cache_graph_tweaks::parallel_min_slots();
-    const bool annotate_parallel_region =
-        parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
-    const bool decode_direct_merge =
-        !cparams.warmup && n_tokens == 1 && profile.decode_direct_merge;
-    const bool cold_prefix_merge =
-        cache.n_hot != cache.n_expert && decode_direct_merge && profile.cold_prefix_sum;
-    const bool cold_prefix_weighted_sum =
-        cold_prefix_merge && profile.cold_prefix_weighted_sum;
-    const bool cold_shared_input_row =
-        cache.n_hot != cache.n_expert && !cparams.warmup && n_tokens == 1 && profile.shared_input_row;
-    const bool cold_first_row_input =
-        cold_shared_input_row && profile.cold_first_row_input;
-    const bool perf_expert_counts = llama_moe_layer_perf_needs_expert_counts(cparams.no_perf);
-    const bool perf_or_parallel_counts =
-        !cparams.warmup && (perf_expert_counts || (parallel_mode != 0 && annotate_parallel_region));
-    const bool repeat_hot_input =
-        !cparams.warmup && n_tokens == 1 && profile.decode_repeat_hot_input;
-    const bool branch_reduce_merge =
-        !cparams.warmup && cache.n_hot != cache.n_expert && !decode_direct_merge && n_moe_slots > 1 &&
-        ((n_tokens == 1 && profile.branch_reduce_merge) ||
-         (n_tokens > 1 && llama_moe_hot_cache_graph_tweaks::pp_reduce_merge(n_tokens, capacity)));
 
     ggml_tensor * hot_count = nullptr;
     ggml_tensor * cold_count = nullptr;
@@ -589,7 +638,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
         cold_ids = ggml_reshape_2d(ctx0, cold_ids, 1, capacity);
         graph.cb(cold_ids, "ffn_moe_cold_ids_compact", il);
 
-        if (!decode_direct_merge) {
+        if (!decode_direct_merge && !use_compact_cold_reduce) {
             cold_src_slots = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT), GGML_TYPE_I32);
             graph.cb(cold_src_slots, "ffn_moe_cold_src_slots", il);
         }
@@ -819,8 +868,20 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
         graph.cb(cold_out, "ffn_moe_cold_out", il);
 
         ggml_tensor * cold_slots = nullptr;
+        ggml_tensor * cold_parallel_output = nullptr;
         if (decode_direct_merge) {
             cold_slots = merge_compact_slots(cold_out, cold_branch_backend, cold_count, worklist, cold_prefix_weighted_sum, "ffn_moe_cold_slots");
+            cold_parallel_output = cold_slots;
+        } else if (use_compact_cold_reduce) {
+            cold_parallel_output = llama_moe_hot_cache_build_compact_cold_reduce(
+                    graph,
+                    cold_out,
+                    worklist,
+                    cold_branch_backend,
+                    cparams.n_threads,
+                    "ffn_moe_cold_slots_reduced_compact",
+                    il,
+                    n_tokens);
         } else {
             ggml_tensor * cold_slots_zero_src = cold_shared_input_row ? cold_out : cold_inputs;
             cold_slots = ggml_scale(ctx0, cold_slots_zero_src, 0.0f);
@@ -845,10 +906,10 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
                 ggml_backend_sched_set_tensor_backend(sched, cold_slots, cold_branch_backend);
             }
             ggml_build_forward_expand(gf, cold_slots);
+            cold_parallel_output = cold_slots;
         }
 
-        ggml_tensor * cold_parallel_output = cold_slots;
-        if (branch_reduce_merge) {
+        if (branch_reduce_merge && !use_compact_cold_reduce) {
             cold_parallel_output = reduce_slots_in_branch(cold_slots, cold_branch_backend, "ffn_moe_cold_slots_reduced");
         }
 
@@ -923,13 +984,19 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
 }
 
 ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cur, const int il) {
-    (void) llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::qwen35_ffn);
+    const llama_moe_hot_cache_model_adapter & adapter =
+        llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::qwen35_ffn);
+    const llama_moe_hot_cache_graph_profile profile = adapter.profile();
 
     const int64_t n_embd = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const int64_t n_moe_slots = cparams.warmup ? hparams.n_expert_used : n_expert_used;
     const auto & layer = model.layers[il];
     const auto & cache = model.moe_hot_cache->layers[il];
+    const llama_moe_hot_cache_graph_phase graph_phase =
+        llama_moe_hot_cache_graph_phase_from_llm(gphase, cparams.warmup, n_tokens);
+    const bool is_decode_phase = graph_phase == llama_moe_hot_cache_graph_phase::decode;
+    const bool is_warmup_phase = graph_phase == llama_moe_hot_cache_graph_phase::warmup;
 
     GGML_ASSERT(!cache.hot_id_map_host.empty());
     GGML_ASSERT(n_moe_slots > 0);
@@ -939,15 +1006,44 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     cb(logits, "ffn_moe_logits", il);
 
     const int64_t capacity = n_moe_slots*n_tokens;
+    const llama_moe_hot_cache_pp_execution_plan pp_plan = llama_moe_hot_cache_pp_policy::build(
+            graph_phase,
+            n_tokens,
+            capacity,
+            cache.n_hot != cache.n_expert,
+            n_moe_slots,
+            profile);
+    const int parallel_mode = llama_moe_hot_cache_graph_tweaks::parallel_mode();
+    const int64_t parallel_min_slots = llama_moe_hot_cache_graph_tweaks::parallel_min_slots();
+    const bool annotate_parallel_region =
+        parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
+    const bool decode_direct_merge =
+        is_decode_phase && n_tokens == 1 && llama_moe_hot_cache_graph_tweaks::decode_direct_merge();
+    const bool cold_prefix_merge =
+        cache.n_hot != cache.n_expert && decode_direct_merge && llama_moe_hot_cache_graph_tweaks::cold_prefix_sum();
+    const bool cold_prefix_weighted_sum =
+        cold_prefix_merge && llama_moe_hot_cache_graph_tweaks::cold_prefix_weighted_sum();
+    const bool cold_shared_input_row =
+        cache.n_hot != cache.n_expert && decode_direct_merge && llama_moe_hot_cache_graph_tweaks::shared_input_row();
+    const bool cold_first_row_input =
+        cold_shared_input_row && llama_moe_hot_cache_graph_tweaks::cold_first_row_input();
+    const bool perf_expert_counts = llama_moe_layer_perf_needs_expert_counts(cparams.no_perf);
+    const bool compact_cold_reduce = pp_plan.compact_cold_reduce;
+    const bool perf_or_parallel_counts =
+        !is_warmup_phase && (perf_expert_counts || compact_cold_reduce || (parallel_mode != 0 && annotate_parallel_region));
+    const bool repeat_hot_input =
+        decode_direct_merge && llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input();
+    const bool branch_reduce_merge = !decode_direct_merge && pp_plan.branch_reduce_merge;
+    const bool use_compact_cold_reduce = branch_reduce_merge && compact_cold_reduce;
 
     ggml_tensor * worklist_shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
     ggml_tensor * worklist = nullptr;
-    if (!cparams.warmup && n_tokens == 1 && llama_moe_hot_cache_graph_tweaks::cpu_decode_routing()) {
+    if (is_decode_phase && n_tokens == 1 && llama_moe_hot_cache_graph_tweaks::cpu_decode_routing()) {
         worklist = ggml_map_custom2(
                 ctx0,
                 worklist_shape,
                 logits,
-                llama_qwen35moe_hot_cache_build_worklist_from_logits_op,
+                llama_moe_hot_cache_select_worklist_from_logits_op(pp_plan.worklist_order),
                 1,
                 const_cast<llama_moe_hot_cache_layer *>(&cache));
     } else {
@@ -977,7 +1073,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
                 worklist_shape,
                 selected_experts,
                 weights,
-                llama_qwen35moe_hot_cache_build_worklist_op,
+                llama_moe_hot_cache_select_worklist_op(pp_plan.worklist_order),
                 1,
                 const_cast<llama_moe_hot_cache_layer *>(&cache));
     }
@@ -991,29 +1087,6 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     const auto view_worklist_field = [&](int32_t field) {
         return ggml_view_1d(ctx0, worklist, capacity, field*worklist->nb[1]);
     };
-
-    const int parallel_mode = llama_moe_hot_cache_graph_tweaks::parallel_mode();
-    const int64_t parallel_min_slots = llama_moe_hot_cache_graph_tweaks::parallel_min_slots();
-    const bool annotate_parallel_region =
-        parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
-    const bool decode_direct_merge =
-        !cparams.warmup && n_tokens == 1 && llama_moe_hot_cache_graph_tweaks::decode_direct_merge();
-    const bool cold_prefix_merge =
-        cache.n_hot != cache.n_expert && decode_direct_merge && llama_moe_hot_cache_graph_tweaks::cold_prefix_sum();
-    const bool cold_prefix_weighted_sum =
-        cold_prefix_merge && llama_moe_hot_cache_graph_tweaks::cold_prefix_weighted_sum();
-    const bool cold_shared_input_row =
-        cache.n_hot != cache.n_expert && decode_direct_merge && llama_moe_hot_cache_graph_tweaks::shared_input_row();
-    const bool cold_first_row_input =
-        cold_shared_input_row && llama_moe_hot_cache_graph_tweaks::cold_first_row_input();
-    const bool perf_expert_counts = llama_moe_layer_perf_needs_expert_counts(cparams.no_perf);
-    const bool perf_or_parallel_counts =
-        !cparams.warmup && (perf_expert_counts || (parallel_mode != 0 && annotate_parallel_region));
-    const bool repeat_hot_input =
-        decode_direct_merge && llama_moe_hot_cache_graph_tweaks::decode_repeat_hot_input();
-    const bool branch_reduce_merge =
-        !cparams.warmup && n_tokens > 1 && cache.n_hot != cache.n_expert && n_moe_slots > 1 &&
-        llama_moe_hot_cache_graph_tweaks::pp_reduce_merge(n_tokens, capacity);
 
     ggml_tensor * hot_count = nullptr;
     ggml_tensor * cold_count = nullptr;
@@ -1065,7 +1138,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         cold_ids = ggml_reshape_2d(ctx0, cold_ids, 1, capacity);
         cb(cold_ids, "ffn_moe_cold_ids_compact", il);
 
-        if (!decode_direct_merge) {
+        if (!decode_direct_merge && !use_compact_cold_reduce) {
             cold_src_slots = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT), GGML_TYPE_I32);
             cb(cold_src_slots, "ffn_moe_cold_src_slots", il);
         }
@@ -1294,8 +1367,20 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
         cb(cold_out, "ffn_moe_cold_out", il);
 
         ggml_tensor * cold_slots = nullptr;
+        ggml_tensor * cold_parallel_output = nullptr;
         if (decode_direct_merge) {
             cold_slots = merge_compact_slots(cold_out, cold_branch_backend, cold_count, worklist, cold_prefix_weighted_sum, "ffn_moe_cold_slots");
+            cold_parallel_output = cold_slots;
+        } else if (use_compact_cold_reduce) {
+            cold_parallel_output = llama_moe_hot_cache_build_compact_cold_reduce(
+                    *this,
+                    cold_out,
+                    worklist,
+                    cold_branch_backend,
+                    cparams.n_threads,
+                    "ffn_moe_cold_slots_reduced_compact",
+                    il,
+                    n_tokens);
         } else {
             cold_slots = ggml_scale(ctx0, cold_inputs, 0.0f);
             if (cold_branch_backend != nullptr) {
@@ -1319,10 +1404,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
                 ggml_backend_sched_set_tensor_backend(sched, cold_slots, cold_branch_backend);
             }
             ggml_build_forward_expand(gf, cold_slots);
+            cold_parallel_output = cold_slots;
         }
 
-        ggml_tensor * cold_parallel_output = cold_slots;
-        if (branch_reduce_merge) {
+        if (branch_reduce_merge && !use_compact_cold_reduce) {
             cold_parallel_output = reduce_slots_in_branch(cold_slots, cold_branch_backend, "ffn_moe_cold_slots_reduced");
         }
 

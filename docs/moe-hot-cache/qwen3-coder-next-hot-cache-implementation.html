@@ -315,8 +315,10 @@
   <nav class="doc-topbar" aria-label="Documentation pages">
     <a href="moe-experts-first-visual-explainer.html">Token Visualization</a>
     <a href="moe-hot-cache-architecture-explainer.html">Architecture Explainer</a>
+    <a href="moe-hot-cache-pp-architecture.html">PP Architecture</a>
     <a href="moe-hot-cache-usage-guide.html">Usage Guide and Arguments</a>
     <a href="moe-hot-cache-journey-learnings.html">Journey and Learnings</a>
+    <a href="moe-hot-cache-pp-journey.html">PP Journey</a>
     <a href="qwen3-coder-next-hot-cache-implementation.html">Qwen3Next Implementation</a>
     <a href="moe-hot-cache-architecture-explainer.html#code-reference">Code Reference</a>
   </nav>
@@ -448,7 +450,7 @@ n_expert_used = 10</pre>
           <div class="num">4</div>
           <div>
             <h3>Register a Dedicated Graph Profile</h3>
-            <p>The model explicitly opts into hot-cache shortcuts. Other MoE models remain unchanged.</p>
+            <p>The model explicitly opts into hot-cache shortcuts. Other MoE models remain unchanged. Qwen3Next can allow tiny multi-token decode routing through its profile, while prompt-processing decisions still come from the explicit graph phase.</p>
             <pre>{ LLM_ARCH_QWEN3NEXT, "qwen3next", llama_moe_hot_cache_graph_kind::logits, LLM_FFN_SILU }</pre>
           </div>
         </article>
@@ -488,6 +490,7 @@ n_expert_used = 10</pre>
               <li>No crash during warmup.</li>
               <li><code>parallel_fallbacks</code> remains 0 or stops increasing.</li>
               <li>Output remains semantically plausible, especially because of the shared expert.</li>
+              <li>Tiny multi-token decode batches are still reported as decode behavior, not PP behavior.</li>
               <li>Compare hit rate and TG with and without <code>--no-perf</code>.</li>
               <li>If fallbacks appear, disable profile shortcuts one by one.</li>
             </ul>
