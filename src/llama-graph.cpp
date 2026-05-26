@@ -1009,6 +1009,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     hparams          (params.hparams),
     cparams          (params.cparams),
     ubatch           (params.ubatch),
+    gphase           (params.gphase),
     n_embd           (hparams.n_embd),
     n_layer          (hparams.n_layer()),
     n_rot            (hparams.n_rot()),

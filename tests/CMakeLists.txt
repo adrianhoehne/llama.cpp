@@ -203,6 +203,8 @@ llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build(test-moe-hot-cache-adapter.cpp)
 llama_test(test-moe-hot-cache-adapter)
+llama_build(test-moe-hot-cache-branch-reduce.cpp)
+llama_test(test-moe-hot-cache-branch-reduce)
 llama_build(test-moe-hot-cache-builder.cpp)
 llama_test(test-moe-hot-cache-builder)
 llama_build(test-moe-hot-cache-budget.cpp)
@@ -219,6 +221,8 @@ llama_build(test-moe-hot-cache-perf-state.cpp)
 llama_test(test-moe-hot-cache-perf-state)
 llama_build(test-moe-hot-cache-planner.cpp)
 llama_test(test-moe-hot-cache-planner)
+llama_build(test-moe-hot-cache-pp.cpp)
+llama_test(test-moe-hot-cache-pp)
 llama_build(test-moe-hot-cache-runtime-apply.cpp)
 llama_test(test-moe-hot-cache-runtime-apply)
 llama_build(test-moe-hot-cache-updater.cpp)
@@ -227,9 +231,12 @@ llama_build(test-moe-hot-cache-weighting.cpp)
 llama_test(test-moe-hot-cache-weighting)
 llama_build(test-moe-hot-cache-worklist.cpp)
 llama_test(test-moe-hot-cache-worklist)
+llama_build(test-moe-hot-cache-worklist-order.cpp)
+llama_test(test-moe-hot-cache-worklist-order)
 
 set(LLAMA_MOE_HOT_CACHE_TEST_TARGETS
     test-moe-hot-cache-adapter
+    test-moe-hot-cache-branch-reduce
     test-moe-hot-cache-builder
     test-moe-hot-cache-budget
     test-moe-hot-cache-parser
@@ -238,10 +245,12 @@ set(LLAMA_MOE_HOT_CACHE_TEST_TARGETS
     test-moe-hot-cache-perf-reader
     test-moe-hot-cache-perf-state
     test-moe-hot-cache-planner
+    test-moe-hot-cache-pp
     test-moe-hot-cache-runtime-apply
     test-moe-hot-cache-updater
     test-moe-hot-cache-weighting
     test-moe-hot-cache-worklist
+    test-moe-hot-cache-worklist-order
 )
 
 add_custom_target(test-moe-hot-cache
