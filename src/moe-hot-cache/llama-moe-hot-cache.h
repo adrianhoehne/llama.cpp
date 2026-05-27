@@ -4,6 +4,7 @@
 
 #include "ggml.h"
 #include "ggml-cpp.h"
+#include "llama.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -177,12 +178,12 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
 void llama_moe_hot_cache_init_after_model_load(llama_model & model, const llama_model_params & params);
 void llama_moe_hot_cache_init_after_context_memory(const llama_model & model);
 
-llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
+LLAMA_API llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
         llama_model & model,
         const std::string & json_str,
         double update_rate);
 
-llama_moe_hot_cache_update_stats llama_moe_hot_cache_apply_json(
+LLAMA_API llama_moe_hot_cache_update_stats llama_moe_hot_cache_apply_json(
         llama_model & model,
         const std::string & json_str);
 
