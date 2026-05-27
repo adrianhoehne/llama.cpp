@@ -3,7 +3,6 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
-#include "ggml-cpu.h"
 
 #include <cstdint>
 #include <stdexcept>
@@ -28,6 +27,17 @@ static ggml_context_ptr make_ctx() {
     return ggml_context_ptr(ggml_init(params));
 }
 
+static ggml_backend_ptr make_cpu_backend() {
+    ggml_backend_load_all();
+
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    if (backend == nullptr) {
+        throw std::runtime_error("CPU backend is not available");
+    }
+
+    return ggml_backend_ptr(backend);
+}
+
 template<typename T>
 static void set_tensor_data(ggml_tensor * tensor, const std::vector<T> & data) {
     ggml_backend_tensor_set(tensor, data.data(), 0, data.size()*sizeof(T));
@@ -39,7 +49,7 @@ static void set_tensor_value(ggml_tensor * tensor, T value) {
 }
 
 static void test_count_topk_counts_valid_ids_and_call() {
-    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    ggml_backend_ptr backend = make_cpu_backend();
     auto ctx = make_ctx();
 
     ggml_tensor * topk = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 3, 2);
@@ -63,7 +73,7 @@ static void test_count_topk_counts_valid_ids_and_call() {
 }
 
 static void test_count_worklist_count_reads_f32_and_i32() {
-    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    ggml_backend_ptr backend = make_cpu_backend();
     auto ctx = make_ctx();
 
     ggml_tensor * hot_count = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
@@ -102,7 +112,7 @@ static void test_count_worklist_count_reads_f32_and_i32() {
 }
 
 static void test_count_worklist_count_ignores_invalid_inputs() {
-    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    ggml_backend_ptr backend = make_cpu_backend();
     auto ctx = make_ctx();
 
     ggml_tensor * unsupported = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I16, 1);
@@ -122,7 +132,7 @@ static void test_count_worklist_count_ignores_invalid_inputs() {
 }
 
 static void test_count_branch_experts_reads_i32_and_f32() {
-    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    ggml_backend_ptr backend = make_cpu_backend();
     auto ctx = make_ctx();
 
     ggml_tensor * hot_ids = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, 5);
