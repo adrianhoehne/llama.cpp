@@ -201,70 +201,83 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
-llama_build(test-moe-hot-cache-adapter.cpp)
-llama_test(test-moe-hot-cache-adapter)
-llama_build(test-moe-hot-cache-branch-reduce.cpp)
-llama_test(test-moe-hot-cache-branch-reduce)
-llama_build(test-moe-hot-cache-builder.cpp)
-llama_test(test-moe-hot-cache-builder)
-llama_build(test-moe-hot-cache-budget.cpp)
-llama_test(test-moe-hot-cache-budget)
-llama_build(test-moe-hot-cache-parser.cpp)
-llama_test(test-moe-hot-cache-parser)
-llama_build(test-moe-hot-cache-perf-json.cpp)
-llama_test(test-moe-hot-cache-perf-json)
-llama_build(test-moe-hot-cache-perf-nodes.cpp)
-llama_test(test-moe-hot-cache-perf-nodes)
-llama_build(test-moe-hot-cache-perf-reader.cpp)
-llama_test(test-moe-hot-cache-perf-reader)
-llama_build(test-moe-hot-cache-perf-state.cpp)
-llama_test(test-moe-hot-cache-perf-state)
-llama_build(test-moe-hot-cache-planner.cpp)
-llama_test(test-moe-hot-cache-planner)
-llama_build(test-moe-hot-cache-pp.cpp)
-llama_test(test-moe-hot-cache-pp)
-llama_build(test-moe-hot-cache-runtime-apply.cpp)
-llama_test(test-moe-hot-cache-runtime-apply)
-llama_build(test-moe-hot-cache-updater.cpp)
-llama_test(test-moe-hot-cache-updater)
-llama_build(test-moe-hot-cache-weighting.cpp)
-llama_test(test-moe-hot-cache-weighting)
-llama_build(test-moe-hot-cache-worklist.cpp)
-llama_test(test-moe-hot-cache-worklist)
-llama_build(test-moe-hot-cache-worklist-order.cpp)
-llama_test(test-moe-hot-cache-worklist-order)
+set(LLAMA_MOE_HOT_CACHE_TEST_TARGETS)
 
-set(LLAMA_MOE_HOT_CACHE_TEST_TARGETS
-    test-moe-hot-cache-adapter
-    test-moe-hot-cache-branch-reduce
-    test-moe-hot-cache-builder
-    test-moe-hot-cache-budget
-    test-moe-hot-cache-parser
-    test-moe-hot-cache-perf-json
-    test-moe-hot-cache-perf-nodes
-    test-moe-hot-cache-perf-reader
-    test-moe-hot-cache-perf-state
-    test-moe-hot-cache-planner
-    test-moe-hot-cache-pp
-    test-moe-hot-cache-runtime-apply
-    test-moe-hot-cache-updater
-    test-moe-hot-cache-weighting
-    test-moe-hot-cache-worklist
-    test-moe-hot-cache-worklist-order
-)
+if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+    # These tests cover internal helpers that are not exported from the Windows shared library.
+    llama_build(test-moe-hot-cache-adapter.cpp)
+    llama_test(test-moe-hot-cache-adapter)
+    llama_build(test-moe-hot-cache-branch-reduce.cpp)
+    llama_test(test-moe-hot-cache-branch-reduce)
+    llama_build(test-moe-hot-cache-builder.cpp)
+    llama_test(test-moe-hot-cache-builder)
+    llama_build(test-moe-hot-cache-budget.cpp)
+    llama_test(test-moe-hot-cache-budget)
+    llama_build(test-moe-hot-cache-parser.cpp)
+    llama_test(test-moe-hot-cache-parser)
+    llama_build(test-moe-hot-cache-perf-json.cpp)
+    llama_test(test-moe-hot-cache-perf-json)
+    llama_build(test-moe-hot-cache-perf-nodes.cpp)
+    llama_test(test-moe-hot-cache-perf-nodes)
+    llama_build(test-moe-hot-cache-perf-reader.cpp)
+    llama_test(test-moe-hot-cache-perf-reader)
+    llama_build(test-moe-hot-cache-perf-state.cpp)
+    llama_test(test-moe-hot-cache-perf-state)
+    llama_build(test-moe-hot-cache-planner.cpp)
+    llama_test(test-moe-hot-cache-planner)
+    llama_build(test-moe-hot-cache-pp.cpp)
+    llama_test(test-moe-hot-cache-pp)
+    llama_build(test-moe-hot-cache-runtime-apply.cpp)
+    llama_test(test-moe-hot-cache-runtime-apply)
+    llama_build(test-moe-hot-cache-updater.cpp)
+    llama_test(test-moe-hot-cache-updater)
+    llama_build(test-moe-hot-cache-weighting.cpp)
+    llama_test(test-moe-hot-cache-weighting)
+    llama_build(test-moe-hot-cache-worklist.cpp)
+    llama_test(test-moe-hot-cache-worklist)
+    llama_build(test-moe-hot-cache-worklist-order.cpp)
+    llama_test(test-moe-hot-cache-worklist-order)
+
+    set(LLAMA_MOE_HOT_CACHE_TEST_TARGETS
+        test-moe-hot-cache-adapter
+        test-moe-hot-cache-branch-reduce
+        test-moe-hot-cache-builder
+        test-moe-hot-cache-budget
+        test-moe-hot-cache-parser
+        test-moe-hot-cache-perf-json
+        test-moe-hot-cache-perf-nodes
+        test-moe-hot-cache-perf-reader
+        test-moe-hot-cache-perf-state
+        test-moe-hot-cache-planner
+        test-moe-hot-cache-pp
+        test-moe-hot-cache-runtime-apply
+        test-moe-hot-cache-updater
+        test-moe-hot-cache-weighting
+        test-moe-hot-cache-worklist
+        test-moe-hot-cache-worklist-order
+    )
+endif()
 
 add_custom_target(test-moe-hot-cache
     DEPENDS ${LLAMA_MOE_HOT_CACHE_TEST_TARGETS}
 )
 
-add_test(
-    NAME test-moe-hot-cache
-    COMMAND ${CMAKE_CTEST_COMMAND}
-        --test-dir ${CMAKE_BINARY_DIR}
-        -R "^test-moe-hot-cache-"
-        --output-on-failure
-)
-set_property(TEST test-moe-hot-cache PROPERTY LABELS main)
+if (LLAMA_MOE_HOT_CACHE_TEST_TARGETS)
+    set(LLAMA_MOE_HOT_CACHE_CTEST_CONFIG_ARGS)
+    if (CMAKE_CONFIGURATION_TYPES)
+        list(APPEND LLAMA_MOE_HOT_CACHE_CTEST_CONFIG_ARGS -C $<CONFIG>)
+    endif()
+
+    add_test(
+        NAME test-moe-hot-cache
+        COMMAND ${CMAKE_CTEST_COMMAND}
+            --test-dir ${CMAKE_BINARY_DIR}
+            ${LLAMA_MOE_HOT_CACHE_CTEST_CONFIG_ARGS}
+            -R "^test-moe-hot-cache-"
+            --output-on-failure
+    )
+    set_property(TEST test-moe-hot-cache PROPERTY LABELS main)
+endif()
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp

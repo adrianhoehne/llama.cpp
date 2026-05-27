@@ -116,7 +116,7 @@ static void test_parse_modes_and_names() {
 static void test_pressure_weighting_uses_total_layer_wait() {
     const std::vector<llama_moe_hot_cache_layer_observation> observations = {
         branch_layer(0, 20.0, 10.0, {}, {{1, 10}}),
-        branch_layer(1, 10.0, 5.0,  {}, {{2, 10}}),
+        branch_layer(1, 10.0, 5.0,  {}, {{2, 11}}),
     };
 
     llama_moe_hot_cache_weighting_config config;
@@ -125,7 +125,7 @@ static void test_pressure_weighting_uses_total_layer_wait() {
     const auto entries = llama_moe_hot_cache_weighting::score_observations(observations, config);
     require(entries.size() == 2);
     require(entries[0].layer == 0 && entries[0].expert == 1 && entries[0].hit_count == 12);
-    require(entries[1].layer == 1 && entries[1].expert == 2 && entries[1].hit_count == 8);
+    require(entries[1].layer == 1 && entries[1].expert == 2 && entries[1].hit_count == 9);
 }
 
 static void test_pressure_weighting_applies_hot_sticky_bonus() {
