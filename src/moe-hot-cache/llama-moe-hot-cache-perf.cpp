@@ -134,7 +134,7 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
         return true;
     }
 
-    if (t == nullptr || t->name == nullptr || t->name[0] == '\0') {
+    if (t == nullptr || t->name[0] == '\0') {
         return true;
     }
 
