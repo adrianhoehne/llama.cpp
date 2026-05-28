@@ -646,6 +646,13 @@ cmake --build build -j8
           with <code>--no-perf</code>, the dropdown starts in <code>Off</code>.
         </p>
 
+        <p>
+          The page also includes a <code>Save JSON</code> button next to <code>Apply cache</code>. It writes the
+          currently displayed <code>/moe-layer-perf</code> snapshot to a JSON file. Browsers that support the native
+          save-file picker let you choose the file name and destination; otherwise the browser handles it as a normal
+          download according to its download settings.
+        </p>
+
         <div class="workflow-grid">
           <article class="workflow-card">
             <b>Full</b>
@@ -758,6 +765,8 @@ curl -sS http://127.0.0.1:8080/moe-layer-perf \
           <strong>Web UI:</strong>
           the <code>#/moe-layer-perf</code> page has an <code>Apply cache</code> button. It posts the currently
           displayed list to <code>/moe-hot-cache</code>, waits for the server response, and then refreshes the view.
+          The adjacent <code>Save JSON</code> button saves the same displayed <code>/moe-layer-perf</code> snapshot
+          so it can be reused as a cache input or archived with a benchmark run.
         </div>
 
         <p>

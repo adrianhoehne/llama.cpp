@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ArrowLeft, UploadCloud } from '@lucide/svelte';
+	import { ArrowLeft, Download, UploadCloud } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -46,6 +46,29 @@
 		metrics: TimingMetric[];
 	};
 
+	type SaveFilePickerOptions = {
+		suggestedName?: string;
+		types?: Array<{
+			description: string;
+			accept: Record<string, string[]>;
+		}>;
+	};
+
+	type SaveFileWritableStream = {
+		write(data: Blob | string): Promise<void>;
+		close(): Promise<void>;
+	};
+
+	type SaveFileHandle = {
+		name?: string;
+		createWritable(): Promise<SaveFileWritableStream>;
+	};
+
+	type WindowWithSaveFilePicker = Window &
+		typeof globalThis & {
+			showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<SaveFileHandle>;
+		};
+
 	const TIMING_GROUPS_BEFORE: TimingMetricGroup[] = [
 		{
 			title: 'Summary',
@@ -67,7 +90,8 @@
 					key: 'parallel_fallbacks',
 					label: 'Fallbacks',
 					unit: 'count',
-					description: 'Total number of parallel scheduler fallbacks recorded in the current perf window.'
+					description:
+						'Total number of parallel scheduler fallbacks recorded in the current perf window.'
 				}
 			]
 		},
@@ -195,7 +219,8 @@
 					key: 'parallel_join_wait_time_per_call_us',
 					label: 'Join wait',
 					unit: 'us',
-					description: 'Average time spent waiting at the join point after one lane finishes earlier.'
+					description:
+						'Average time spent waiting at the join point after one lane finishes earlier.'
 				}
 			]
 		},
@@ -221,6 +246,9 @@
 	let applyError = $state<string | null>(null);
 	let applyStatus = $state<string | null>(null);
 	let applyingHotCache = $state(false);
+	let saveError = $state<string | null>(null);
+	let saveStatus = $state<string | null>(null);
+	let savingPerf = $state(false);
 	let lastUpdated = $state<Date | null>(null);
 	let updateIntervalSeconds = $state(1);
 	let mounted = $state(false);
@@ -282,7 +310,10 @@
 		return result;
 	}
 
-	function activeDeltaForLayer(layer: ApiMoeLayerPerfLayer, previous?: ApiMoeLayerPerfLayer): CountMap {
+	function activeDeltaForLayer(
+		layer: ApiMoeLayerPerfLayer,
+		previous?: ApiMoeLayerPerfLayer
+	): CountMap {
 		const current = totalCountsForLayer(layer);
 		const before = totalCountsForLayer(previous);
 		const result = new Map<number, number>();
@@ -428,16 +459,70 @@
 
 		const value = metricValue(metric);
 		const total = perf?.summary?.total_moe_time_per_call_us;
-		if (
-			value === undefined ||
-			typeof total !== 'number' ||
-			!Number.isFinite(total) ||
-			total <= 0
-		) {
+		if (value === undefined || typeof total !== 'number' || !Number.isFinite(total) || total <= 0) {
 			return null;
 		}
 
 		return `${formatDecimal((value / total) * 100, 1)}%`;
+	}
+
+	function sanitizeFilenamePart(value: string): string {
+		return (
+			value
+				.trim()
+				.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+				.replace(/\s+/g, '-')
+				.replace(/-+/g, '-')
+				.replace(/^-|-$/g, '')
+				.slice(0, 80) || 'moe-layer-perf'
+		);
+	}
+
+	function suggestedPerfFilename(): string {
+		const model = sanitizeFilenamePart(requestModel ?? 'active-model');
+		const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+		return `${model}-moe-layer-perf-${timestamp}.json`;
+	}
+
+	async function saveTextFile(text: string, filename: string): Promise<string> {
+		const blob = new Blob([text], { type: 'application/json' });
+		const browserWindow = window as WindowWithSaveFilePicker;
+
+		if (browserWindow.showSaveFilePicker) {
+			const handle = await browserWindow.showSaveFilePicker({
+				suggestedName: filename,
+				types: [
+					{
+						description: 'JSON files',
+						accept: {
+							'application/json': ['.json']
+						}
+					}
+				]
+			});
+			const writable = await handle.createWritable();
+			try {
+				await writable.write(blob);
+			} finally {
+				await writable.close();
+			}
+			return handle.name ?? filename;
+		}
+
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = filename;
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		URL.revokeObjectURL(url);
+
+		return filename;
+	}
+
+	function isFileSaveAbort(cause: unknown): boolean {
+		return cause instanceof DOMException && cause.name === 'AbortError';
 	}
 
 	function handleBack() {
@@ -534,6 +619,8 @@
 		applyingHotCache = true;
 		applyError = null;
 		applyStatus = null;
+		saveError = null;
+		saveStatus = null;
 
 		try {
 			const result = await MoeLayerPerfService.applyHotCache(perf, requestModel);
@@ -543,6 +630,31 @@
 			applyError = cause instanceof Error ? cause.message : 'Failed to apply MoE hot-cache';
 		} finally {
 			applyingHotCache = false;
+		}
+	}
+
+	async function saveVisiblePerf() {
+		if (!perf || savingPerf) {
+			return;
+		}
+
+		savingPerf = true;
+		saveError = null;
+		saveStatus = null;
+		applyError = null;
+		applyStatus = null;
+
+		const filename = suggestedPerfFilename();
+
+		try {
+			const savedFilename = await saveTextFile(`${JSON.stringify(perf, null, 2)}\n`, filename);
+			saveStatus = `Saved ${savedFilename}`;
+		} catch (cause) {
+			if (!isFileSaveAbort(cause)) {
+				saveError = cause instanceof Error ? cause.message : 'Failed to save MoE layer performance';
+			}
+		} finally {
+			savingPerf = false;
 		}
 	}
 
@@ -575,11 +687,11 @@
 				{metric.label}
 			</span>
 			<span class="flex items-baseline justify-between gap-1">
-				<span class="truncate font-mono text-xs tabular-nums text-foreground">
+				<span class="truncate font-mono text-xs text-foreground tabular-nums">
 					{formatMetricValue(metric)}
 				</span>
 				{#if share}
-					<span class="text-[10px] tabular-nums text-muted-foreground">{share}</span>
+					<span class="text-[10px] text-muted-foreground tabular-nums">{share}</span>
 				{/if}
 			</span>
 		</Tooltip.Trigger>
@@ -636,6 +748,16 @@
 				>
 					<UploadCloud class="h-4 w-4" />
 					<span>{applyingHotCache ? 'Applying' : 'Apply cache'}</span>
+				</Button>
+
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={saveVisiblePerf}
+					disabled={!perf || savingPerf}
+				>
+					<Download class="h-4 w-4" />
+					<span>{savingPerf ? 'Saving' : 'Save JSON'}</span>
 				</Button>
 
 				<div class="flex items-center gap-2 text-xs text-muted-foreground">
@@ -760,18 +882,22 @@
 			</section>
 
 			{#if error}
-				<div class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+				<div
+					class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+				>
 					{error}
 				</div>
 			{/if}
 
-			{#if applyError}
-				<div class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-					{applyError}
+			{#if applyError || saveError}
+				<div
+					class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+				>
+					{applyError ?? saveError}
 				</div>
-			{:else if applyStatus}
+			{:else if applyStatus || saveStatus}
 				<div class="rounded-md border bg-muted-foreground/5 p-3 text-sm text-muted-foreground">
-					{applyStatus}
+					{applyStatus ?? saveStatus}
 				</div>
 			{/if}
 
@@ -789,7 +915,9 @@
 						<article class="rounded-md border bg-muted-foreground/5 p-2">
 							<div class="mb-2 flex items-center justify-between gap-2 text-xs">
 								<span class="font-medium">Layer {layer.layer}</span>
-								<span class="tabular-nums text-muted-foreground">{formatPercent(layerHitRate(layer))}</span>
+								<span class="text-muted-foreground tabular-nums"
+									>{formatPercent(layerHitRate(layer))}</span
+								>
 							</div>
 
 							<div
@@ -798,7 +926,10 @@
 							>
 								{#each expertIds as expert, index (expert >= 0 ? expert : `blank-${index}`)}
 									{#if expert >= 0}
-										<div class={expertClass(layer, expert)} title={expertTitle(layer, expert)}></div>
+										<div
+											class={expertClass(layer, expert)}
+											title={expertTitle(layer, expert)}
+										></div>
 									{:else}
 										<div class="aspect-square rounded-[2px] bg-muted/40"></div>
 									{/if}
