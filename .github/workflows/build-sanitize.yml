@@ -28,6 +28,7 @@ env:
 
 jobs:
   ctest:
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     runs-on: [self-hosted, X64, CPU, Linux]
 
     continue-on-error: true

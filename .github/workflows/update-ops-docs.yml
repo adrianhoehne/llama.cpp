@@ -16,6 +16,7 @@ on:
 
 jobs:
     update-ops-docs:
+        if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
         runs-on: [self-hosted, fast, ARM64]
 
         steps:
