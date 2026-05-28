@@ -39,6 +39,7 @@ concurrency:
 
 jobs:
   check-release:
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     runs-on: ubuntu-slim
 
     outputs:

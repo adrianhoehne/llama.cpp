@@ -42,6 +42,7 @@ env:
 
 jobs:
   build-cmake-pkg:
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     uses: ./.github/workflows/build-cmake-pkg.yml
 
   ubuntu:
