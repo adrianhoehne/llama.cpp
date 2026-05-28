@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+MODEL_ROOT="${MODEL_ROOT:-/home/adrian/.cache/huggingface/hub/models--unsloth--Qwen3-Coder-Next-GGUF}"
+MODEL_FILE="${MODEL_FILE:-}"
+PROMPT_FILE="${PROMPT_FILE:-${ROOT_DIR}/pp-bench-conversation-code.txt}"
+HOT_CACHE_FILE="${HOT_CACHE_FILE:-${ROOT_DIR}/coder}"
+DEVICE="${DEVICE:-CUDA0}"
+HOT_CACHE_MAX_MIB="${HOT_CACHE_MAX_MIB:--1}"
+HOT_CACHE_AUTO_RESERVE_MIB="${HOT_CACHE_AUTO_RESERVE_MIB:-1000}"
+PP_REDUCE_MERGE="${PP_REDUCE_MERGE:-on}"
+TEST_MODE="${TEST_MODE:-both}"
+N_GEN="${N_GEN:-128}"
+MOE_LAYER_PERF_OUT="${MOE_LAYER_PERF_OUT:-}"
+REPS="${REPS:-5}"
+N_PROMPT="${N_PROMPT:-}"
+VERBOSE="${VERBOSE:-0}"
+
+export LLAMA_MOE_HOT_CACHE_PP_SPARSE_COLD_FFN="${LLAMA_MOE_HOT_CACHE_PP_SPARSE_COLD_FFN:-off}"
+
+if [[ -z "${MODEL_FILE}" ]]; then
+    MODEL_FILE="$(find "${MODEL_ROOT}/snapshots" -name 'Qwen3-Coder-Next-UD-IQ4_NL.gguf' -print -quit 2>/dev/null || true)"
+fi
+
+if [[ -z "${MODEL_FILE}" || ! -e "${MODEL_FILE}" ]]; then
+    echo "Model file not found. Set MODEL_FILE=/path/to/Qwen3-Coder-Next-UD-IQ4_NL.gguf" >&2
+    exit 1
+fi
+
+if [[ ! -f "${PROMPT_FILE}" ]]; then
+    echo "Prompt file not found: ${PROMPT_FILE}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${HOT_CACHE_FILE}" ]]; then
+    echo "Hot-cache expert file not found: ${HOT_CACHE_FILE}" >&2
+    exit 1
+fi
+
+COMMON_ARGS=(
+    -m "${MODEL_FILE}"
+    -cmoe
+    -dev "${DEVICE}"
+    --moe-hot-cache-auto-reserve-mib "${HOT_CACHE_AUTO_RESERVE_MIB}"
+    --moe-hot-cache-max-mib "${HOT_CACHE_MAX_MIB}"
+    --moe-hot-cache "${HOT_CACHE_FILE}"
+    --moe-hot-cache-pp-reduce-merge "${PP_REDUCE_MERGE}"
+    -r "${REPS}"
+)
+
+if [[ "${VERBOSE}" != "0" && "${VERBOSE}" != "off" && "${VERBOSE}" != "false" ]]; then
+    COMMON_ARGS+=(-v)
+fi
+
+perf_out_arg() {
+    local suffix="$1"
+    if [[ -z "${MOE_LAYER_PERF_OUT}" ]]; then
+        return 0
+    fi
+
+    if [[ "${MOE_LAYER_PERF_OUT}" == *.json ]]; then
+        printf '%s\n' "${MOE_LAYER_PERF_OUT%.json}-${suffix}.json"
+    else
+        printf '%s\n' "${MOE_LAYER_PERF_OUT}-${suffix}.json"
+    fi
+}
+
+run_pp() {
+    echo "== Qwen3-Coder-Next prompt-processing bench =="
+    local perf_out
+    perf_out="$(perf_out_arg pp)"
+    local perf_args=()
+    if [[ -n "${perf_out}" ]]; then
+        perf_args=(--moe-layer-perf-out "${perf_out}")
+    fi
+    local prompt_args=(--prompt-file "${PROMPT_FILE}")
+    if [[ -n "${N_PROMPT}" ]]; then
+        prompt_args+=(-p "${N_PROMPT}")
+    fi
+    "${ROOT_DIR}/build/bin/llama-bench" \
+        "${COMMON_ARGS[@]}" \
+        "${perf_args[@]}" \
+        "${prompt_args[@]}" \
+        -n 0 \
+        "$@"
+}
+
+run_tg() {
+    echo "== Qwen3-Coder-Next token-generation bench =="
+    local perf_out
+    perf_out="$(perf_out_arg tg)"
+    local perf_args=()
+    if [[ -n "${perf_out}" ]]; then
+        perf_args=(--moe-layer-perf-out "${perf_out}")
+    fi
+    "${ROOT_DIR}/build/bin/llama-bench" \
+        "${COMMON_ARGS[@]}" \
+        "${perf_args[@]}" \
+        -p 0 \
+        -n "${N_GEN}" \
+        "$@"
+}
+
+case "${TEST_MODE}" in
+    pp)
+        run_pp "$@"
+        ;;
+    tg)
+        run_tg "$@"
+        ;;
+    both)
+        run_pp "$@"
+        run_tg "$@"
+        ;;
+    *)
+        echo "Unknown TEST_MODE='${TEST_MODE}'. Use pp, tg, or both." >&2
+        exit 1
+        ;;
+esac
