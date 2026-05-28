@@ -46,8 +46,6 @@ jobs:
             os: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
-<<<<<<< HEAD
-=======
 
     steps:
       - name: Clone
@@ -87,53 +85,18 @@ jobs:
 
   ubuntu-llvmpipe:
     runs-on: ubuntu-24.04
->>>>>>> 66f562989 (ci : refactor (#23789))
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
-          echo "CC=gcc-14" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-<<<<<<< HEAD
-          key: vulkan-${{ matrix.os }}-new
-          variant: ccache
-=======
           key: vulkan-ubuntu-24.04-llvmpipe
->>>>>>> 66f562989 (ci : refactor (#23789))
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Configure
-        id: cmake_configure
-        run: |
-          cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_VULKAN=ON
-
-      - name: Build
-        id: cmake_build
-        run: |
-          time cmake --build build -j $(nproc)
-
-  ubuntu-llvmpipe:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
 
       - name: Dependencies
         id: depends
@@ -160,13 +123,6 @@ jobs:
         with:
           path: ./vulkan_sdk
           version: ${{ env.VULKAN_SDK_VERSION }}
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: vulkan-ubuntu-24.04-llvmpipe
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
