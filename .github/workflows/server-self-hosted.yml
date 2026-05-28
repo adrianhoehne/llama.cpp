@@ -40,6 +40,7 @@ concurrency:
 
 jobs:
   server-metal:
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     runs-on: [self-hosted, llama-server, macOS, ARM64]
 
     name: server-metal (${{ matrix.wf_name }})
@@ -92,6 +93,7 @@ jobs:
           pytest -v -x -m "not slow"
 
   server-cuda:
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     runs-on: [self-hosted, llama-server, Linux, NVIDIA]
 
     name: server-cuda (${{ matrix.wf_name }})
@@ -131,6 +133,7 @@ jobs:
           pytest -v -x -m "not slow"
 
   server-kleidiai:
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     runs-on: ah-ubuntu_22_04-c8g_8x
 
     name: server-kleidiai (${{ matrix.wf_name }})

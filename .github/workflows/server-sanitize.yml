@@ -37,6 +37,7 @@ concurrency:
 
 jobs:
   server:
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     runs-on: [self-hosted, CPU, Linux, llama-server]
 
     strategy:
