@@ -44,6 +44,7 @@ jobs:
     name: Build static output
     if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     uses: ./.github/workflows/ui-build-self-hosted.yml
+
   ui-checks:
     name: Checks
     if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
