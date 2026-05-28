@@ -1,0 +1,355 @@
+System: You are a precise coding assistant. Answer in German unless the user explicitly asks for English. Prefer practical implementation details over broad theory. When code is requested, provide complete runnable examples.
+
+User: Ich moechte ein kleines Snake Spiel in HTML und JavaScript bauen. Es soll in einer einzelnen Datei laufen, ohne Build Tool und ohne externe Abhaengigkeiten. Die Steuerung soll mit den Pfeiltasten funktionieren. Bitte erklaere kurz die Struktur und gib dann den Code.
+
+Assistant: Wir koennen das als einzelne HTML-Datei bauen. Die Seite enthaelt ein Canvas, eine kleine Statusleiste und ein Script. Das Script verwaltet Spielzustand, Richtung, Snake-Segmente, Food-Position, Score und den Game Loop. Fuer die Kollisionen pruefen wir Wandkontakt und Selbstkollision. Das Canvas wird pro Tick komplett neu gezeichnet.
+
+Hier ist eine vollstaendige Version:
+
+```html
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Snake</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #101418;
+      color: #f2f5f7;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+    }
+
+    .game {
+      width: min(92vw, 560px);
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+      font-size: 16px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: #3d8bfd;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 1;
+      display: block;
+      border: 1px solid #2a333c;
+      background: #0b0f14;
+    }
+  </style>
+</head>
+<body>
+  <main class="game">
+    <div class="bar">
+      <strong>Score: <span id="score">0</span></strong>
+      <span id="state">Bereit</span>
+      <button id="restart">Neu starten</button>
+    </div>
+    <canvas id="board" width="480" height="480"></canvas>
+  </main>
+
+  <script>
+    const canvas = document.querySelector("#board");
+    const ctx = canvas.getContext("2d");
+    const scoreEl = document.querySelector("#score");
+    const stateEl = document.querySelector("#state");
+    const restartBtn = document.querySelector("#restart");
+
+    const size = 24;
+    const cells = canvas.width / size;
+    const tickMs = 95;
+
+    let snake;
+    let food;
+    let direction;
+    let queuedDirection;
+    let score;
+    let gameOver;
+    let timer;
+
+    function reset() {
+      snake = [
+        { x: 8, y: 10 },
+        { x: 7, y: 10 },
+        { x: 6, y: 10 }
+      ];
+      direction = { x: 1, y: 0 };
+      queuedDirection = direction;
+      score = 0;
+      gameOver = false;
+      scoreEl.textContent = score;
+      stateEl.textContent = "Laeuft";
+      placeFood();
+      clearInterval(timer);
+      timer = setInterval(tick, tickMs);
+      draw();
+    }
+
+    function placeFood() {
+      while (true) {
+        const candidate = {
+          x: Math.floor(Math.random() * cells),
+          y: Math.floor(Math.random() * cells)
+        };
+        if (!snake.some(part => part.x === candidate.x && part.y === candidate.y)) {
+          food = candidate;
+          return;
+        }
+      }
+    }
+
+    function setDirection(next) {
+      if (next.x + direction.x === 0 && next.y + direction.y === 0) {
+        return;
+      }
+      queuedDirection = next;
+    }
+
+    function tick() {
+      if (gameOver) {
+        return;
+      }
+
+      direction = queuedDirection;
+      const head = snake[0];
+      const nextHead = {
+        x: head.x + direction.x,
+        y: head.y + direction.y
+      };
+
+      const hitsWall =
+        nextHead.x < 0 || nextHead.y < 0 ||
+        nextHead.x >= cells || nextHead.y >= cells;
+      const hitsSelf = snake.some(part => part.x === nextHead.x && part.y === nextHead.y);
+
+      if (hitsWall || hitsSelf) {
+        gameOver = true;
+        stateEl.textContent = "Game Over";
+        clearInterval(timer);
+        draw();
+        return;
+      }
+
+      snake.unshift(nextHead);
+
+      if (nextHead.x === food.x && nextHead.y === food.y) {
+        score += 1;
+        scoreEl.textContent = score;
+        placeFood();
+      } else {
+        snake.pop();
+      }
+
+      draw();
+    }
+
+    function drawCell(x, y, color) {
+      ctx.fillStyle = color;
+      ctx.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = "#17202a";
+      for (let i = 0; i <= cells; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * size, 0);
+        ctx.lineTo(i * size, canvas.height);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(0, i * size);
+        ctx.lineTo(canvas.width, i * size);
+        ctx.stroke();
+      }
+
+      drawCell(food.x, food.y, "#ff5c7a");
+      snake.forEach((part, index) => {
+        drawCell(part.x, part.y, index === 0 ? "#7ee787" : "#2ea043");
+      });
+    }
+
+    window.addEventListener("keydown", event => {
+      if (event.key === "ArrowUp") setDirection({ x: 0, y: -1 });
+      if (event.key === "ArrowDown") setDirection({ x: 0, y: 1 });
+      if (event.key === "ArrowLeft") setDirection({ x: -1, y: 0 });
+      if (event.key === "ArrowRight") setDirection({ x: 1, y: 0 });
+    });
+
+    restartBtn.addEventListener("click", reset);
+    reset();
+  </script>
+</body>
+</html>
+```
+
+User: Das ist gut. Ich moechte aber, dass das Spiel auf dem Handy funktioniert. Fuege Touch- oder Swipe-Steuerung hinzu. Ausserdem soll der Score im Local Storage gespeichert werden, damit ein Highscore angezeigt wird.
+
+Assistant: Dafuer brauchen wir zwei Erweiterungen. Erstens erfassen wir `touchstart` und `touchend`, berechnen die Differenz und leiten daraus eine Richtung ab. Zweitens lesen wir beim Start den Highscore aus `localStorage`, aktualisieren ihn bei Game Over und zeigen ihn neben dem aktuellen Score an.
+
+Die wichtigsten Aenderungen sind:
+
+```js
+const highScoreEl = document.querySelector("#highscore");
+let highScore = Number(localStorage.getItem("snakeHighScore") || 0);
+highScoreEl.textContent = highScore;
+
+let touchStart = null;
+
+canvas.addEventListener("touchstart", event => {
+  const touch = event.changedTouches[0];
+  touchStart = { x: touch.clientX, y: touch.clientY };
+}, { passive: true });
+
+canvas.addEventListener("touchend", event => {
+  if (!touchStart) return;
+  const touch = event.changedTouches[0];
+  const dx = touch.clientX - touchStart.x;
+  const dy = touch.clientY - touchStart.y;
+
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+
+  if (Math.abs(dx) > Math.abs(dy)) {
+    setDirection(dx > 0 ? { x: 1, y: 0 } : { x: -1, y: 0 });
+  } else {
+    setDirection(dy > 0 ? { x: 0, y: 1 } : { x: 0, y: -1 });
+  }
+});
+
+function finishGame() {
+  gameOver = true;
+  stateEl.textContent = "Game Over";
+  clearInterval(timer);
+
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem("snakeHighScore", String(highScore));
+    highScoreEl.textContent = highScore;
+  }
+}
+```
+
+Im HTML wuerdest du die Statuszeile zum Beispiel so erweitern:
+
+```html
+<strong>Score: <span id="score">0</span></strong>
+<strong>Highscore: <span id="highscore">0</span></strong>
+<span id="state">Bereit</span>
+```
+
+User: Ich moechte jetzt noch eine kleine Architektur-Erklaerung. Was passiert pro Tick und wo koennte ich spaeter Features wie Hindernisse, Level oder eine Pause-Funktion einfuegen?
+
+Assistant: Pro Tick laeuft der Code in einer festen Reihenfolge:
+
+1. Die zuletzt vorgemerkte Richtung wird uebernommen.
+2. Aus Kopfposition und Richtung wird der naechste Kopf berechnet.
+3. Kollisionen werden geprueft.
+4. Der neue Kopf wird vorne eingefuegt.
+5. Wenn Food getroffen wurde, steigt der Score und neues Food wird platziert.
+6. Wenn kein Food getroffen wurde, wird das letzte Snake-Segment entfernt.
+7. Das Canvas wird neu gezeichnet.
+
+Hindernisse passen am besten in die Kollisionserkennung. Du kannst ein Array `obstacles` einfuehren und dann pruefen:
+
+```js
+const hitsObstacle = obstacles.some(block =>
+  block.x === nextHead.x && block.y === nextHead.y
+);
+
+if (hitsWall || hitsSelf || hitsObstacle) {
+  finishGame();
+  draw();
+  return;
+}
+```
+
+Level passen gut in die Food-Logik. Alle fuenf Punkte koennte das Level steigen, der Tick schneller werden und neue Hindernisse koennten entstehen. Wichtig ist, den Timer dann sauber neu zu setzen:
+
+```js
+function updateLevel() {
+  const nextLevel = Math.floor(score / 5) + 1;
+  if (nextLevel !== level) {
+    level = nextLevel;
+    clearInterval(timer);
+    timer = setInterval(tick, Math.max(45, tickMs - (level - 1) * 8));
+  }
+}
+```
+
+Eine Pause-Funktion sollte nicht den Spielzustand veraendern. Sie sollte nur verhindern, dass `tick()` weiterarbeitet:
+
+```js
+let paused = false;
+
+function togglePause() {
+  if (gameOver) return;
+  paused = !paused;
+  stateEl.textContent = paused ? "Pause" : "Laeuft";
+}
+
+function tick() {
+  if (gameOver || paused) {
+    return;
+  }
+  // restlicher Tick
+}
+```
+
+User: Was wuerdest du als naechsten Refactor empfehlen, wenn das Projekt groesser wird?
+
+Assistant: Ich wuerde zuerst den Spielzustand und das Rendering trennen. Aktuell weiss `tick()` sowohl ueber Regeln als auch ueber Darstellung Bescheid. Fuer ein groesseres Spiel waere diese Struktur robuster:
+
+```js
+const game = {
+  snake: [],
+  food: null,
+  obstacles: [],
+  direction: { x: 1, y: 0 },
+  queuedDirection: { x: 1, y: 0 },
+  score: 0,
+  level: 1,
+  paused: false,
+  gameOver: false
+};
+
+function updateGame(game) {
+  // nur Regeln und Zustand
+}
+
+function renderGame(ctx, game) {
+  // nur Zeichnen
+}
+
+function handleInput(game, direction) {
+  // nur Richtung und Eingaben
+}
+```
+
+Damit kannst du spaeter Tests fuer `updateGame()` schreiben, ohne ein Canvas zu brauchen. Ausserdem lassen sich Features wie Hindernisse, Portale oder ein zweiter Spieler leichter einfuegen, weil sie nicht direkt mit DOM-Code vermischt sind.
+
+User: Bitte merke dir fuer den Benchmark: Das Ziel ist nicht, perfektes Snake zu bauen. Der Prompt soll realistisch genug sein, damit ein Coding-Modell viele Layer und Experten nutzt.
+
+Assistant: Verstanden. Fuer einen Prompt-Processing-Benchmark ist diese Art Eingabe sinnvoll, weil sie natuerliche Sprache, Anforderungen, erklaerenden Text, HTML, CSS und JavaScript kombiniert. Dadurch entsteht eine Router-Verteilung, die naeher an einem echten Coding-Dialog liegt als zufaellige Token-IDs.

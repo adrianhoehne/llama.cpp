@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${ROOT_DIR}/codex-bench.env"
+
+if [[ -f "${CONFIG_FILE}" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "${CONFIG_FILE}"
+    set +a
+fi
+
+if [[ "${MATRIX_MODE:-}" == "pp-threshold" ]]; then
+    BASE_PERF_OUT="${MOE_LAYER_PERF_OUT:-${ROOT_DIR}/coder-bench}"
+    PROMPT_SIZES="${PROMPT_SIZES:-128 512 1024 2048 2927}"
+    BYPASS_MODES="${BYPASS_MODES:-on off}"
+
+    export TEST_MODE=pp
+    for bypass in ${BYPASS_MODES}; do
+        for prompt_size in ${PROMPT_SIZES}; do
+            echo "== matrix: bypass=${bypass}, n_prompt=${prompt_size} =="
+            export LLAMA_MOE_HOT_CACHE_PP_BYPASS="${bypass}"
+            export N_PROMPT="${prompt_size}"
+            export MOE_LAYER_PERF_OUT="${BASE_PERF_OUT}-bypass-${bypass}-p${prompt_size}"
+            "${ROOT_DIR}/start-bench-qwen3-coder-next"
+        done
+    done
+    exit 0
+fi
+
+if [[ "${MATRIX_MODE:-}" == "pp-cache-size" ]]; then
+    BASE_PERF_OUT="${MOE_LAYER_PERF_OUT:-${ROOT_DIR}/qwen36-bench}"
+    CACHE_MIBS="${CACHE_MIBS:-512 1024 2048 3072 4096}"
+    BYPASS_MODES="${BYPASS_MODES:-off on}"
+
+    export TEST_MODE=pp
+    for cache_mib in ${CACHE_MIBS}; do
+        for bypass in ${BYPASS_MODES}; do
+            echo "== matrix: cache_mib=${cache_mib}, bypass=${bypass} =="
+            export HOT_CACHE_MAX_MIB="${cache_mib}"
+            export LLAMA_MOE_HOT_CACHE_PP_BYPASS="${bypass}"
+            export MOE_LAYER_PERF_OUT="${BASE_PERF_OUT}-mib-${cache_mib}-bypass-${bypass}"
+            "${ROOT_DIR}/start-bench-qwen3-coder-next"
+        done
+    done
+    exit 0
+fi
+
+exec "${ROOT_DIR}/start-bench-qwen3-coder-next"
