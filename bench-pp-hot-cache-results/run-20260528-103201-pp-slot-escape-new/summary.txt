@@ -1,0 +1,15 @@
+OUT_DIR=bench-pp-hot-cache-results/run-20260528-103201-pp-slot-escape-new
+
+== baseline-standard-cold ==
+Writing: bench-pp-hot-cache-results/run-20260528-103201-pp-slot-escape-new/baseline-standard-cold.md
+
+== hot-cache-no-slot-escape ==
+Writing: bench-pp-hot-cache-results/run-20260528-103201-pp-slot-escape-new/hot-cache-no-slot-escape.md
+
+== hot-cache-slot-ratio-023 ==
+Writing: bench-pp-hot-cache-results/run-20260528-103201-pp-slot-escape-new/hot-cache-slot-ratio-023.md
+
+== hot-cache-force-cold-escape ==
+Writing: bench-pp-hot-cache-results/run-20260528-103201-pp-slot-escape-new/hot-cache-force-cold-escape.md
+
+Done. OUT_DIR=bench-pp-hot-cache-results/run-20260528-103201-pp-slot-escape-new
