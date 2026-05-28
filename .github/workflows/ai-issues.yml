@@ -6,7 +6,7 @@ on:
 
 jobs:
   find-related:
-    if: github.event.action == 'opened'
+    if: ${{ github.event.action == 'opened' && (github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp') }}
     runs-on: [self-hosted, opencode]
 
     permissions:

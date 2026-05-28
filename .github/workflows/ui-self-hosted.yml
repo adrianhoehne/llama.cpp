@@ -42,10 +42,11 @@ concurrency:
 jobs:
   ui-build:
     name: Build static output
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     uses: ./.github/workflows/ui-build-self-hosted.yml
-
   ui-checks:
     name: Checks
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     needs: ui-build
     runs-on: [self-hosted, PLAYWRIGHT]
     continue-on-error: true
@@ -83,6 +84,7 @@ jobs:
 
   e2e-tests:
     name: E2E Tests
+    if: ${{ github.repository == 'ggml-org/llama.cpp' || github.repository == 'ggerganov/llama.cpp' }}
     needs: ui-build
     runs-on: [self-hosted, PLAYWRIGHT]
     steps:
