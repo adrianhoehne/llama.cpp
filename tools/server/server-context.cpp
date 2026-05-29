@@ -24,6 +24,7 @@
 #include <cinttypes>
 #include <exception>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <filesystem>
 #include <mutex>
@@ -663,6 +664,11 @@ public:
     }
 
 private:
+    struct moe_hot_cache_disk_save_result {
+        std::string path;
+        std::string backup_path;
+    };
+
     // note: accessing these fields outside of this class is not thread-safe
     // use server_context methods instead
 
@@ -2202,6 +2208,23 @@ private:
                             stats.hot_experts,
                             stats.layers_changed);
 
+                    moe_hot_cache_disk_save_result disk_save;
+                    if (task.moe_hot_cache_save_to_disk) {
+                        try {
+                            disk_save = save_moe_hot_cache_json_to_disk(task.moe_hot_cache_json);
+                        } catch (const std::invalid_argument & e) {
+                            send_error(task, e.what(), ERROR_TYPE_INVALID_REQUEST);
+                            break;
+                        } catch (const std::exception & e) {
+                            send_error(task, string_format("MoE hot-cache applied but failed to save to disk: %s", e.what()));
+                            break;
+                        }
+
+                        SRV_INF("MoE hot-cache saved to disk: path = %s, backup = %s\n",
+                                disk_save.path.c_str(),
+                                disk_save.backup_path.c_str());
+                    }
+
                     auto res = std::make_unique<server_task_result_json>();
                     res->id = task.id;
                     res->data = json {
@@ -2213,7 +2236,12 @@ private:
                         {"max_exchange",   stats.max_exchange},
                         {"hot_experts",    stats.hot_experts},
                         {"layers_changed", stats.layers_changed},
+                        {"saved_to_disk",  task.moe_hot_cache_save_to_disk},
                     };
+                    if (task.moe_hot_cache_save_to_disk) {
+                        res->data["path"] = disk_save.path;
+                        res->data["backup_path"] = disk_save.backup_path;
+                    }
                     queue_results.send(std::move(res));
                 } break;
             case SERVER_TASK_TYPE_SLOT_SAVE:
@@ -3587,6 +3615,81 @@ private:
         }
     }
 
+    std::filesystem::path next_moe_hot_cache_backup_path(const std::filesystem::path & path) const {
+        const std::filesystem::path parent = path.parent_path();
+        const std::string stem = path.stem().string();
+        const std::string extension = path.extension().string();
+
+        for (uint64_t counter = 1; counter < std::numeric_limits<uint64_t>::max(); ++counter) {
+            const std::filesystem::path candidate =
+                parent / (stem + "." + std::to_string(counter) + extension);
+
+            std::error_code ec;
+            const bool exists = std::filesystem::exists(candidate, ec);
+            if (ec) {
+                throw std::runtime_error(string_format(
+                        "failed to inspect MoE hot-cache backup path '%s': %s",
+                        candidate.string().c_str(),
+                        ec.message().c_str()));
+            }
+
+            if (!exists) {
+                return candidate;
+            }
+        }
+
+        throw std::runtime_error("failed to choose a MoE hot-cache backup path");
+    }
+
+    moe_hot_cache_disk_save_result save_moe_hot_cache_json_to_disk(const std::string & json_str) const {
+        if (params_base.moe_hot_cache.empty()) {
+            throw std::invalid_argument("--moe-hot-cache is required to save a hot-cache JSON to disk");
+        }
+
+        const std::filesystem::path cache_path(params_base.moe_hot_cache);
+
+        std::error_code ec;
+        if (!std::filesystem::exists(cache_path, ec)) {
+            if (ec) {
+                throw std::runtime_error(string_format(
+                        "failed to inspect MoE hot-cache file '%s': %s",
+                        cache_path.string().c_str(),
+                        ec.message().c_str()));
+            }
+            throw std::runtime_error(string_format(
+                    "MoE hot-cache file '%s' does not exist",
+                    cache_path.string().c_str()));
+        }
+
+        const std::filesystem::path backup_path = next_moe_hot_cache_backup_path(cache_path);
+        if (!std::filesystem::copy_file(cache_path, backup_path, std::filesystem::copy_options::none, ec)) {
+            throw std::runtime_error(string_format(
+                    "failed to copy MoE hot-cache file '%s' to '%s': %s",
+                    cache_path.string().c_str(),
+                    backup_path.string().c_str(),
+                    ec ? ec.message().c_str() : "destination already exists"));
+        }
+
+        std::ofstream file(cache_path, std::ios::binary | std::ios::trunc);
+        if (!file) {
+            throw std::runtime_error(string_format(
+                    "failed to open MoE hot-cache file '%s' for writing",
+                    cache_path.string().c_str()));
+        }
+
+        file << json_str << '\n';
+        if (!file) {
+            throw std::runtime_error(string_format(
+                    "failed to write MoE hot-cache file '%s'",
+                    cache_path.string().c_str()));
+        }
+
+        return {
+            cache_path.string(),
+            backup_path.string(),
+        };
+    }
+
     void set_moe_layer_perf_mode(llama_moe_layer_perf_mode mode) const {
         llama_moe_layer_perf_set_mode(mode);
         forget_moe_layer_perf_json();
@@ -4100,9 +4203,14 @@ void server_routes::init_routes() {
             return res;
         }
 
+        bool save_to_disk = false;
         try {
-            const json parsed = json::parse(moe_hot_cache_json);
-            GGML_UNUSED(parsed);
+            json parsed = json::parse(moe_hot_cache_json);
+            if (parsed.is_object() && parsed.contains("save_to_disk")) {
+                save_to_disk = json_value(parsed, "save_to_disk", false);
+                parsed.erase("save_to_disk");
+                moe_hot_cache_json = parsed.dump(2);
+            }
         } catch (const std::exception & e) {
             res->error(format_error_response(string_format("Invalid MoE hot-cache JSON: %s", e.what()), ERROR_TYPE_INVALID_REQUEST));
             return res;
@@ -4115,6 +4223,7 @@ void server_routes::init_routes() {
             server_task task(SERVER_TASK_TYPE_SET_MOE_HOT_CACHE);
             task.id = res->rd.get_new_id();
             task.moe_hot_cache_json = std::move(moe_hot_cache_json);
+            task.moe_hot_cache_save_to_disk = save_to_disk;
             res->rd.post_task(std::move(task), true);
         }
 
