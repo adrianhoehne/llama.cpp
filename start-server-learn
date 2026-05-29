@@ -1,4 +1,0 @@
-#!/bin/bash
-
-exec /home/adrian/llama.exp/build/bin/llama-server --host 0.0.0.0 --port 28002 --models-preset /home/adrian/llama.exp/model_config.ini --models-max 1 --jinja --offline --moe-layer-perf-out $*
-

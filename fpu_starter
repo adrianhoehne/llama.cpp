@@ -1,5 +1,0 @@
-#!/bin/bash
-
-#exec /home/adrian/llama.cpp/build/bin/llama-server --host 0.0.0.0 --port 28002 --models-preset /home/adrian/models/model_config.ini --models-max 1 --jinja --offline
-exec /home/adrian/llama.exp/build/bin/llama-server --host 0.0.0.0 --port 28002 --models-preset /home/adrian/llama.exp/model_config.ini --models-max 1 --jinja --offline
-#exec /home/adrian/llama.mtp/llama.cpp/build/bin/llama-server --host 0.0.0.0 --port 28002 --models-preset /home/adrian/models/model_config_mtp.ini --offline --metrics --models-max 1 --jinja
