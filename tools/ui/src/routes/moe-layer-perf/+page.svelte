@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { ArrowLeft, Download, UploadCloud } from '@lucide/svelte';
+	import { onMount, tick } from 'svelte';
+	import { ArrowLeft, Download, Save, UploadCloud } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -246,6 +246,7 @@
 	let applyError = $state<string | null>(null);
 	let applyStatus = $state<string | null>(null);
 	let applyingHotCache = $state(false);
+	let applyingHotCacheToDisk = $state(false);
 	let saveError = $state<string | null>(null);
 	let saveStatus = $state<string | null>(null);
 	let savingPerf = $state(false);
@@ -253,9 +254,11 @@
 	let updateIntervalSeconds = $state(1);
 	let mounted = $state(false);
 	let lastRequestModel = $state<string | null>(null);
+	let refreshTimeout: number | null = null;
 
 	let requestModel = $derived(isRouterMode() ? modelsStore.selectedModelName : null);
 	let updateIntervalMs = $derived(Math.round(clamp(updateIntervalSeconds, 0.5, 3) * 1000));
+	let applyingAnyHotCache = $derived(applyingHotCache || applyingHotCacheToDisk);
 	let visualLayers = $derived(toViewLayers(perf?.layers ?? [], previousPerf?.layers ?? []));
 	let nExpert = $derived(resolveExpertCount(perf, visualLayers));
 	let gridSide = $derived(Math.max(1, Math.ceil(Math.sqrt(nExpert))));
@@ -526,6 +529,8 @@
 	}
 
 	function handleBack() {
+		stopRefreshLoop();
+
 		if (window.history.length > 1) {
 			window.history.back();
 			return;
@@ -582,10 +587,56 @@
 
 		updateIntervalSeconds = Number(next.toFixed(1));
 		input.value = String(updateIntervalSeconds);
+
+		if (mounted && !loading) {
+			scheduleNextRefresh();
+		}
 	}
 
-	async function refresh() {
-		if (loading) {
+	function clearRefreshTimer() {
+		if (refreshTimeout !== null) {
+			window.clearTimeout(refreshTimeout);
+			refreshTimeout = null;
+		}
+	}
+
+	function stopRefreshLoop() {
+		mounted = false;
+		clearRefreshTimer();
+	}
+
+	function scheduleNextRefresh() {
+		if (!mounted) {
+			return;
+		}
+
+		clearRefreshTimer();
+		refreshTimeout = window.setTimeout(() => {
+			refreshTimeout = null;
+			void runRefreshLoop();
+		}, updateIntervalMs);
+	}
+
+	function nextAnimationFrame(): Promise<void> {
+		return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+	}
+
+	async function waitForViewBuild() {
+		await tick();
+		if (!mounted) {
+			return;
+		}
+
+		await nextAnimationFrame();
+		if (!mounted) {
+			return;
+		}
+
+		await nextAnimationFrame();
+	}
+
+	async function refresh(): Promise<void> {
+		if (loading || !mounted) {
 			return;
 		}
 
@@ -599,37 +650,81 @@
 			const model = requestModel;
 			const nextPerf = await MoeLayerPerfService.get(model);
 
+			if (!mounted) {
+				return;
+			}
+
 			previousPerf = model === lastRequestModel ? perf : null;
 			lastRequestModel = model;
 			perf = nextPerf;
 			error = null;
 			lastUpdated = new Date();
 		} catch (cause) {
-			error = cause instanceof Error ? cause.message : 'Failed to load MoE layer performance';
+			if (mounted) {
+				error = cause instanceof Error ? cause.message : 'Failed to load MoE layer performance';
+			}
 		} finally {
 			loading = false;
 		}
 	}
 
-	async function applyVisibleHotCache() {
-		if (!perf || applyingHotCache) {
+	async function runRefreshLoop() {
+		clearRefreshTimer();
+		await refresh();
+		if (!mounted) {
 			return;
 		}
 
-		applyingHotCache = true;
+		await waitForViewBuild();
+		scheduleNextRefresh();
+	}
+
+	async function applyVisibleHotCache(saveToDisk = false) {
+		if (!perf || applyingAnyHotCache) {
+			return;
+		}
+
+		clearRefreshTimer();
+
+		if (saveToDisk) {
+			applyingHotCacheToDisk = true;
+		} else {
+			applyingHotCache = true;
+		}
 		applyError = null;
 		applyStatus = null;
 		saveError = null;
 		saveStatus = null;
 
 		try {
-			const result = await MoeLayerPerfService.applyHotCache(perf, requestModel);
-			applyStatus = `Applied ${formatInteger(result.exchanged)} of ${formatInteger(result.candidates)} deltas across ${formatInteger(result.layers_changed)} layers`;
-			await refresh();
+			const result = await MoeLayerPerfService.applyHotCache(perf, requestModel, saveToDisk);
+			const statusParts = [
+				`Applied ${formatInteger(result.exchanged)} of ${formatInteger(result.candidates)} deltas across ${formatInteger(result.layers_changed)} layers`
+			];
+
+			if (result.saved_to_disk) {
+				statusParts.push(
+					result.path && result.backup_path
+						? `saved to ${result.path}; backup ${result.backup_path}`
+						: 'saved to disk'
+				);
+			}
+
+			applyStatus = statusParts.join(' · ');
+			await runRefreshLoop();
 		} catch (cause) {
-			applyError = cause instanceof Error ? cause.message : 'Failed to apply MoE hot-cache';
+			applyError =
+				cause instanceof Error
+					? cause.message
+					: saveToDisk
+						? 'Failed to apply MoE hot-cache to disk'
+						: 'Failed to apply MoE hot-cache';
 		} finally {
-			applyingHotCache = false;
+			if (saveToDisk) {
+				applyingHotCacheToDisk = false;
+			} else {
+				applyingHotCache = false;
+			}
 		}
 	}
 
@@ -660,19 +755,9 @@
 
 	onMount(() => {
 		mounted = true;
-		void refresh();
-	});
+		void runRefreshLoop();
 
-	$effect(() => {
-		if (!mounted) {
-			return;
-		}
-
-		const interval = window.setInterval(() => {
-			void refresh();
-		}, updateIntervalMs);
-
-		return () => window.clearInterval(interval);
+		return stopRefreshLoop;
 	});
 </script>
 
@@ -743,11 +828,21 @@
 				<Button
 					variant="outline"
 					size="sm"
-					onclick={applyVisibleHotCache}
-					disabled={!perf || !perf.enabled || applyingHotCache}
+					onclick={() => applyVisibleHotCache(false)}
+					disabled={!perf || !perf.enabled || applyingAnyHotCache}
 				>
 					<UploadCloud class="h-4 w-4" />
 					<span>{applyingHotCache ? 'Applying' : 'Apply cache'}</span>
+				</Button>
+
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={() => applyVisibleHotCache(true)}
+					disabled={!perf || !perf.enabled || applyingAnyHotCache}
+				>
+					<Save class="h-4 w-4" />
+					<span>{applyingHotCacheToDisk ? 'Applying to disk' : 'Apply to disk'}</span>
 				</Button>
 
 				<Button

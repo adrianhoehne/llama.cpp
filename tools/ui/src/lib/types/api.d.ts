@@ -188,6 +188,9 @@ export interface ApiMoeHotCacheApplyResponse {
 	max_exchange: number;
 	hot_experts: number;
 	layers_changed: number;
+	saved_to_disk?: boolean;
+	path?: string;
+	backup_path?: string;
 }
 
 export interface ApiLlamaCppServerProps {
