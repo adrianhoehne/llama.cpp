@@ -172,6 +172,7 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_SET_MOE_HOT_CACHE
     std::string moe_hot_cache_json;
+    bool        moe_hot_cache_save_to_disk = false;
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
