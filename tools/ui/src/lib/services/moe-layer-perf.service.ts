@@ -45,11 +45,15 @@ export class MoeLayerPerfService {
 
 	static async applyHotCache(
 		perf: ApiMoeLayerPerfResponse,
-		model?: string | null
+		model?: string | null,
+		saveToDisk = false
 	): Promise<ApiMoeHotCacheApplyResponse> {
 		const options = {
 			method: 'POST',
-			body: JSON.stringify(perf)
+			body: JSON.stringify({
+				...perf,
+				save_to_disk: saveToDisk
+			})
 		};
 
 		if (model) {

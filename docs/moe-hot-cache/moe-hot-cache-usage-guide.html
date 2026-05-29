@@ -647,10 +647,12 @@ cmake --build build -j8
         </p>
 
         <p>
-          The page also includes a <code>Save JSON</code> button next to <code>Apply cache</code>. It writes the
-          currently displayed <code>/moe-layer-perf</code> snapshot to a JSON file. Browsers that support the native
-          save-file picker let you choose the file name and destination; otherwise the browser handles it as a normal
-          download according to its download settings.
+          The page also includes cache action buttons. <code>Apply cache</code> applies the displayed snapshot only to
+          the running hot cache. <code>Apply to disk</code> applies the same snapshot and asks the server to persist it
+          into the file passed with <code>--moe-hot-cache</code>, first copying the existing file to a numbered backup.
+          <code>Save JSON</code> only saves a browser-side copy of the displayed <code>/moe-layer-perf</code> snapshot.
+          Browsers that support the native save-file picker let you choose the file name and destination; otherwise the
+          browser handles it as a normal download according to its download settings.
         </p>
 
         <div class="workflow-grid">
@@ -763,8 +765,10 @@ curl -sS http://127.0.0.1:8080/moe-layer-perf \
 
         <div class="note">
           <strong>Web UI:</strong>
-          the <code>#/moe-layer-perf</code> page has an <code>Apply cache</code> button. It posts the currently
-          displayed list to <code>/moe-hot-cache</code>, waits for the server response, and then refreshes the view.
+          the <code>#/moe-layer-perf</code> page has <code>Apply cache</code> and <code>Apply to disk</code> buttons.
+          Both post the currently displayed list to <code>/moe-hot-cache</code>, wait for the server response, and then
+          refresh the view. <code>Apply to disk</code> additionally sends <code>save_to_disk: true</code>, causing the
+          server to back up and overwrite the configured <code>--moe-hot-cache</code> file after a successful apply.
           The adjacent <code>Save JSON</code> button saves the same displayed <code>/moe-layer-perf</code> snapshot
           so it can be reused as a cache input or archived with a benchmark run.
         </div>
@@ -965,8 +969,8 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
               </tr>
               <tr>
                 <td><code>GET /moe-hot-cache</code><br><code>POST /moe-hot-cache</code></td>
-                <td>HTTP endpoint</td>
-                <td>Applies a new hot-cache expert list at runtime. <code>POST</code> sends the JSON body explicitly. <code>GET</code> without a JSON body applies the current <code>/moe-layer-perf</code> snapshot. In router mode, pass <code>?model=&lt;name&gt;</code> when multiple models are loaded.</td>
+                <td>HTTP endpoint; optional root field <code>"save_to_disk": true</code></td>
+                <td>Applies a new hot-cache expert list at runtime. <code>POST</code> sends the JSON body explicitly. <code>GET</code> without a JSON body applies the current <code>/moe-layer-perf</code> snapshot. With <code>save_to_disk</code>, a successful apply first copies the current <code>--moe-hot-cache</code> file to a numbered backup such as <code>moe-hot-cache.1.json</code>, then overwrites the configured file with the new JSON. In router mode, pass <code>?model=&lt;name&gt;</code> when multiple models are loaded.</td>
               </tr>
               <tr>
                 <td><code>LLAMA_MOE_LAYER_PERF</code></td>
