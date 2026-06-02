@@ -94,6 +94,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head = 2;
         n_ff   = 192;
         n_layer = 5; // need at least 5 for swa_pattern (every 5th is full_attention)
+    } else if (arch == LLM_ARCH_MELLUM) {
+        n_layer = 4; // Mellum uses three SWA layers followed by one full-attention layer.
     } else if (arch == LLM_ARCH_GEMMA3N) {
         n_embd = 64;
         n_head = 1;
@@ -185,6 +187,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
+    } else if (arch == LLM_ARCH_MELLUM) {
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA, 10000.0f);
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({1, 1, 1, 0}));
     } else if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
@@ -210,7 +215,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(1));
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
-        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         uint32_t(2)); // sigmoid
+        const uint32_t expert_gating_func = arch == LLM_ARCH_MELLUM ? uint32_t(1) : uint32_t(2);
+        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         expert_gating_func);
         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
     }
@@ -325,6 +331,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_GROK:
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_MELLUM:
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:

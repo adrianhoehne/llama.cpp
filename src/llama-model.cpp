@@ -102,6 +102,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen3(params);
         case LLM_ARCH_QWEN3MOE:
             return new llama_model_qwen3moe(params);
+        case LLM_ARCH_MELLUM:
+            return new llama_model_mellum(params);
         case LLM_ARCH_QWEN3VL:
             return new llama_model_qwen3vl(params);
         case LLM_ARCH_QWEN3VLMOE:
@@ -1799,7 +1801,7 @@ void llama_model::print_info() const {
             LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
         }
 
-        if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
+        if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_MELLUM || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
             LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
         }
 
@@ -2355,6 +2357,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_MELLUM:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
         case LLM_ARCH_OLMO2:
