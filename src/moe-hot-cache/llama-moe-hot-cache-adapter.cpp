@@ -41,6 +41,12 @@ static llama_moe_hot_cache_graph_profile qwen3next_profile() {
     return profile;
 }
 
+static llama_moe_hot_cache_graph_profile mellum_profile() {
+    // Mellum uses the same top-k softmax routed SILU MoE shape as Qwen3Next,
+    // without a shared expert branch. Keep the same decode routing limits.
+    return qwen3next_profile();
+}
+
 static llama_moe_hot_cache_graph_profile gemma4_profile() {
     // Gemma's cold lane is usually sparse during decode. Use the direct merge
     // path so the CPU lane reduces only the compact cold prefix before joining
@@ -64,6 +70,7 @@ static llama_moe_hot_cache_graph_profile gemma4_profile() {
 static const llama_moe_hot_cache_model_adapter ADAPTERS[] = {
     { LLM_ARCH_QWEN35MOE, "qwen35moe", llama_moe_hot_cache_graph_kind::qwen35_ffn, LLM_FFN_SILU },
     { LLM_ARCH_QWEN3NEXT, "qwen3next", llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
+    { LLM_ARCH_MELLUM,    "mellum",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
     { LLM_ARCH_GEMMA4,    "gemma4",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_GELU },
 };
 
@@ -186,6 +193,8 @@ llama_moe_hot_cache_graph_profile llama_moe_hot_cache_model_adapter::profile() c
             return qwen35_profile();
         case LLM_ARCH_QWEN3NEXT:
             return qwen3next_profile();
+        case LLM_ARCH_MELLUM:
+            return mellum_profile();
         case LLM_ARCH_GEMMA4:
             return gemma4_profile();
         default:

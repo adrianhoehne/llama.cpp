@@ -497,7 +497,7 @@
         <p>
           This page is the operational companion to the
           <a href="moe-hot-cache-architecture-explainer.html">architecture explainer</a>.
-          It assumes an already supported MoE architecture such as Qwen35Moe, Qwen3Next, or Gemma4.
+          It assumes an already supported MoE architecture such as Qwen35Moe, Qwen3Next, Mellum, or Gemma4.
           The key rule is simple: keep the normal MoE experts on the CPU with <code>--cpu-moe</code>,
           then add a selected GPU copy through <code>--moe-hot-cache</code>.
         </p>
@@ -1156,6 +1156,7 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
         <div class="pill-list">
           <span class="pill"><span class="ok">Supported adapters:</span>&nbsp;Qwen35Moe</span>
           <span class="pill">Qwen3Next</span>
+          <span class="pill">Mellum</span>
           <span class="pill">Gemma4</span>
           <span class="pill"><span class="warn">Normal models:</span>&nbsp;use standard llama.cpp path</span>
         </div>

@@ -1,5 +1,8 @@
 #include "models.h"
 
+#include "moe-hot-cache/llama-moe-hot-cache.h"
+#include "moe-hot-cache/llama-moe-hot-cache-pp.h"
+
 // Loads Mellum-specific MoE and interleaved SWA metadata from GGUF.
 void llama_model_mellum::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
@@ -82,7 +85,9 @@ std::unique_ptr<llm_graph_context> llama_model_mellum::build_arch_graph(const ll
 }
 
 // Builds Mellum's Qwen3-MoE block sequence with per-layer SWA routing.
-llama_model_mellum::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_mellum::graph::graph(const llama_model & model, const llm_graph_params & params) :
+    llm_graph_context(params),
+    model(model) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -163,8 +168,17 @@ llama_model_mellum::graph::graph(const llama_model & model, const llm_graph_para
                 LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        ggml_tensor * moe_out =
-            build_moe_ffn(cur,
+        ggml_tensor * moe_out = nullptr;
+        const bool hot_cache_active =
+            llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits) &&
+            !llama_moe_hot_cache_pp_policy::bypass_hot_cache_for_prompt_processing(gphase, cparams.warmup, cur->ne[1], 1);
+        if (hot_cache_active) {
+            ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
+            cb(logits, "ffn_moe_logits", il);
+
+            moe_out = build_layer_moe_hot(cur, logits, il);
+        } else {
+            moe_out = build_moe_ffn(cur,
                     model.layers[il].ffn_gate_inp,
                     model.layers[il].ffn_up_exps,
                     model.layers[il].ffn_gate_exps,
@@ -179,6 +193,7 @@ llama_model_mellum::graph::graph(const llama_model & model, const llm_graph_para
                     model.layers[il].ffn_up_exps_s,
                     model.layers[il].ffn_gate_exps_s,
                     model.layers[il].ffn_down_exps_s);
+        }
         cb(moe_out, "ffn_moe_out", il);
         cur = moe_out;
 

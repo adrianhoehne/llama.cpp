@@ -1508,7 +1508,7 @@
                 <tr><td><code>set_mul_mat_id_flags()</code></td><td>Stores hot-cache flags in <code>ggml_mul_mat_id</code> operation params.</td></tr>
                 <tr><td><code>build_lora_mm_id()</code></td><td>Builds LoRA-compatible <code>mul_mat_id</code> nodes for selected expert IDs.</td></tr>
                 <tr><td><code>build_moe_ffn_with_ids()</code></td><td>Common FFN core for hot and cold branches, including gate/up/down variants, activation, scales, weights, and reduce.</td></tr>
-                <tr><td><code>build_moe_hot_from_logits()</code></td><td>Generic logits-based hot-cache graph used by Gemma4 and Qwen3Next.</td></tr>
+                <tr><td><code>build_moe_hot_from_logits()</code></td><td>Generic logits-based hot-cache graph used by Gemma4, Mellum, and Qwen3Next.</td></tr>
                 <tr><td><code>qwen35 build_layer_ffn_hot()</code></td><td>Qwen35-specific graph that builds router logits inside the hot-cache path.</td></tr>
               </tbody>
             </table>
@@ -1520,9 +1520,10 @@
             <table class="field-table">
               <thead><tr><th>Item</th><th>Responsibility</th></tr></thead>
               <tbody>
-                <tr><td><code>ADAPTERS</code></td><td>Central allow-list for <code>QWEN35MOE</code>, <code>QWEN3NEXT</code>, and <code>GEMMA4</code>.</td></tr>
+                <tr><td><code>ADAPTERS</code></td><td>Central allow-list for <code>QWEN35MOE</code>, <code>QWEN3NEXT</code>, <code>MELLUM</code>, and <code>GEMMA4</code>.</td></tr>
                 <tr><td><code>qwen35_profile()</code></td><td>Qwen35 profile: qwen-specific graph kind, single-token CPU decode routing, and proven decode shortcuts.</td></tr>
                 <tr><td><code>qwen3next_profile()</code></td><td>Qwen3Next profile: logits graph, tiny multi-token routing up to four tokens, and conservative prefix tasks.</td></tr>
+                <tr><td><code>mellum_profile()</code></td><td>Mellum profile: logits graph, SILU FFN, tiny multi-token routing up to four tokens, and conservative prefix tasks.</td></tr>
                 <tr><td><code>gemma4_profile()</code></td><td>Gemma4 profile: logits graph, GELU FFN, branch-reduce option, and decode merge shortcuts.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_graph_tweaks</code></td><td>Reads env-controlled graph toggles such as parallel mode, merge mode, CPU routing, prefix reduction, and PP reduce merge.</td></tr>
                 <tr><td><code>find_model_adapter()</code>, <code>supports_graph_kind()</code></td><td>Enforces that a model can only enter the graph kind it registered for.</td></tr>
@@ -1679,7 +1680,7 @@
         </div>
         <div class="note">
           Prompt processing can send many tokens through the same hot/cold path.
-          Decode is usually one token, while Qwen3Next has shown small batches of up to four tokens.
+          Decode is usually one token, while Qwen3Next and Mellum allow small batches of up to four tokens.
         </div>
       </section>
 
@@ -1721,7 +1722,7 @@
           </div>
           <div class="checklist">
             <div class="check-row"><b>Hard graph contract</b><span>Hot branch, cold branch, join. Any mismatch increments fallback counters and should be visible in <code>/moe-layer-perf</code>.</span></div>
-            <div class="check-row"><b>Model isolation</b><span>Qwen, Gemma, and Qwen3Next use adapter profiles so one model's shortcut does not leak into another model.</span></div>
+            <div class="check-row"><b>Model isolation</b><span>Qwen, Gemma, Mellum, and Qwen3Next use adapter profiles so one model's shortcut does not leak into another model.</span></div>
             <div class="check-row"><b>Memory safety</b><span>Auto sizing must leave enough reserve for KV, compute buffers, warmup, and optional draft/MTP contexts.</span></div>
             <div class="check-row"><b>Correctness first</b><span>Gibberish output is usually a graph-shape, expert-order, weight, or shared-expert integration bug, not a cache hit-rate issue.</span></div>
             <div class="check-row"><b>Review targets</b><span>Check adapter registration, graph phase propagation, layer-active guard, worklist construction, merge shape, fallback counters, and unit tests.</span></div>
@@ -1836,7 +1837,7 @@
             <div class="check-row"><b>Build command</b><span><code>cmake --build build -j8 --target test-moe-hot-cache llama-server</code></span></div>
             <div class="check-row"><b>Test command</b><span><code>ctest --test-dir build -R '^test-moe-hot-cache$' --output-on-failure</code></span></div>
             <div class="check-row"><b>Runtime checks</b><span>Watch <code>parallel_fallbacks</code>, <code>hot_slots_total</code>, <code>cold_slots_total</code>, branch timings, and whether generated text remains sane.</span></div>
-            <div class="check-row"><b>Patch review question</b><span>Could this change alter Qwen, Gemma, or Qwen3Next when the new model is not loaded? If yes, isolate it further.</span></div>
+            <div class="check-row"><b>Patch review question</b><span>Could this change alter Qwen, Gemma, Mellum, or Qwen3Next when the new model is not loaded? If yes, isolate it further.</span></div>
           </div>
         </div>
       </section>

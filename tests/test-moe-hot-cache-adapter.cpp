@@ -53,6 +53,12 @@ static void test_find_supported_adapters() {
     require(qwen_next->graph_kind == llama_moe_hot_cache_graph_kind::logits);
     require(qwen_next->ffn_op == LLM_FFN_SILU);
 
+    const auto * mellum = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_MELLUM);
+    require(mellum != nullptr);
+    require(std::string(mellum->name) == "mellum");
+    require(mellum->graph_kind == llama_moe_hot_cache_graph_kind::logits);
+    require(mellum->ffn_op == LLM_FFN_SILU);
+
     const auto * gemma = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_GEMMA4);
     require(gemma != nullptr);
     require(std::string(gemma->name) == "gemma4");
@@ -80,6 +86,9 @@ static void test_graph_kind_capability_checks() {
     require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_GEMMA4, llama_moe_hot_cache_graph_kind::logits));
     require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_GEMMA4, llama_moe_hot_cache_graph_kind::qwen35_ffn));
 
+    require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_MELLUM, llama_moe_hot_cache_graph_kind::logits));
+    require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_MELLUM, llama_moe_hot_cache_graph_kind::qwen35_ffn));
+
     const auto * qwen_any = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_QWEN35MOE, llama_moe_hot_cache_graph_kind::none);
     require(qwen_any != nullptr);
     require(qwen_any->graph_kind == llama_moe_hot_cache_graph_kind::qwen35_ffn);
@@ -103,6 +112,14 @@ static void test_profile_defaults_are_arch_specific() {
     require(qwen_next.cpu_decode_routing);
     require(qwen_next.cpu_decode_routing_max_tokens == 4);
     require(qwen_next.prefix_reduce_tasks_max == 1);
+
+    const auto mellum = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_MELLUM);
+    require(mellum.cpu_decode_routing);
+    require(mellum.decode_direct_merge);
+    require(mellum.merge_sum_rows);
+    require(!mellum.branch_reduce_merge);
+    require(mellum.cpu_decode_routing_max_tokens == 4);
+    require(mellum.prefix_reduce_tasks_max == 1);
 
     const auto gemma = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_GEMMA4);
     require(gemma.cpu_decode_routing);
