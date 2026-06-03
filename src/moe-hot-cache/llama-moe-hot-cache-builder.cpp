@@ -124,9 +124,9 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
         const llama_moe_hot_cache_plan & plan,
         ggml_backend_dev_t cache_dev) {
     auto cache = std::make_unique<llama_moe_hot_cache>();
-    cache->layers.resize(model.hparams.n_layer);
+    cache->layers.resize(model.hparams.n_layer());
 
-    const auto selected_by_layer = llama_moe_hot_cache_group_selected_by_layer(plan, model.hparams.n_layer);
+    const auto selected_by_layer = llama_moe_hot_cache_group_selected_by_layer(plan, model.hparams.n_layer());
     const auto stats = llama_moe_hot_cache_summarize_selected_layers(selected_by_layer);
 
     LLAMA_LOG_INFO("%s: hot-cache active layers = %zu/%zu, hot experts per active layer min/avg/max = %zu/%.1f/%zu\n",

@@ -160,7 +160,7 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_scored_observat
         llama_moe_hot_cache_expert_hit_map experts;
     };
 
-    std::vector<layer_counts> counts(model.hparams.n_layer);
+    std::vector<layer_counts> counts(model.hparams.n_layer());
 
     for (const auto & entry : scored_observed) {
         if (entry.layer < counts.size() && entry.hit_count > 0) {

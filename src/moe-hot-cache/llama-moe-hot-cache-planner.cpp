@@ -29,7 +29,7 @@ std::vector<llama_moe_hot_cache_expert_size> llama_moe_hot_cache_collect_expert_
         const llama_model & model) {
     std::vector<llama_moe_hot_cache_expert_size> result;
 
-    for (uint32_t il = 0; il < model.hparams.n_layer; ++il) {
+    for (uint32_t il = 0; il < model.hparams.n_layer(); ++il) {
         const auto & layer = model.layers[il];
         const ggml_tensor * down = layer.ffn_down_exps;
         if (down == nullptr) {
