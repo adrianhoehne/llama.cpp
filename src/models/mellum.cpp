@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include "moe-hot-cache/llama-moe-hot-cache.h"
+
 void llama_model_mellum::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
@@ -77,7 +79,9 @@ std::unique_ptr<llm_graph_context> llama_model_mellum::build_arch_graph(const ll
 }
 
 template <bool iswa>
-llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) :
+        llm_graph_context(params),
+        model(model) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -175,22 +179,30 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
                 LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        ggml_tensor * moe_out =
-            build_moe_ffn(cur,
-                    model.layers[il].ffn_gate_inp,
-                    model.layers[il].ffn_up_exps,
-                    model.layers[il].ffn_gate_exps,
-                    model.layers[il].ffn_down_exps,
-                    nullptr,
-                    n_expert, n_expert_used,
-                    LLM_FFN_SILU, true,
-                    hparams.expert_weights_scale,
-                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+        ggml_tensor * moe_out = nullptr;
+        if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
+            ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
+            cb(logits, "ffn_moe_logits", il);
+
+            moe_out = build_layer_moe_hot(cur, logits, il);
+        } else {
+            moe_out =
+                build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        nullptr,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, true,
+                        hparams.expert_weights_scale,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il,
+                        nullptr, nullptr,
+                        model.layers[il].ffn_up_exps_s,
+                        model.layers[il].ffn_gate_exps_s,
+                        model.layers[il].ffn_down_exps_s);
+        }
         cb(moe_out, "ffn_moe_out", il);
         cur = moe_out;
 

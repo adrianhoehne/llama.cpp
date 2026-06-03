@@ -337,7 +337,7 @@ bool llama_moe_layer_perf_graph_compute_begin(llama_context * ctx, ggml_backend_
     }
 
     ggml_backend_sched_set_eval_callback(sched, llama_moe_layer_perf_eval_callback, ctx);
-    llama_moe_layer_perf_begin(model.hparams.n_layer, model.hparams.n_expert, model.hparams.n_expert_used);
+    llama_moe_layer_perf_begin(model.hparams.n_layer(), model.hparams.n_expert, model.hparams.n_expert_used);
 
     return true;
 }

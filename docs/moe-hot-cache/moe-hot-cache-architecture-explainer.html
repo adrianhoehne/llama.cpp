@@ -1508,7 +1508,7 @@
                 <tr><td><code>set_mul_mat_id_flags()</code></td><td>Stores hot-cache flags in <code>ggml_mul_mat_id</code> operation params.</td></tr>
                 <tr><td><code>build_lora_mm_id()</code></td><td>Builds LoRA-compatible <code>mul_mat_id</code> nodes for selected expert IDs.</td></tr>
                 <tr><td><code>build_moe_ffn_with_ids()</code></td><td>Common FFN core for hot and cold branches, including gate/up/down variants, activation, scales, weights, and reduce.</td></tr>
-                <tr><td><code>build_moe_hot_from_logits()</code></td><td>Generic logits-based hot-cache graph used by Gemma4 and Qwen3Next.</td></tr>
+                <tr><td><code>build_moe_hot_from_logits()</code></td><td>Generic logits-based hot-cache graph used by Gemma4, Qwen3Next, and Mellum.</td></tr>
                 <tr><td><code>qwen35 build_layer_ffn_hot()</code></td><td>Qwen35-specific graph that builds router logits inside the hot-cache path.</td></tr>
               </tbody>
             </table>
@@ -1520,10 +1520,11 @@
             <table class="field-table">
               <thead><tr><th>Item</th><th>Responsibility</th></tr></thead>
               <tbody>
-                <tr><td><code>ADAPTERS</code></td><td>Central allow-list for <code>QWEN35MOE</code>, <code>QWEN3NEXT</code>, and <code>GEMMA4</code>.</td></tr>
+                <tr><td><code>ADAPTERS</code></td><td>Central allow-list for <code>QWEN35MOE</code>, <code>QWEN3NEXT</code>, <code>GEMMA4</code>, and <code>MELLUM</code>.</td></tr>
                 <tr><td><code>qwen35_profile()</code></td><td>Qwen35 profile: qwen-specific graph kind, single-token CPU decode routing, and proven decode shortcuts.</td></tr>
                 <tr><td><code>qwen3next_profile()</code></td><td>Qwen3Next profile: logits graph, tiny multi-token routing up to four tokens, and conservative prefix tasks.</td></tr>
                 <tr><td><code>gemma4_profile()</code></td><td>Gemma4 profile: logits graph, GELU FFN, branch-reduce option, and decode merge shortcuts.</td></tr>
+                <tr><td><code>mellum_profile()</code></td><td>Mellum profile: logits graph, SILU FFN, and conservative Qwen-style decode shortcuts.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_graph_tweaks</code></td><td>Reads env-controlled graph toggles such as parallel mode, merge mode, CPU routing, prefix reduction, and PP reduce merge.</td></tr>
                 <tr><td><code>find_model_adapter()</code>, <code>supports_graph_kind()</code></td><td>Enforces that a model can only enter the graph kind it registered for.</td></tr>
               </tbody>
@@ -1570,6 +1571,7 @@
                 <tr><td><code>src/models/qwen35moe.cpp</code></td><td>Uses the guarded <code>qwen35_ffn</code> path when the adapter and layer cache are active.</td></tr>
                 <tr><td><code>src/models/qwen3next.cpp</code></td><td>Builds router logits, then calls the generic logits hot-cache path when active.</td></tr>
                 <tr><td><code>src/models/gemma4.cpp</code></td><td>Calls the generic logits hot-cache path with Gemma's GELU FFN operation.</td></tr>
+                <tr><td><code>src/models/mellum.cpp</code></td><td>Builds router logits, then calls the generic logits hot-cache path with Mellum's SILU FFN operation.</td></tr>
                 <tr><td><code>tools/server/server.cpp</code>, <code>server-models.cpp</code></td><td>Expose GET/POST <code>/moe-layer-perf</code> and <code>/moe-hot-cache</code>, then route requests to the loaded model.</td></tr>
                 <tr><td><code>tools/server/server-context.cpp</code></td><td>Writes perf output, marks automatic updates pending, queues manual applies until slots are idle, skips automatic updates while a manual apply is pending, and runs cache replacement.</td></tr>
                 <tr><td><code>ggml-backend-moe-hot-cache.*</code></td><td>Scheduler-side support for marked hot/cold parallel regions, metrics, and fallback counters.</td></tr>
@@ -1721,7 +1723,7 @@
           </div>
           <div class="checklist">
             <div class="check-row"><b>Hard graph contract</b><span>Hot branch, cold branch, join. Any mismatch increments fallback counters and should be visible in <code>/moe-layer-perf</code>.</span></div>
-            <div class="check-row"><b>Model isolation</b><span>Qwen, Gemma, and Qwen3Next use adapter profiles so one model's shortcut does not leak into another model.</span></div>
+            <div class="check-row"><b>Model isolation</b><span>Qwen, Gemma, Qwen3Next, and Mellum use adapter profiles so one model's shortcut does not leak into another model.</span></div>
             <div class="check-row"><b>Memory safety</b><span>Auto sizing must leave enough reserve for KV, compute buffers, warmup, and optional draft/MTP contexts.</span></div>
             <div class="check-row"><b>Correctness first</b><span>Gibberish output is usually a graph-shape, expert-order, weight, or shared-expert integration bug, not a cache hit-rate issue.</span></div>
             <div class="check-row"><b>Review targets</b><span>Check adapter registration, graph phase propagation, layer-active guard, worklist construction, merge shape, fallback counters, and unit tests.</span></div>
@@ -1943,7 +1945,7 @@
               <td>Uses generic weighting while allowing the Gemma-specific layer-curve environment override.</td>
             </tr>
             <tr>
-              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen35moe.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen35moe.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/gemma4.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/gemma4.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen3next.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen3next.cpp</code></a></td>
+              <td><a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen35moe.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen35moe.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/gemma4.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/gemma4.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/qwen3next.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/qwen3next.cpp</code></a>, <a class="source-link" href="https://github.com/adrianhoehne/llama.cpp/blob/cached-experts-v2/src/models/mellum.cpp" target="_blank" rel="noopener noreferrer"><code>src/models/mellum.cpp</code></a></td>
               <td>Small model hooks</td>
               <td>These files should only check whether the adapter allows the matching graph kind.</td>
             </tr>

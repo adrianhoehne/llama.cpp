@@ -63,7 +63,7 @@ static size_t estimate_kv_cache_bytes_on_device(
     const bool has_v = !hparams.is_mla();
 
     uint64_t result = 0;
-    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
         if (!hparams.has_kv(il) || model.dev_layer(il) != dev) {
             continue;
         }

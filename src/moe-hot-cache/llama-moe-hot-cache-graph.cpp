@@ -1490,3 +1490,13 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_moe_hot(ggml_tensor * cu
         llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::logits);
     return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, adapter);
 }
+
+template <bool iswa>
+ggml_tensor * llama_model_mellum::graph<iswa>::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
+    const llama_moe_hot_cache_model_adapter & adapter =
+        llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::logits);
+    return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, adapter);
+}
+
+template ggml_tensor * llama_model_mellum::graph<false>::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, int il);
+template ggml_tensor * llama_model_mellum::graph<true>::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, int il);

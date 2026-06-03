@@ -497,7 +497,7 @@
         <p>
           This page is the operational companion to the
           <a href="moe-hot-cache-architecture-explainer.html">architecture explainer</a>.
-          It assumes an already supported MoE architecture such as Qwen35Moe, Qwen3Next, or Gemma4.
+          It assumes an already supported MoE architecture such as Qwen35Moe, Qwen3Next, Gemma4, or Mellum.
           The key rule is simple: keep the normal MoE experts on the CPU with <code>--cpu-moe</code>,
           then add a selected GPU copy through <code>--moe-hot-cache</code>.
         </p>
@@ -1147,7 +1147,7 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
               <tr>
                 <td><code>LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE</code></td>
                 <td>Boolean, default on, architecture-dependent</td>
-                <td>Lets a branch reduce its expert-slot outputs before the final hot/cold merge. For Gemma4 this is a comparison and fallback lever around direct decode merge. Qwen profiles currently do not use it because the Qwen path is tuned around direct decode merge and compact prefix reductions. Disable it when testing whether Gemma4 fallbacks or merge costs come from branch-level reduction.</td>
+                <td>Lets a branch reduce its expert-slot outputs before the final hot/cold merge. For Gemma4 this is a comparison and fallback lever around direct decode merge. Qwen and Mellum profiles currently do not use it because their paths are tuned around direct decode merge and compact prefix reductions. Disable it when testing whether Gemma4 fallbacks or merge costs come from branch-level reduction.</td>
               </tr>
             </tbody>
           </table>
@@ -1157,6 +1157,7 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
           <span class="pill"><span class="ok">Supported adapters:</span>&nbsp;Qwen35Moe</span>
           <span class="pill">Qwen3Next</span>
           <span class="pill">Gemma4</span>
+          <span class="pill">Mellum</span>
           <span class="pill"><span class="warn">Normal models:</span>&nbsp;use standard llama.cpp path</span>
         </div>
       </section>
