@@ -2263,11 +2263,12 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
-    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
+    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 ||
+        model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_MELLUM) {
         uint32_t res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
-        // Qwen35Moe hot path (MoE expert cache) adds extra graph nodes per layer
-        // for worklist construction plus gather/scatter around the compact hot/cold branches.
-        if (model.arch == LLM_ARCH_QWEN35MOE) {
+        // MoE hot-cache paths add extra graph nodes per layer for worklist
+        // construction plus gather/scatter around the compact hot/cold branches.
+        if (model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_MELLUM) {
             res += 40u * model.hparams.n_layer;
         }
         return res;
