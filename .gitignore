@@ -160,3 +160,8 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+model_config.ini
+fpu_starter
+rebase_commands.txt
+
