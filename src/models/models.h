@@ -1608,7 +1608,14 @@ struct llama_model_openai_moe : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     struct graph : public llm_graph_context {
+        const llama_model & model;
+
         graph(const llama_model & model, const llm_graph_params & params);
+
+        ggml_tensor * build_layer_moe_hot(
+                    ggml_tensor * cur,
+                    ggml_tensor * logits,
+                            int   il);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
