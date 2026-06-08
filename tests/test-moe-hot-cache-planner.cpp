@@ -28,9 +28,12 @@ static void test_tensor_expert_bytes_splits_by_expert_dimension() {
     require(ctx != nullptr);
 
     ggml_tensor * tensor = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, 4, 5, 3);
+    ggml_tensor * bias = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 4, 3);
 
     require(llama_moe_hot_cache_tensor_expert_bytes(nullptr) == 0);
     require(llama_moe_hot_cache_tensor_expert_bytes(tensor) == ggml_nbytes(tensor)/3);
+    require(llama_moe_hot_cache_tensor_expert_bias_bytes(nullptr) == 0);
+    require(llama_moe_hot_cache_tensor_expert_bias_bytes(bias) == ggml_nbytes(bias)/3);
 }
 
 static void test_select_accounts_for_one_dummy_expert_per_active_layer() {

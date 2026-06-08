@@ -251,10 +251,11 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
 
     const uint32_t n_expert_per_layer = model.hparams.n_expert;
     if (n_expert_per_layer > 0) {
-        const double cpu_moe_layer_equiv = (double) plan.selected_count() / (double) n_expert_per_layer;
-        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache across %zu lanes (n-cpu-moe equivalent = %.1f layers @ %u experts/layer, %zu/%zu MiB)\n",
+        const double hot_cache_layer_equiv = (double) plan.selected_count() / (double) n_expert_per_layer;
+        const double gpu_moe_layer_equiv = std::max(0.0, (double) model.hparams.n_layer() - hot_cache_layer_equiv);
+        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache across %zu lanes (n-gpu-moe equivalent = %.1f layers @ %u experts/layer, %zu/%zu MiB)\n",
                 __func__, plan.selected_count(), plan.observed.size(), plan.lanes.size(),
-                cpu_moe_layer_equiv, n_expert_per_layer,
+                gpu_moe_layer_equiv, n_expert_per_layer,
                 plan.used_bytes()/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes()/LLAMA_MOE_HOT_CACHE_MIB);
     } else {
         LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache across %zu lanes (%zu/%zu MiB)\n",

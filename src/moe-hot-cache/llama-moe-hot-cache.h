@@ -102,6 +102,10 @@ struct llama_moe_hot_cache_layer_lane {
     ggml_tensor * ffn_gate_exps    = nullptr;
     ggml_tensor * ffn_up_exps      = nullptr;
     ggml_tensor * ffn_down_exps    = nullptr;
+    ggml_tensor * ffn_gate_up_exps_b = nullptr;
+    ggml_tensor * ffn_gate_exps_b  = nullptr;
+    ggml_tensor * ffn_up_exps_b    = nullptr;
+    ggml_tensor * ffn_down_exps_b  = nullptr;
     ggml_tensor * ffn_gate_exps_s  = nullptr;
     ggml_tensor * ffn_up_exps_s    = nullptr;
     ggml_tensor * ffn_down_exps_s  = nullptr;

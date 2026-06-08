@@ -65,6 +65,12 @@ static void test_find_supported_adapters() {
     require(std::string(mellum->name) == "mellum");
     require(mellum->graph_kind == llama_moe_hot_cache_graph_kind::logits);
     require(mellum->ffn_op == LLM_FFN_SILU);
+
+    const auto * openai_moe = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_OPENAI_MOE);
+    require(openai_moe != nullptr);
+    require(std::string(openai_moe->name) == "gpt-oss");
+    require(openai_moe->graph_kind == llama_moe_hot_cache_graph_kind::logits);
+    require(openai_moe->ffn_op == LLM_FFN_SWIGLU_OAI_MOE);
 }
 
 static void test_rejects_unsupported_arch() {
@@ -89,6 +95,9 @@ static void test_graph_kind_capability_checks() {
 
     require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_MELLUM, llama_moe_hot_cache_graph_kind::logits));
     require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_MELLUM, llama_moe_hot_cache_graph_kind::qwen35_ffn));
+
+    require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_OPENAI_MOE, llama_moe_hot_cache_graph_kind::logits));
+    require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_OPENAI_MOE, llama_moe_hot_cache_graph_kind::qwen35_ffn));
 
     const auto * qwen_any = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_QWEN35MOE, llama_moe_hot_cache_graph_kind::none);
     require(qwen_any != nullptr);
@@ -126,6 +135,13 @@ static void test_profile_defaults_are_arch_specific() {
     require(mellum.merge_sum_rows);
     require(!mellum.branch_reduce_merge);
     require(mellum.cpu_decode_routing_max_tokens == 1);
+
+    const auto openai_moe = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_OPENAI_MOE);
+    require(openai_moe.cpu_decode_routing);
+    require(openai_moe.decode_direct_merge);
+    require(openai_moe.merge_sum_rows);
+    require(!openai_moe.branch_reduce_merge);
+    require(openai_moe.cpu_decode_routing_max_tokens == 1);
 }
 
 static void test_parallel_mode_is_runtime_switchable() {
