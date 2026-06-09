@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+static constexpr size_t LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES = 3;
+
 struct llama_model;
 struct llama_model_params;
 
@@ -52,6 +54,20 @@ struct llama_moe_hot_cache_plan {
     size_t used_bytes = 0;
 };
 
+enum class llama_moe_hot_cache_device_strategy {
+    warm,
+    hot_even,
+};
+
+struct llama_moe_hot_cache_multi_plan {
+    std::vector<llama_moe_hot_cache_entry> observed;
+    std::vector<llama_moe_hot_cache_plan> lanes;
+
+    size_t selected_count() const;
+    size_t used_bytes() const;
+    size_t budget_bytes() const;
+};
+
 struct llama_moe_hot_cache_update_stats {
     bool active = false;
     double update_rate = 0.0;
@@ -81,7 +97,7 @@ struct llama_moe_hot_cache_weighting_config {
 using llama_moe_hot_cache_qwen35moe_weighting_mode = llama_moe_hot_cache_weighting_mode;
 using llama_moe_hot_cache_qwen35moe_weighting_config = llama_moe_hot_cache_weighting_config;
 
-struct llama_moe_hot_cache_layer {
+struct llama_moe_hot_cache_layer_lane {
     ggml_tensor * ffn_gate_up_exps = nullptr;
     ggml_tensor * ffn_gate_exps    = nullptr;
     ggml_tensor * ffn_up_exps      = nullptr;
@@ -105,6 +121,31 @@ struct llama_moe_hot_cache_layer {
     }
 };
 
+struct llama_moe_hot_cache_layer : llama_moe_hot_cache_layer_lane {
+    std::vector<llama_moe_hot_cache_layer_lane> lanes;
+    std::vector<int32_t> expert_lane_map_host;
+
+    bool multi_lane_active() const {
+        size_t active_lanes = 0;
+        for (const auto & lane : lanes) {
+            active_lanes += lane.active() ? 1 : 0;
+        }
+        return active_lanes > 1;
+    }
+
+    bool active() const {
+        if (llama_moe_hot_cache_layer_lane::active()) {
+            return true;
+        }
+        for (const auto & lane : lanes) {
+            if (lane.active()) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 enum llama_moe_hot_cache_worklist_field : int32_t {
     LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID = 0,
     LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT,
@@ -117,11 +158,24 @@ enum llama_moe_hot_cache_worklist_field : int32_t {
     LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID,
     LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT,
     LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_SRC_SLOT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_TOKEN_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_WEIGHT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_EXPERT_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_COUNT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_SRC_SLOT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_TOKEN_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_WEIGHT,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_EXPERT_ID,
+    LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_COUNT,
     LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT,
 };
 
 struct llama_moe_hot_cache {
     std::vector<llama_moe_hot_cache_layer> layers;
+    std::vector<ggml_backend_dev_t> devices;
     std::vector<ggml_context_ptr> ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 

@@ -125,6 +125,7 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
         ggml_backend_dev_t cache_dev) {
     auto cache = std::make_unique<llama_moe_hot_cache>();
     cache->layers.resize(model.hparams.n_layer());
+    cache->devices.push_back(cache_dev);
 
     const auto selected_by_layer = llama_moe_hot_cache_group_selected_by_layer(plan, model.hparams.n_layer());
     const auto stats = llama_moe_hot_cache_summarize_selected_layers(selected_by_layer);
@@ -262,5 +263,196 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
 
     cache->bufs.emplace_back(std::move(buf));
     cache->ctxs.emplace_back(std::move(ctx));
+    return cache;
+}
+
+std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build_multi(
+        const llama_model & model,
+        const llama_moe_hot_cache_multi_plan & plan,
+        const std::vector<ggml_backend_dev_t> & cache_devs) {
+    if (plan.lanes.empty() || plan.lanes.size() > LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES) {
+        throw std::runtime_error("MoE hot-cache multi-device builder requires 1..3 lanes");
+    }
+    if (cache_devs.size() != plan.lanes.size()) {
+        throw std::runtime_error("MoE hot-cache multi-device builder got mismatched plan/device lanes");
+    }
+    if (plan.lanes.size() == 1) {
+        return llama_moe_hot_cache_build(model, plan.lanes[0], cache_devs[0]);
+    }
+
+    auto cache = std::make_unique<llama_moe_hot_cache>();
+    cache->layers.resize(model.hparams.n_layer());
+    cache->devices = cache_devs;
+    for (auto & layer : cache->layers) {
+        layer.lanes.resize(plan.lanes.size());
+    }
+
+    for (size_t lane_index = 0; lane_index < plan.lanes.size(); ++lane_index) {
+        const auto selected_by_layer = llama_moe_hot_cache_group_selected_by_layer(
+                plan.lanes[lane_index],
+                model.hparams.n_layer());
+        const auto stats = llama_moe_hot_cache_summarize_selected_layers(selected_by_layer);
+
+        LLAMA_LOG_INFO("%s: hot-cache lane %zu on %s active layers = %zu/%zu, hot experts per active layer min/avg/max = %zu/%.1f/%zu\n",
+                __func__,
+                lane_index,
+                ggml_backend_dev_name(cache_devs[lane_index]),
+                stats.active_layers,
+                selected_by_layer.size(),
+                stats.min_hot,
+                stats.avg_hot(),
+                stats.max_hot);
+
+        size_t n_tensors = 0;
+        for (uint32_t il = 0; il < selected_by_layer.size(); ++il) {
+            if (selected_by_layer[il].empty()) {
+                continue;
+            }
+
+            const auto & src = model.layers[il];
+            auto & cache_layer = cache->layers[il];
+            auto & dst_lane = cache_layer.lanes[lane_index];
+
+            n_tensors += 4; // map + hot mask + cold mask + down
+            n_tensors += src.ffn_gate_up_exps != nullptr ? 1 : 2;
+            n_tensors += src.ffn_gate_exps_s != nullptr ? 1 : 0;
+            n_tensors += src.ffn_up_exps_s   != nullptr ? 1 : 0;
+            n_tensors += src.ffn_down_exps_s != nullptr ? 1 : 0;
+
+            dst_lane.n_hot = selected_by_layer[il].size();
+            dst_lane.n_expert = src.ffn_down_exps ? src.ffn_down_exps->ne[2] : 0;
+            dst_lane.expert_weights_scale = model.hparams.expert_weights_scale;
+
+            cache_layer.n_expert = dst_lane.n_expert;
+            cache_layer.expert_weights_scale = model.hparams.expert_weights_scale;
+            if (cache_layer.expert_lane_map_host.empty() && dst_lane.n_expert > 0) {
+                cache_layer.expert_lane_map_host.assign(dst_lane.n_expert, -1);
+            }
+        }
+
+        if (n_tensors == 0) {
+            continue;
+        }
+
+        static constexpr size_t EXTRA_PER_TENSOR = 64;
+        const size_t n_extra_tensors = std::max<size_t>(64, n_tensors / 4);
+        const size_t ctx_mem_size = ggml_tensor_overhead() * (n_tensors + n_extra_tensors)
+                                  + EXTRA_PER_TENSOR * n_tensors;
+
+        ggml_init_params ctx_params = {
+            /*.mem_size   =*/ ctx_mem_size,
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+
+        ggml_context_ptr ctx { ggml_init(ctx_params) };
+        if (!ctx) {
+            throw std::runtime_error("failed to create MoE hot-cache lane ggml context");
+        }
+
+        for (uint32_t il = 0; il < selected_by_layer.size(); ++il) {
+            const auto & experts = selected_by_layer[il];
+            if (experts.empty()) {
+                continue;
+            }
+
+            const auto & src = model.layers[il];
+            auto & dst_lane = cache->layers[il].lanes[lane_index];
+            const int64_t n_cache = int64_t(experts.size()) + 1;
+            const int64_t n_expert = src.ffn_down_exps->ne[2];
+
+            dst_lane.ffn_gate_up_exps = new_tensor_like_experts(ctx.get(), src.ffn_gate_up_exps, n_cache, format("blk.%u.ffn_gate_up_exps.hot_cache.%zu", il, lane_index).c_str());
+            dst_lane.ffn_gate_exps    = new_tensor_like_experts(ctx.get(), src.ffn_gate_exps,    n_cache, format("blk.%u.ffn_gate_exps.hot_cache.%zu",    il, lane_index).c_str());
+            dst_lane.ffn_up_exps      = new_tensor_like_experts(ctx.get(), src.ffn_up_exps,      n_cache, format("blk.%u.ffn_up_exps.hot_cache.%zu",      il, lane_index).c_str());
+            dst_lane.ffn_down_exps    = new_tensor_like_experts(ctx.get(), src.ffn_down_exps,    n_cache, format("blk.%u.ffn_down_exps.hot_cache.%zu",    il, lane_index).c_str());
+            dst_lane.ffn_gate_exps_s  = new_tensor_like_scale  (ctx.get(), src.ffn_gate_exps_s,  n_cache, format("blk.%u.ffn_gate_exps_s.hot_cache.%zu",  il, lane_index).c_str());
+            dst_lane.ffn_up_exps_s    = new_tensor_like_scale  (ctx.get(), src.ffn_up_exps_s,    n_cache, format("blk.%u.ffn_up_exps_s.hot_cache.%zu",    il, lane_index).c_str());
+            dst_lane.ffn_down_exps_s  = new_tensor_like_scale  (ctx.get(), src.ffn_down_exps_s,  n_cache, format("blk.%u.ffn_down_exps_s.hot_cache.%zu",  il, lane_index).c_str());
+
+            dst_lane.hot_id_map = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, n_expert);
+            ggml_format_name(dst_lane.hot_id_map, "blk.%u.moe_hot_id_map.%zu", il, lane_index);
+            dst_lane.hot_mask = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 1, n_expert);
+            ggml_format_name(dst_lane.hot_mask, "blk.%u.moe_hot_mask.%zu", il, lane_index);
+            dst_lane.cold_mask = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 1, n_expert);
+            ggml_format_name(dst_lane.cold_mask, "blk.%u.moe_cold_mask.%zu", il, lane_index);
+        }
+
+        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(cache_devs[lane_index]);
+        ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft) };
+        if (!buf) {
+            throw std::runtime_error("failed to allocate MoE hot-cache lane buffer");
+        }
+        ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+        for (uint32_t il = 0; il < selected_by_layer.size(); ++il) {
+            const auto & experts = selected_by_layer[il];
+            if (experts.empty()) {
+                continue;
+            }
+
+            const auto & src = model.layers[il];
+            auto & cache_layer = cache->layers[il];
+            auto & dst_lane = cache_layer.lanes[lane_index];
+            const uint32_t dummy_id = experts.size();
+            const uint32_t n_expert = dst_lane.n_expert;
+
+            if (dst_lane.ffn_gate_up_exps) { zero_tensor(dst_lane.ffn_gate_up_exps); }
+            if (dst_lane.ffn_gate_exps)    { zero_tensor(dst_lane.ffn_gate_exps); }
+            if (dst_lane.ffn_up_exps)      { zero_tensor(dst_lane.ffn_up_exps); }
+            if (dst_lane.ffn_down_exps)    { zero_tensor(dst_lane.ffn_down_exps); }
+            if (dst_lane.ffn_gate_exps_s)  { zero_tensor(dst_lane.ffn_gate_exps_s); }
+            if (dst_lane.ffn_up_exps_s)    { zero_tensor(dst_lane.ffn_up_exps_s); }
+            if (dst_lane.ffn_down_exps_s)  { zero_tensor(dst_lane.ffn_down_exps_s); }
+
+            std::vector<int32_t> hot_id_map(n_expert, int32_t(dummy_id));
+            std::vector<float> hot_mask(n_expert, 0.0f);
+            std::vector<float> cold_mask(n_expert, 1.0f);
+            dst_lane.hot_id_map_host.assign(n_expert, -1);
+
+            for (uint32_t cache_id = 0; cache_id < experts.size(); ++cache_id) {
+                const uint32_t expert = experts[cache_id];
+                if (expert >= n_expert) {
+                    continue;
+                }
+
+                hot_id_map[expert] = int32_t(cache_id);
+                hot_mask[expert] = 1.0f;
+                cold_mask[expert] = 0.0f;
+                dst_lane.hot_id_map_host[expert] = int32_t(cache_id);
+                cache_layer.expert_lane_map_host[expert] = int32_t(lane_index);
+
+                llama_moe_hot_cache_copy_expert_slice(src.ffn_gate_up_exps, dst_lane.ffn_gate_up_exps, expert, cache_id);
+                llama_moe_hot_cache_copy_expert_slice(src.ffn_gate_exps,    dst_lane.ffn_gate_exps,    expert, cache_id);
+                llama_moe_hot_cache_copy_expert_slice(src.ffn_up_exps,      dst_lane.ffn_up_exps,      expert, cache_id);
+                llama_moe_hot_cache_copy_expert_slice(src.ffn_down_exps,    dst_lane.ffn_down_exps,    expert, cache_id);
+                llama_moe_hot_cache_copy_scale_slice(src.ffn_gate_exps_s,   dst_lane.ffn_gate_exps_s,  expert, cache_id);
+                llama_moe_hot_cache_copy_scale_slice(src.ffn_up_exps_s,     dst_lane.ffn_up_exps_s,    expert, cache_id);
+                llama_moe_hot_cache_copy_scale_slice(src.ffn_down_exps_s,   dst_lane.ffn_down_exps_s,  expert, cache_id);
+            }
+
+            ggml_backend_tensor_set(dst_lane.hot_id_map, hot_id_map.data(), 0, hot_id_map.size()*sizeof(hot_id_map[0]));
+            ggml_backend_tensor_set(dst_lane.hot_mask,   hot_mask.data(),   0, hot_mask.size()*sizeof(hot_mask[0]));
+            ggml_backend_tensor_set(dst_lane.cold_mask,  cold_mask.data(),  0, cold_mask.size()*sizeof(cold_mask[0]));
+        }
+
+        LLAMA_LOG_WARN("%s: %12s hot-cache lane %zu buffer size = %8.2f MiB\n",
+                __func__,
+                ggml_backend_buffer_name(buf.get()),
+                lane_index,
+                ggml_backend_buffer_get_size(buf.get())/1024.0/1024.0);
+
+        cache->bufs.emplace_back(std::move(buf));
+        cache->ctxs.emplace_back(std::move(ctx));
+    }
+
+    for (auto & layer : cache->layers) {
+        for (const auto & lane : layer.lanes) {
+            if (lane.active()) {
+                static_cast<llama_moe_hot_cache_layer_lane &>(layer) = lane;
+                break;
+            }
+        }
+    }
+
     return cache;
 }

@@ -317,7 +317,11 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
             cb(logits, "ffn_moe_logits", il);
 
-            if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
+            const bool hot_cache_layer_active =
+                llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits);
+            const bool hot_cache_multi_lane =
+                hot_cache_layer_active && !model.moe_hot_cache->layers[il].lanes.empty();
+            if (hot_cache_layer_active && (!hot_cache_multi_lane || (!cparams.warmup && cur_moe->ne[1] == 1))) {
                 cur_moe = build_layer_moe_hot(cur_moe, logits, il);
             } else {
                 cur_moe = build_moe_ffn(cur_moe,
