@@ -2,6 +2,7 @@
 
 #include "llama-moe-hot-cache-builder.h"
 
+#include "llama-impl.h"
 #include "llama-model.h"
 
 #include <algorithm>
@@ -151,6 +152,22 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_scored_observat
     stats.update_rate = std::clamp(update_rate, 0.0, 1.0);
 
     if (!model.moe_hot_cache || !model.moe_hot_cache->active()) {
+        return stats;
+    }
+
+    const bool has_multi_lane_cache = std::any_of(
+            model.moe_hot_cache->layers.begin(),
+            model.moe_hot_cache->layers.end(),
+            [](const llama_moe_hot_cache_layer & layer) {
+                return !layer.lanes.empty();
+            });
+    if (has_multi_lane_cache) {
+        static bool logged = false;
+        if (!logged) {
+            LLAMA_LOG_WARN("%s: runtime hot-cache replacement is not yet supported for multi-device expert lanes\n", __func__);
+            logged = true;
+        }
+        stats.active = true;
         return stats;
     }
 

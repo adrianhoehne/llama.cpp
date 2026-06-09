@@ -307,6 +307,14 @@ extern "C" {
         // Experimental Qwen3.5 MoE hot expert cache. 0 disables it, -1 uses remaining VRAM after model load and context reservation.
         int64_t moe_hot_cache_max_mib;
         const char * moe_hot_cache_path;
+        const char * moe_hot_cache_device;
+        int64_t moe_hot_cache_second_max_mib;
+        const char * moe_hot_cache_second_device;
+        uint64_t moe_hot_cache_second_auto_reserve_mib;
+        int64_t moe_hot_cache_third_max_mib;
+        const char * moe_hot_cache_third_device;
+        uint64_t moe_hot_cache_third_auto_reserve_mib;
+        const char * moe_hot_cache_device_strategy;
         uint32_t moe_hot_cache_auto_n_ctx;
         uint32_t moe_hot_cache_auto_n_seq_max;
         uint32_t moe_hot_cache_auto_n_ubatch;

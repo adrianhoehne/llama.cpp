@@ -501,14 +501,23 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
         llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::qwen35_ffn);
     const llama_moe_hot_cache_layer * hot_cache_layer =
         hot_cache_layer_active ? &model.moe_hot_cache->layers[il] : nullptr;
+    const bool hot_cache_multi_lane = hot_cache_layer != nullptr && !hot_cache_layer->lanes.empty();
+    uint32_t hot_cache_n_hot = hot_cache_layer != nullptr ? hot_cache_layer->n_hot : 0;
+    if (hot_cache_multi_lane) {
+        hot_cache_n_hot = 0;
+        for (const auto & lane : hot_cache_layer->lanes) {
+            hot_cache_n_hot += lane.n_hot;
+        }
+    }
     const bool hot_cache_active =
         hot_cache_layer_active &&
+        (!hot_cache_multi_lane || (!cparams.warmup && cur->ne[1] == 1)) &&
         !llama_moe_hot_cache_pp_policy::bypass_hot_cache_for_prompt_processing(
             gphase,
             cparams.warmup,
             cur->ne[1],
             0,
-            hot_cache_layer->n_hot,
+            hot_cache_n_hot,
             hot_cache_layer->n_expert,
             0.0);
     if (hot_cache_active) {

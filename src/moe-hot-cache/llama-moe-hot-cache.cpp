@@ -15,6 +15,7 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace {
 
@@ -109,6 +110,48 @@ static std::vector<llama_moe_hot_cache_entry> score_observations_for_arch(
     }
 }
 
+static bool hot_cache_lane_enabled(int64_t max_mib) {
+    return max_mib != 0;
+}
+
+static bool hot_cache_any_lane_enabled(const llama_model_params & params) {
+    return hot_cache_lane_enabled(params.moe_hot_cache_max_mib) ||
+           hot_cache_lane_enabled(params.moe_hot_cache_second_max_mib) ||
+           hot_cache_lane_enabled(params.moe_hot_cache_third_max_mib);
+}
+
+static bool hot_cache_any_static_lane_enabled(const llama_model_params & params) {
+    return params.moe_hot_cache_max_mib > 0 ||
+           params.moe_hot_cache_second_max_mib > 0 ||
+           params.moe_hot_cache_third_max_mib > 0;
+}
+
+static bool hot_cache_any_auto_lane_enabled(const llama_model_params & params) {
+    return params.moe_hot_cache_max_mib < 0 ||
+           params.moe_hot_cache_second_max_mib < 0 ||
+           params.moe_hot_cache_third_max_mib < 0;
+}
+
+struct hot_cache_lane_request {
+    const char * name = nullptr;
+    int64_t max_mib = 0;
+    uint64_t reserve_mib = 0;
+};
+
+static std::vector<hot_cache_lane_request> hot_cache_lane_requests(const llama_model_params & params) {
+    std::vector<hot_cache_lane_request> lanes;
+    if (hot_cache_lane_enabled(params.moe_hot_cache_max_mib)) {
+        lanes.push_back({ params.moe_hot_cache_device, params.moe_hot_cache_max_mib, params.moe_hot_cache_auto_reserve_mib });
+    }
+    if (hot_cache_lane_enabled(params.moe_hot_cache_second_max_mib)) {
+        lanes.push_back({ params.moe_hot_cache_second_device, params.moe_hot_cache_second_max_mib, params.moe_hot_cache_second_auto_reserve_mib });
+    }
+    if (hot_cache_lane_enabled(params.moe_hot_cache_third_max_mib)) {
+        lanes.push_back({ params.moe_hot_cache_third_device, params.moe_hot_cache_third_max_mib, params.moe_hot_cache_third_auto_reserve_mib });
+    }
+    return lanes;
+}
+
 } // namespace
 
 std::vector<llama_moe_hot_cache_layer_observation> llama_moe_hot_cache_parse_perf_json_observations(
@@ -122,7 +165,7 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
 }
 
 void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params, bool reserve_kv_cache) {
-    if (params.moe_hot_cache_max_mib == 0) {
+    if (!hot_cache_any_lane_enabled(params)) {
         return;
     }
 
@@ -139,9 +182,11 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
         throw std::runtime_error("--moe-hot-cache is required when --moe-hot-cache-max-mib is not 0");
     }
 
-    LLAMA_LOG_WARN("%s: building hot-cache: max_mib = %lld, n_ctx = %u, n_seq_max = %u, n_ubatch = %u, swa_full = %d, kv_unified = %d, offload_kqv = %d, reserve_kv_cache = %d, path = %s\n",
+    LLAMA_LOG_WARN("%s: building hot-cache: max_mib = %lld, second_max_mib = %lld, third_max_mib = %lld, n_ctx = %u, n_seq_max = %u, n_ubatch = %u, swa_full = %d, kv_unified = %d, offload_kqv = %d, reserve_kv_cache = %d, path = %s\n",
             __func__,
             (long long) params.moe_hot_cache_max_mib,
+            (long long) params.moe_hot_cache_second_max_mib,
+            (long long) params.moe_hot_cache_third_max_mib,
             params.moe_hot_cache_auto_n_ctx,
             params.moe_hot_cache_auto_n_seq_max,
             params.moe_hot_cache_auto_n_ubatch,
@@ -165,41 +210,78 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
             config.layer_curve);
     const auto observed = score_observations_for_arch(model.arch, observations, &params);
     const auto sizes = llama_moe_hot_cache_collect_expert_sizes(model);
-    ggml_backend_dev_t cache_dev = llama_moe_hot_cache_select_gpu_dev(&model);
-    const size_t budget_bytes = params.moe_hot_cache_max_mib < 0
-        ? llama_moe_hot_cache_auto_budget_bytes(model, params, cache_dev, reserve_kv_cache)
-        : size_t(params.moe_hot_cache_max_mib)*LLAMA_MOE_HOT_CACHE_MIB;
 
-    if (budget_bytes == 0) {
-        LLAMA_LOG_WARN("%s: hot-cache budget is 0 MiB; disabling hot-cache\n", __func__);
+    const auto lane_requests = hot_cache_lane_requests(params);
+    if (lane_requests.empty() || lane_requests.size() > LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES) {
+        LLAMA_LOG_WARN("%s: no hot-cache lanes configured; disabling hot-cache\n", __func__);
         return;
     }
 
-    const auto plan = llama_moe_hot_cache_select(observed, sizes, budget_bytes);
+    std::vector<ggml_backend_dev_t> cache_devs;
+    std::vector<size_t> lane_budgets;
+    cache_devs.reserve(lane_requests.size());
+    lane_budgets.reserve(lane_requests.size());
+
+    std::unordered_set<ggml_backend_dev_t> seen_devs;
+    for (size_t lane = 0; lane < lane_requests.size(); ++lane) {
+        const auto & request = lane_requests[lane];
+        ggml_backend_dev_t dev = llama_moe_hot_cache_resolve_gpu_dev(&model, request.name);
+        if (!seen_devs.insert(dev).second) {
+            throw std::runtime_error(std::string("duplicate MoE hot-cache expert device: ") + ggml_backend_dev_name(dev));
+        }
+
+        const size_t budget_bytes = request.max_mib < 0
+            ? llama_moe_hot_cache_auto_budget_bytes(model, params, dev, reserve_kv_cache, request.reserve_mib)
+            : size_t(request.max_mib)*LLAMA_MOE_HOT_CACHE_MIB;
+
+        LLAMA_LOG_WARN("%s: expert lane %zu device = %s, max_mib = %lld, reserve_mib = %zu, budget = %zu MiB\n",
+                __func__,
+                lane,
+                ggml_backend_dev_name(dev),
+                (long long) request.max_mib,
+                (size_t) request.reserve_mib,
+                budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
+
+        cache_devs.push_back(dev);
+        lane_budgets.push_back(budget_bytes);
+    }
+
+    const auto strategy = llama_moe_hot_cache_parse_device_strategy(params.moe_hot_cache_device_strategy);
+    const auto plan = llama_moe_hot_cache_select_multi(observed, sizes, lane_budgets, strategy);
 
     const uint32_t n_expert_per_layer = model.hparams.n_expert;
     if (n_expert_per_layer > 0) {
-        const double cpu_moe_layer_equiv = (double) plan.selected.size() / (double) n_expert_per_layer;
-        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache (n-cpu-moe equivalent = %.1f layers @ %u experts/layer, %zu/%zu MiB)\n",
-                __func__, plan.selected.size(), plan.observed.size(),
+        const double cpu_moe_layer_equiv = (double) plan.selected_count() / (double) n_expert_per_layer;
+        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache across %zu lanes (n-cpu-moe equivalent = %.1f layers @ %u experts/layer, %zu/%zu MiB)\n",
+                __func__, plan.selected_count(), plan.observed.size(), plan.lanes.size(),
                 cpu_moe_layer_equiv, n_expert_per_layer,
-                plan.used_bytes/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
+                plan.used_bytes()/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes()/LLAMA_MOE_HOT_CACHE_MIB);
     } else {
-        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache (%zu/%zu MiB)\n",
-                __func__, plan.selected.size(), plan.observed.size(),
-                plan.used_bytes/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
+        LLAMA_LOG_WARN("%s: selected %zu/%zu observed experts for hot-cache across %zu lanes (%zu/%zu MiB)\n",
+                __func__, plan.selected_count(), plan.observed.size(), plan.lanes.size(),
+                plan.used_bytes()/LLAMA_MOE_HOT_CACHE_MIB, plan.budget_bytes()/LLAMA_MOE_HOT_CACHE_MIB);
+    }
+    for (size_t lane = 0; lane < plan.lanes.size(); ++lane) {
+        const auto & lane_plan = plan.lanes[lane];
+        LLAMA_LOG_WARN("%s: expert lane %zu plan on %s: selected = %zu, used = %zu/%zu MiB\n",
+                __func__,
+                lane,
+                ggml_backend_dev_name(cache_devs.at(lane)),
+                lane_plan.selected.size(),
+                lane_plan.used_bytes/LLAMA_MOE_HOT_CACHE_MIB,
+                lane_plan.budget_bytes/LLAMA_MOE_HOT_CACHE_MIB);
     }
 
-    if (plan.selected.empty()) {
+    if (plan.selected_count() == 0) {
         LLAMA_LOG_WARN("%s: no experts selected; disabling hot-cache\n", __func__);
         return;
     }
 
-    model.moe_hot_cache = llama_moe_hot_cache_build(model, plan, cache_dev);
+    model.moe_hot_cache = llama_moe_hot_cache_build_multi(model, plan, cache_devs);
 }
 
 void llama_moe_hot_cache_init_after_model_load(llama_model & model, const llama_model_params & params) {
-    if (params.moe_hot_cache_max_mib <= 0) {
+    if (!hot_cache_any_static_lane_enabled(params)) {
         return;
     }
 
@@ -208,7 +290,7 @@ void llama_moe_hot_cache_init_after_model_load(llama_model & model, const llama_
 
 void llama_moe_hot_cache_init_after_context_memory(const llama_model & model) {
     const auto & params = model.get_params();
-    if (model.hparams.vocab_only || params.moe_hot_cache_max_mib >= 0 || model.moe_hot_cache != nullptr) {
+    if (model.hparams.vocab_only || !hot_cache_any_auto_lane_enabled(params) || model.moe_hot_cache != nullptr) {
         return;
     }
 

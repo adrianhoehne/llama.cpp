@@ -15,6 +15,133 @@ Supported:
 - Qwen3Next
 - Mellum MoE models
 
+## Cached-experts configuration examples
+
+The examples below use `llama-server` and keep the normal model path on the primary CUDA device. Replace `MODEL.gguf` and `/path/to/moe-perf-data` with your model and the directory or JSON data produced for the hot-cache planner.
+
+### Default cached-experts, one CUDA card
+
+Use this when one CUDA device should hold the normal graph/KV path and as many cached experts as the automatic budget allows. Remaining experts stay on CPU via `--cpu-moe`.
+
+```sh
+LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
+LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
+./build/bin/llama-server \
+  --model MODEL.gguf \
+  --device CUDA0 \
+  --split-mode none \
+  --main-gpu 0 \
+  --n-gpu-layers 99 \
+  --cpu-moe \
+  --ctx-size 4096 \
+  --ubatch-size 32 \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --moe-hot-cache /path/to/moe-perf-data \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-pp-reduce-merge on
+```
+
+### Two CUDA cards
+
+Use this when `CUDA0` should remain the primary card for graph/KV/router/final merge and `CUDA1` should act as an additional expert lane. `warm` fills the primary lane first, then the second lane. For similar cards, try `hot-even`.
+
+```sh
+GGML_CUDA_P2P=1 \
+LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
+LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
+./build/bin/llama-server \
+  --model MODEL.gguf \
+  --device CUDA0 \
+  --split-mode none \
+  --main-gpu 0 \
+  --n-gpu-layers 99 \
+  --cpu-moe \
+  --ctx-size 4096 \
+  --ubatch-size 32 \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --moe-hot-cache /path/to/moe-perf-data \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-second-device CUDA1 \
+  --moe-hot-cache-second-max-mib -1 \
+  --moe-hot-cache-second-auto-reserve-mib 512 \
+  --moe-hot-cache-device-strategy warm \
+  --moe-hot-cache-pp-reduce-merge on
+```
+
+For a small primary GPU that should only run graph/KV/router/final merge, disable the primary expert cache and place experts on the second device:
+
+```sh
+GGML_CUDA_P2P=1 \
+LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
+LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
+./build/bin/llama-server \
+  --model MODEL.gguf \
+  --device CUDA0 \
+  --split-mode none \
+  --main-gpu 0 \
+  --n-gpu-layers 99 \
+  --cpu-moe \
+  --ctx-size 4096 \
+  --ubatch-size 32 \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --moe-hot-cache /path/to/moe-perf-data \
+  --moe-hot-cache-max-mib 0 \
+  --moe-hot-cache-second-device CUDA1 \
+  --moe-hot-cache-second-max-mib -1 \
+  --moe-hot-cache-second-auto-reserve-mib 512 \
+  --moe-hot-cache-device-strategy warm \
+  --moe-hot-cache-pp-reduce-merge on
+```
+
+### Three CUDA cards
+
+Use this when `CUDA0` is the primary card and `CUDA1`/`CUDA2` are additional expert lanes. This is the intended shape for one primary GPU plus two expert-only GPUs. Keep per-device reserve high enough for temporary buffers; reduce `--ctx-size` or `--ubatch-size` first if CUDA allocation fails.
+
+```sh
+GGML_CUDA_P2P=1 \
+LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
+LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
+./build/bin/llama-server \
+  --model MODEL.gguf \
+  --device CUDA0 \
+  --split-mode none \
+  --main-gpu 0 \
+  --n-gpu-layers 99 \
+  --cpu-moe \
+  --ctx-size 4096 \
+  --ubatch-size 32 \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --moe-hot-cache /path/to/moe-perf-data \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-auto-reserve-mib 1024 \
+  --moe-hot-cache-second-device CUDA1 \
+  --moe-hot-cache-second-max-mib -1 \
+  --moe-hot-cache-second-auto-reserve-mib 512 \
+  --moe-hot-cache-third-device CUDA2 \
+  --moe-hot-cache-third-max-mib -1 \
+  --moe-hot-cache-third-auto-reserve-mib 512 \
+  --moe-hot-cache-device-strategy hot-even \
+  --moe-hot-cache-pp-reduce-merge on
+```
+
+Notes:
+
+- `--moe-hot-cache-max-mib -1` auto-sizes a lane from currently free VRAM minus its reserve.
+- `--moe-hot-cache-max-mib 0` disables the primary expert lane while keeping secondary or tertiary expert lanes available.
+- `GGML_CUDA_P2P=1` enables CUDA peer-copy when the cards and driver support it; unsupported pairs fall back internally.
+- `LLAMA_MOE_HOT_CACHE_PARALLEL=force` is a debugging mode for valid parallel regions. Use `1`/`auto` for normal runs.
+- A general speedup claim for two GPUs could not be validated on the available test hardware because the cards are very asymmetric. Treat the two-GPU examples as configuration starting points, not as benchmark guidance.
+
 These changes will probably never reach upstream llama because I broke the contribution rules hardly. I am a Java developer and the last time I wrote anything in C is, I even don't remember when it was, therefore, the bit of knowlegde of C that I had is gone. Secondly, this is a tool for me, I want it to function, I want it to be easy and I used other tools to create it faster.
 And lastly, I saw some discussions in the PRs and the tone is not what I would expect. I know especially big PRs are hard to overlook, but great features often create big PRs. I also hate big PRs. But, sometimes they are necessary. Anyway, I don't want to have such discussions, it's just a waste of time.
 

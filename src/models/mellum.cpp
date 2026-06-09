@@ -180,7 +180,11 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
         cb(cur, "ffn_norm", il);
 
         ggml_tensor * moe_out = nullptr;
-        if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
+        const bool hot_cache_layer_active =
+            llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits);
+        const bool hot_cache_multi_lane =
+            hot_cache_layer_active && !model.moe_hot_cache->layers[il].lanes.empty();
+        if (hot_cache_layer_active && (!hot_cache_multi_lane || (!cparams.warmup && cur->ne[1] == 1))) {
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
             cb(logits, "ffn_moe_logits", il);
 

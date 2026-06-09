@@ -564,6 +564,24 @@ cmake --build build -j8
   --n-gpu-layers 999 \
   &lt;your model and server args&gt;</code></pre>
 
+        <p>For a primary GPU that owns the normal graph/KV cache plus two expert-only GPUs, keep the normal device list scoped to the primary GPU and name expert GPUs through the hot-cache lane arguments:</p>
+        <pre><code>./build/bin/llama-server \
+  --cpu-moe \
+  --moe-hot-cache moe-hot-cache.json \
+  --moe-hot-cache-max-mib 2048 \
+  --moe-hot-cache-device CUDA0 \
+  --moe-hot-cache-second-device CUDA1 \
+  --moe-hot-cache-second-max-mib 8192 \
+  --moe-hot-cache-second-auto-reserve-mib 1024 \
+  --moe-hot-cache-third-device CUDA2 \
+  --moe-hot-cache-third-max-mib 8192 \
+  --moe-hot-cache-third-auto-reserve-mib 1024 \
+  --moe-hot-cache-device-strategy hot-even \
+  --ctx-size &lt;ctx_tokens&gt; \
+  --device CUDA0 \
+  --n-gpu-layers 999 \
+  &lt;your model and server args&gt;</code></pre>
+
         <div class="note">
           <strong>First run warning:</strong>
           the profiling run can take much longer than a hot-cache run because it intentionally runs without the selected GPU expert cache.
@@ -919,10 +937,34 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
                 <td>Used only with <code>--moe-hot-cache-max-mib -1</code>. Leaves this many MiB free for warmup, compute buffers, and transient CUDA allocations.</td>
               </tr>
               <tr>
+                <td><code>--moe-hot-cache-device DEV</code></td>
+                <td><code>LLAMA_ARG_MOE_HOT_CACHE_DEVICE</code></td>
+                <td>Backend device name, default unset</td>
+                <td>Optional device for the primary expert lane. If omitted, the hot cache keeps the current behavior and uses the first GPU/iGPU seen by the loaded model.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-second-device DEV</code><br><code>--moe-hot-cache-second-max-mib N</code><br><code>--moe-hot-cache-second-auto-reserve-mib N</code></td>
+                <td><code>LLAMA_ARG_MOE_HOT_CACHE_SECOND_DEVICE</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_SECOND_MAX_MIB</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_SECOND_AUTO_RESERVE_MIB</code></td>
+                <td>Optional second lane; max MiB uses the same <code>0</code>, fixed, and <code>-1</code> semantics. Auto reserve default <code>512</code> MiB.</td>
+                <td>Creates an expert-only worker lane resolved independently from normal <code>--device</code>, so the GPU can hold cached experts without receiving normal layers or KV cache.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-third-device DEV</code><br><code>--moe-hot-cache-third-max-mib N</code><br><code>--moe-hot-cache-third-auto-reserve-mib N</code></td>
+                <td><code>LLAMA_ARG_MOE_HOT_CACHE_THIRD_DEVICE</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_THIRD_MAX_MIB</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_THIRD_AUTO_RESERVE_MIB</code></td>
+                <td>Optional third lane; max MiB uses the same <code>0</code>, fixed, and <code>-1</code> semantics. Auto reserve default <code>512</code> MiB.</td>
+                <td>Intended for primary-GPU graph/KV setups where two additional worker GPUs hold and compute routed expert slices.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-device-strategy warm|hot-even</code></td>
+                <td><code>LLAMA_ARG_MOE_HOT_CACHE_DEVICE_STRATEGY</code></td>
+                <td><code>warm</code> default, or <code>hot-even</code></td>
+                <td><code>warm</code> fills the first configured lane, then later lanes. <code>hot-even</code> distributes selected experts per layer across configured expert lanes while respecting each lane budget.</td>
+              </tr>
+              <tr>
                 <td><code>--moe-hot-cache-update-rate N</code></td>
                 <td><code>moe-hot-cache-update-rate = N</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_UPDATE_RATE</code></td>
                 <td>Float <code>0.0</code> to <code>1.0</code>, default <code>0.0</code></td>
-                <td>After a completed server request, replaces up to this fraction of hot-cache entries with better observed candidates. Needs active perf counters.</td>
+                <td>After a completed server request, replaces up to this fraction of hot-cache entries with better observed candidates. Needs active perf counters. Multi-device expert lanes currently skip runtime replacement to avoid inconsistent per-lane maps.</td>
               </tr>
               <tr>
                 <td><code>--moe-hot-cache-weighting MODE</code><br><code>--moe-hot-cache-qwen-weighting MODE</code></td>
@@ -1014,8 +1056,8 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
               </tr>
               <tr>
                 <td><code>--device CUDA0</code></td>
-                <td>Controls which backend devices are used by the model. The hot cache picks the first GPU/IGPU device seen by the loaded model.</td>
-                <td>Use the intended fast GPU first when multiple devices are present.</td>
+                <td>Controls which backend devices are used by the normal model graph, including layer offload, KV placement, router logits, and the final multi-lane merge.</td>
+                <td>For expert-only CUDA1/CUDA2 lanes, keep normal <code>--device</code> to the primary graph GPU and name the other GPUs only with <code>--moe-hot-cache-second-device</code> and <code>--moe-hot-cache-third-device</code>.</td>
               </tr>
               <tr>
                 <td><code>--n-gpu-layers N</code></td>

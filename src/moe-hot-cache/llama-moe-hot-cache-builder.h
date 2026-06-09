@@ -46,3 +46,8 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
         const llama_model & model,
         const llama_moe_hot_cache_plan & plan,
         ggml_backend_dev_t cache_dev);
+
+std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build_multi(
+        const llama_model & model,
+        const llama_moe_hot_cache_multi_plan & plan,
+        const std::vector<ggml_backend_dev_t> & cache_devs);

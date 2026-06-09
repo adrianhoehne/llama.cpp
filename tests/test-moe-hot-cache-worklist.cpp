@@ -165,6 +165,67 @@ static void test_build_worklist_all_hot_or_cold() {
     }
 }
 
+static void test_build_worklist_multi_lane_routes_by_lane_map() {
+    auto ctx = make_ctx();
+    require(ctx != nullptr);
+
+    const int32_t n_expert_used = 2;
+    const int32_t n_tokens = 2;
+    const int32_t capacity = n_expert_used*n_tokens;
+
+    ggml_tensor * selected = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, n_expert_used, n_tokens);
+    ggml_tensor * weights = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, 1, n_expert_used, n_tokens);
+    ggml_tensor * packed = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+
+    set_selected(selected, 0, 0, 0);
+    set_selected(selected, 1, 0, 1);
+    set_selected(selected, 0, 1, 2);
+    set_selected(selected, 1, 1, 3);
+
+    set_weight(weights, 0, 0, 0.10f);
+    set_weight(weights, 1, 0, 0.20f);
+    set_weight(weights, 0, 1, 0.30f);
+    set_weight(weights, 1, 1, 0.40f);
+
+    llama_moe_hot_cache_layer layer;
+    layer.n_expert = 4;
+    layer.expert_weights_scale = 1.0f;
+    layer.expert_lane_map_host = { 0, 1, -1, 1 };
+    layer.lanes.resize(2);
+    layer.lanes[0].n_expert = 4;
+    layer.lanes[0].n_hot = 1;
+    layer.lanes[0].hot_id_map_host = { 0, -1, -1, -1 };
+    layer.lanes[1].n_expert = 4;
+    layer.lanes[1].n_hot = 2;
+    layer.lanes[1].hot_id_map_host = { -1, 0, -1, 1 };
+
+    llama_moe_hot_cache_build_worklist(packed, selected, weights, layer, 0, 1);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_ID, 0) == 0.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_SRC_SLOT, 0) == 0.0f);
+    require_close(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT, 0), 0.10f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID, 0) == 0.0f);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_ID, 0) == 0.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_SRC_SLOT, 0) == 1.0f);
+    require_close(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_WEIGHT, 0), 0.20f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_EXPERT_ID, 0) == 1.0f);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_ID, 1) == 1.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_SRC_SLOT, 1) == 3.0f);
+    require_close(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_WEIGHT, 1), 0.40f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_EXPERT_ID, 1) == 3.0f);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID, 0) == 2.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, 0) == 2.0f);
+    require_close(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT, 0), 0.30f);
+
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT, 0) == 1.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_COUNT, 0) == 2.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_COUNT, 0) == 0.0f);
+    require(get_worklist_field(packed, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT, 0) == 1.0f);
+}
+
 static void test_build_worklist_from_logits() {
     auto ctx = make_ctx();
     require(ctx != nullptr);
@@ -207,6 +268,7 @@ static void test_build_worklist_from_logits() {
 int main() {
     test_build_worklist_mixed();
     test_build_worklist_all_hot_or_cold();
+    test_build_worklist_multi_lane_routes_by_lane_map();
     test_build_worklist_from_logits();
     return 0;
 }

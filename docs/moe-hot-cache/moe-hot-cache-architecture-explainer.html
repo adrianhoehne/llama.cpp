@@ -1462,8 +1462,10 @@
                 <tr><td><code>llama_moe_hot_cache_tensor_expert_bytes()</code></td><td>Computes the byte cost of one expert slice from a tensor.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_collect_expert_sizes()</code></td><td>Collects candidate expert sizes from model layers that actually have MoE expert tensors.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_select()</code></td><td>Packs ranked experts into the byte budget while accounting for per-layer dummy padding.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_select_multi()</code></td><td>Packs ranked experts into up to three fixed expert lanes. <code>warm</code> fills lanes in order; <code>hot-even</code> balances selected experts per layer across lanes while enforcing each lane budget.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_select_gpu_dev()</code></td><td>Selects the GPU backend device that should own the hot-cache buffer.</td></tr>
-                <tr><td><code>llama_moe_hot_cache_auto_budget_bytes()</code></td><td>Computes remaining VRAM for <code>--moe-hot-cache-max-mib -1</code>, including safety reserve.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_resolve_gpu_dev()</code></td><td>Resolves optional expert-lane device names independently from normal model offload devices.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_auto_budget_bytes()</code></td><td>Computes remaining VRAM for <code>--moe-hot-cache-max-mib -1</code>, including safety reserve. The primary lane keeps the conservative <code>1024 MiB</code> default; second and third worker lanes default to <code>512 MiB</code>.</td></tr>
               </tbody>
             </table>
           </article>
@@ -1479,6 +1481,7 @@
                 <tr><td><code>copy_expert_slice()</code>, <code>copy_scale_slice()</code></td><td>Copies expert and quantization-scale slices from the original model tensors into the cache buffer.</td></tr>
                 <tr><td><code>set_tensor_i32_1d()</code>, <code>set_tensor_f32_1d()</code></td><td>Updates map and mask tensors during build and dynamic replacement.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_build()</code></td><td>Allocates contexts, buffers, per-layer tensors, maps, masks, dummy slots, and host maps.</td></tr>
+                <tr><td><code>llama_moe_hot_cache_build_multi()</code></td><td>Allocates one context and buffer per expert lane, records expert-lane maps, and exposes the lane devices to the runtime scheduler without adding them to normal layer offload.</td></tr>
               </tbody>
             </table>
           </article>
@@ -1491,7 +1494,7 @@
               <tbody>
                 <tr><td><code>llama_moe_hot_cache_build_worklist()</code></td><td>Consumes already selected Top-K IDs and weights, then writes compact hot/cold slot lists.</td></tr>
                 <tr><td><code>llama_moe_hot_cache_build_worklist_from_logits()</code></td><td>For tiny decode batches, computes routing directly from logits on CPU and writes the same worklist shape.</td></tr>
-                <tr><td><code>LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_*</code></td><td>Defines the tensor fields for hot IDs, cold IDs, source slots, token IDs, weights, and counts.</td></tr>
+                <tr><td><code>LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_*</code></td><td>Defines the tensor fields for hot IDs, cold IDs, source slots, token IDs, weights, and counts. Multi-device decode adds fixed hot1/hot2 fields rather than a generic dynamic lane layout.</td></tr>
               </tbody>
             </table>
           </article>
@@ -1509,6 +1512,7 @@
                 <tr><td><code>build_lora_mm_id()</code></td><td>Builds LoRA-compatible <code>mul_mat_id</code> nodes for selected expert IDs.</td></tr>
                 <tr><td><code>build_moe_ffn_with_ids()</code></td><td>Common FFN core for hot and cold branches, including gate/up/down variants, activation, scales, weights, and reduce.</td></tr>
                 <tr><td><code>build_moe_hot_from_logits()</code></td><td>Generic logits-based hot-cache graph used by Gemma4, Qwen3Next, and Mellum.</td></tr>
+                <tr><td><code>build_moe_hot_multi_from_logits()</code></td><td>Decode-only multi-lane graph. Each expert GPU lane computes and locally reduces its assigned cached experts to <code>[n_embd,n_tokens]</code>; the cold CPU fallback remains available and the final add follows the normal layer device, which is the primary graph GPU in split-mode none setups.</td></tr>
                 <tr><td><code>qwen35 build_layer_ffn_hot()</code></td><td>Qwen35-specific graph that builds router logits inside the hot-cache path.</td></tr>
               </tbody>
             </table>
@@ -1588,7 +1592,7 @@
                 <tr><td><code>test-moe-hot-cache-parser</code></td><td>Perf JSON parsing, enabled layer slot parsing, and learn/live JSON compatibility.</td></tr>
                 <tr><td><code>test-moe-hot-cache-weighting</code></td><td>Mode parsing, flat scoring, pressure/time behavior, and layer-curve effects.</td></tr>
                 <tr><td><code>test-moe-hot-cache-planner</code>, <code>budget</code>, <code>builder</code></td><td>Byte accounting, budget fit, grouping, selected layer stats, tensor copy helpers, and cache build behavior.</td></tr>
-                <tr><td><code>test-moe-hot-cache-worklist</code></td><td>Hot/cold split, compact slot layout, counts, and logits-based routing output.</td></tr>
+                <tr><td><code>test-moe-hot-cache-worklist</code></td><td>Hot/cold split, compact slot layout, fixed multi-lane routing fields, counts, and logits-based routing output.</td></tr>
                 <tr><td><code>test-moe-hot-cache-adapter</code></td><td>Registered models, graph-kind isolation, profile defaults, and unsupported graph rejection.</td></tr>
                 <tr><td><code>test-moe-hot-cache-perf-*</code></td><td>State lifecycle, node classification, tensor readback, and JSON serialization.</td></tr>
                 <tr><td><code>test-moe-hot-cache-updater</code></td><td>Candidate planning, exchange limits, sorting, and map/mask-safe replacement.</td></tr>
