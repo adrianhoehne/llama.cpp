@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -121,22 +122,56 @@ ggml_backend_dev_t llama_moe_hot_cache_select_gpu_dev(const llama_model * model)
     return dev;
 }
 
+ggml_backend_dev_t llama_moe_hot_cache_resolve_gpu_dev(
+        const llama_model * model,
+        const char * name) {
+    if (name == nullptr || name[0] == '\0') {
+        return llama_moe_hot_cache_select_gpu_dev(model);
+    }
+
+    ggml_backend_dev_t dev = ggml_backend_dev_by_name(name);
+    if (dev == nullptr) {
+        throw std::runtime_error(std::string("unknown --moe-hot-cache device: ") + name);
+    }
+
+    const auto type = ggml_backend_dev_type(dev);
+    if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+        throw std::runtime_error(std::string("--moe-hot-cache device is not a GPU/iGPU backend: ") + name);
+    }
+
+    return dev;
+}
+
 size_t llama_moe_hot_cache_auto_budget_bytes(
         const llama_model & model,
         const llama_model_params & params,
         ggml_backend_dev_t dev,
         bool reserve_kv_cache) {
+    return llama_moe_hot_cache_auto_budget_bytes(
+            model,
+            params,
+            dev,
+            reserve_kv_cache,
+            params.moe_hot_cache_auto_reserve_mib);
+}
+
+size_t llama_moe_hot_cache_auto_budget_bytes(
+        const llama_model & model,
+        const llama_model_params & params,
+        ggml_backend_dev_t dev,
+        bool reserve_kv_cache,
+        uint64_t reserve_mib) {
     size_t free = 0;
     size_t total = 0;
     ggml_backend_dev_memory(dev, &free, &total);
     GGML_UNUSED(total);
 
     const size_t kv_reserve = reserve_kv_cache ? estimate_kv_cache_bytes_on_device(model, params, dev) : 0;
-    const size_t safety_reserve = mul_mib_saturating(params.moe_hot_cache_auto_reserve_mib);
+    const size_t safety_reserve = mul_mib_saturating(reserve_mib);
     const size_t budget = llama_moe_hot_cache_compute_auto_budget_bytes(
             free,
             kv_reserve,
-            params.moe_hot_cache_auto_reserve_mib);
+            reserve_mib);
 
     if (budget == 0) {
         LLAMA_LOG_WARN("%s: auto hot-cache budget on %s is 0 MiB: free before hot-cache = %zu MiB, %s KV reserve = %zu MiB, safety reserve = %zu MiB\n",

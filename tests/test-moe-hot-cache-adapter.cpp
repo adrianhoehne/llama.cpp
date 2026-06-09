@@ -1,4 +1,5 @@
 #include "../src/moe-hot-cache/llama-moe-hot-cache-adapter.h"
+#include "../include/llama.h"
 
 #include <cstdlib>
 #include <stdexcept>
@@ -140,11 +141,19 @@ static void test_parallel_mode_is_runtime_switchable() {
     set_env_var("LLAMA_MOE_HOT_CACHE_PARALLEL", nullptr);
 }
 
+static void test_default_worker_lane_reserve() {
+    const auto params = llama_model_default_params();
+    require(params.moe_hot_cache_auto_reserve_mib == 1024);
+    require(params.moe_hot_cache_second_auto_reserve_mib == 512);
+    require(params.moe_hot_cache_third_auto_reserve_mib == 512);
+}
+
 int main() {
     test_find_supported_adapters();
     test_rejects_unsupported_arch();
     test_graph_kind_capability_checks();
     test_profile_defaults_are_arch_specific();
     test_parallel_mode_is_runtime_switchable();
+    test_default_worker_lane_reserve();
     return 0;
 }

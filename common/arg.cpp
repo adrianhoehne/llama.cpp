@@ -73,6 +73,10 @@ static bool llama_moe_hot_cache_weighting_valid(const std::string & value) {
            value == "flat";
 }
 
+static bool llama_moe_hot_cache_device_strategy_valid(const std::string & value) {
+    return value == "warm" || value == "hot-even";
+}
+
 static void llama_moe_hot_cache_set_weighting_env(const std::string & value) {
 #if defined(_WIN32)
     _putenv_s("LLAMA_MOE_HOT_CACHE_WEIGHTING", value.c_str());
@@ -999,17 +1003,35 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             common_params_print_completion(ctx_arg);
             exit(0);
         }
-        if (ctx_arg.params.moe_hot_cache_max_mib != 0 && ctx_arg.params.moe_hot_cache.empty()) {
+        const bool moe_hot_cache_any_lane =
+            ctx_arg.params.moe_hot_cache_max_mib != 0 ||
+            ctx_arg.params.moe_hot_cache_second_max_mib != 0 ||
+            ctx_arg.params.moe_hot_cache_third_max_mib != 0;
+        if (moe_hot_cache_any_lane && ctx_arg.params.moe_hot_cache.empty()) {
             throw std::invalid_argument("--moe-hot-cache is required when --moe-hot-cache-max-mib is not 0");
         }
         if (ctx_arg.params.moe_hot_cache_max_mib < -1) {
             throw std::invalid_argument("--moe-hot-cache-max-mib must be -1 or greater");
         }
-        if (ctx_arg.params.moe_hot_cache_max_mib == -1 && ctx_arg.params.n_ctx <= 0) {
-            throw std::invalid_argument("--moe-hot-cache-max-mib -1 requires an explicit --ctx-size");
+        if (ctx_arg.params.moe_hot_cache_second_max_mib < -1) {
+            throw std::invalid_argument("--moe-hot-cache-second-max-mib must be -1 or greater");
         }
-        if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f && ctx_arg.params.moe_hot_cache_max_mib == 0) {
-            throw std::invalid_argument("--moe-hot-cache-update-rate requires --moe-hot-cache-max-mib");
+        if (ctx_arg.params.moe_hot_cache_third_max_mib < -1) {
+            throw std::invalid_argument("--moe-hot-cache-third-max-mib must be -1 or greater");
+        }
+        if ((ctx_arg.params.moe_hot_cache_max_mib == -1 ||
+             ctx_arg.params.moe_hot_cache_second_max_mib == -1 ||
+             ctx_arg.params.moe_hot_cache_third_max_mib == -1) && ctx_arg.params.n_ctx <= 0) {
+            throw std::invalid_argument("--moe-hot-cache-*-max-mib -1 requires an explicit --ctx-size");
+        }
+        if (ctx_arg.params.moe_hot_cache_second_max_mib != 0 && ctx_arg.params.moe_hot_cache_second_device.empty()) {
+            throw std::invalid_argument("--moe-hot-cache-second-device is required when --moe-hot-cache-second-max-mib is not 0");
+        }
+        if (ctx_arg.params.moe_hot_cache_third_max_mib != 0 && ctx_arg.params.moe_hot_cache_third_device.empty()) {
+            throw std::invalid_argument("--moe-hot-cache-third-device is required when --moe-hot-cache-third-max-mib is not 0");
+        }
+        if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f && !moe_hot_cache_any_lane) {
+            throw std::invalid_argument("--moe-hot-cache-update-rate requires a MoE hot-cache lane budget");
         }
         if (!ctx_arg.params.moe_layer_perf_out.empty()) {
             ctx_arg.params.no_perf = false;
@@ -2418,6 +2440,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE_MAX_MIB"));
     add_opt(common_arg(
+        {"--moe-hot-cache-device"}, "DEV",
+        "experimental: backend device for the primary MoE hot-cache expert lane (default: first model GPU/iGPU)",
+        [](common_params & params, const std::string & value) {
+            params.moe_hot_cache_device = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_DEVICE"));
+    add_opt(common_arg(
         {"--moe-hot-cache-auto-reserve-mib"}, "N",
         string_format("experimental: MiB to keep free when --moe-hot-cache-max-mib -1 auto-sizes the hot cache (default: %zu)", (size_t) params.moe_hot_cache_auto_reserve_mib),
         [](common_params & params, const std::string & value_str) {
@@ -2428,6 +2457,74 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_hot_cache_auto_reserve_mib = uint64_t(value);
         }
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE_AUTO_RESERVE_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-second-device"}, "DEV",
+        "experimental: backend device for the optional second MoE hot-cache expert lane",
+        [](common_params & params, const std::string & value) {
+            params.moe_hot_cache_second_device = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_SECOND_DEVICE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-second-max-mib"}, "N",
+        "experimental: max MiB for the optional second MoE hot-cache expert lane (0 = disabled, -1 = auto)",
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < -1) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_hot_cache_second_max_mib = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_SECOND_MAX_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-second-auto-reserve-mib"}, "N",
+        string_format("experimental: MiB to keep free when --moe-hot-cache-second-max-mib -1 auto-sizes the second lane (default: %zu)", (size_t) params.moe_hot_cache_second_auto_reserve_mib),
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_hot_cache_second_auto_reserve_mib = uint64_t(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_SECOND_AUTO_RESERVE_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-third-device"}, "DEV",
+        "experimental: backend device for the optional third MoE hot-cache expert lane",
+        [](common_params & params, const std::string & value) {
+            params.moe_hot_cache_third_device = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_THIRD_DEVICE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-third-max-mib"}, "N",
+        "experimental: max MiB for the optional third MoE hot-cache expert lane (0 = disabled, -1 = auto)",
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < -1) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_hot_cache_third_max_mib = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_THIRD_MAX_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-third-auto-reserve-mib"}, "N",
+        string_format("experimental: MiB to keep free when --moe-hot-cache-third-max-mib -1 auto-sizes the third lane (default: %zu)", (size_t) params.moe_hot_cache_third_auto_reserve_mib),
+        [](common_params & params, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_hot_cache_third_auto_reserve_mib = uint64_t(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_THIRD_AUTO_RESERVE_MIB"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-device-strategy"}, "{warm,hot-even}",
+        "experimental: distribute MoE hot-cache experts as warm lanes or per-layer hot-even lanes (default: warm)",
+        [](common_params & params, const std::string & value) {
+            if (!llama_moe_hot_cache_device_strategy_valid(value)) {
+                throw std::invalid_argument("--moe-hot-cache-device-strategy must be one of: warm, hot-even");
+            }
+            params.moe_hot_cache_device_strategy = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_DEVICE_STRATEGY"));
     add_opt(common_arg(
         {"--moe-hot-cache"}, "FNAME",
         "experimental: path to /moe-layer-perf JSON used by --moe-hot-cache-max-mib",

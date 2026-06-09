@@ -562,6 +562,14 @@ struct common_params {
 
     int64_t moe_hot_cache_max_mib = 0;   // max MiB for experimental MoE hot expert cache, 0 = disabled, -1 = auto
     uint64_t moe_hot_cache_auto_reserve_mib = 1024; // MiB kept free when auto-sizing the MoE hot expert cache
+    std::string moe_hot_cache_device;    // optional backend device for primary MoE hot-cache expert lane
+    int64_t moe_hot_cache_second_max_mib = 0; // max MiB for optional second MoE hot-cache expert lane
+    uint64_t moe_hot_cache_second_auto_reserve_mib = 512; // MiB kept free when auto-sizing the second lane
+    std::string moe_hot_cache_second_device; // backend device for optional second expert lane
+    int64_t moe_hot_cache_third_max_mib = 0; // max MiB for optional third MoE hot-cache expert lane
+    uint64_t moe_hot_cache_third_auto_reserve_mib = 512; // MiB kept free when auto-sizing the third lane
+    std::string moe_hot_cache_third_device; // backend device for optional third expert lane
+    std::string moe_hot_cache_device_strategy = "warm"; // MoE hot-cache device strategy: warm or hot-even
     std::string moe_hot_cache;           // path to /moe-layer-perf JSON
     float moe_hot_cache_update_rate = 0.0f; // fraction of hot-cache entries to update after each completed server run
     float moe_hot_cache_layer_curve = 0.5f; // MoE hot-cache layer-pressure weighting curve, 0 = flat, 1 = aggressive

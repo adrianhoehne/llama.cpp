@@ -65,6 +65,47 @@ static llm_graph_phase infer_decode_graph_phase(
     return LLM_GRAPH_PHASE_DECODE;
 }
 
+// Opens expert-only MoE hot-cache devices so tensors allocated on those devices
+// are visible to the scheduler. Keep GPU backends before ACCEL/CPU backends,
+// because the scheduler assumes the last backend is CPU for graph inputs.
+static void llama_context_add_moe_hot_cache_backends(
+        const llama_model & model,
+        std::vector<ggml_backend_ptr> & backends) {
+    if (model.moe_hot_cache == nullptr) {
+        return;
+    }
+
+    for (ggml_backend_dev_t dev : model.moe_hot_cache->devices) {
+        const bool already_open = std::any_of(backends.begin(), backends.end(), [&](const auto & backend) {
+            return ggml_backend_get_device(backend.get()) == dev;
+        });
+        if (already_open) {
+            continue;
+        }
+
+        ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+        if (backend == nullptr) {
+            throw std::runtime_error(format("failed to initialize MoE hot-cache expert backend %s", ggml_backend_dev_name(dev)));
+        }
+
+        const auto insert_pos = std::find_if(backends.begin(), backends.end(), [](const auto & existing) {
+            ggml_backend_dev_t existing_dev = ggml_backend_get_device(existing.get());
+            if (existing_dev == nullptr) {
+                return true;
+            }
+
+            const auto type = ggml_backend_dev_type(existing_dev);
+            return type != GGML_BACKEND_DEVICE_TYPE_GPU &&
+                   type != GGML_BACKEND_DEVICE_TYPE_IGPU;
+        });
+
+        LLAMA_LOG_INFO("%s: adding MoE hot-cache expert-only backend %s\n",
+                __func__,
+                ggml_backend_dev_name(dev));
+        backends.insert(insert_pos, ggml_backend_ptr(backend));
+    }
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -287,6 +328,8 @@ llama_context::llama_context(
             backends.emplace_back(backend);
         }
 
+        llama_context_add_moe_hot_cache_backends(model, backends);
+
         // add ACCEL backends (such as BLAS)
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -345,6 +388,7 @@ llama_context::llama_context(
     }
 
     llama_moe_hot_cache_init_after_context_memory(model);
+    llama_context_add_moe_hot_cache_backends(model, backends);
 
     // init backends
     if (!hparams.vocab_only) {
