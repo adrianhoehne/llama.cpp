@@ -39,6 +39,20 @@ static ggml_tensor * new_tensor_like_scale(
     return dst;
 }
 
+static ggml_tensor * new_tensor_like_bias(
+        ggml_context * ctx,
+        const ggml_tensor * src,
+        int64_t n_cache,
+        const char * name) {
+    if (src == nullptr) {
+        return nullptr;
+    }
+
+    ggml_tensor * dst = ggml_new_tensor_2d(ctx, src->type, src->ne[0], n_cache);
+    ggml_set_name(dst, name);
+    return dst;
+}
+
 static void zero_tensor(ggml_tensor * t) {
     std::vector<uint8_t> zeros(ggml_nbytes(t), 0);
     ggml_backend_tensor_set(t, zeros.data(), 0, zeros.size());
@@ -111,6 +125,21 @@ void llama_moe_hot_cache_copy_scale_slice(
     ggml_backend_tensor_set(dst, buf.data(), dst->nb[0]*dst_expert, bytes);
 }
 
+void llama_moe_hot_cache_copy_bias_slice(
+        const ggml_tensor * src,
+        ggml_tensor * dst,
+        uint32_t src_expert,
+        uint32_t dst_expert) {
+    if (src == nullptr || dst == nullptr) {
+        return;
+    }
+
+    const size_t bytes = ggml_nbytes(src) / size_t(src->ne[1]);
+    std::vector<uint8_t> buf(bytes);
+    ggml_backend_tensor_get(src, buf.data(), src->nb[1]*src_expert, bytes);
+    ggml_backend_tensor_set(dst, buf.data(), dst->nb[1]*dst_expert, bytes);
+}
+
 void llama_moe_hot_cache_set_tensor_i32_1d(ggml_tensor * t, uint32_t index, int32_t value) {
     ggml_backend_tensor_set(t, &value, t->nb[1]*index, sizeof(value));
 }
@@ -148,6 +177,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
 
         n_tensors += 4; // map + hot mask + cold mask + down
         n_tensors += layer.ffn_gate_up_exps != nullptr ? 1 : 2;
+        n_tensors += layer.ffn_gate_up_exps_b != nullptr ? 1 : 0;
+        n_tensors += layer.ffn_gate_exps_b    != nullptr ? 1 : 0;
+        n_tensors += layer.ffn_up_exps_b      != nullptr ? 1 : 0;
+        n_tensors += layer.ffn_down_exps_b    != nullptr ? 1 : 0;
         n_tensors += layer.ffn_gate_exps_s != nullptr ? 1 : 0;
         n_tensors += layer.ffn_up_exps_s   != nullptr ? 1 : 0;
         n_tensors += layer.ffn_down_exps_s != nullptr ? 1 : 0;
@@ -190,6 +223,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
         dst.ffn_gate_exps    = new_tensor_like_experts(ctx.get(), src.ffn_gate_exps,    n_cache, format("blk.%u.ffn_gate_exps.hot_cache",    il).c_str());
         dst.ffn_up_exps      = new_tensor_like_experts(ctx.get(), src.ffn_up_exps,      n_cache, format("blk.%u.ffn_up_exps.hot_cache",      il).c_str());
         dst.ffn_down_exps    = new_tensor_like_experts(ctx.get(), src.ffn_down_exps,    n_cache, format("blk.%u.ffn_down_exps.hot_cache",    il).c_str());
+        dst.ffn_gate_up_exps_b = new_tensor_like_bias(ctx.get(), src.ffn_gate_up_exps_b, n_cache, format("blk.%u.ffn_gate_up_exps_b.hot_cache", il).c_str());
+        dst.ffn_gate_exps_b    = new_tensor_like_bias(ctx.get(), src.ffn_gate_exps_b,    n_cache, format("blk.%u.ffn_gate_exps_b.hot_cache",    il).c_str());
+        dst.ffn_up_exps_b      = new_tensor_like_bias(ctx.get(), src.ffn_up_exps_b,      n_cache, format("blk.%u.ffn_up_exps_b.hot_cache",      il).c_str());
+        dst.ffn_down_exps_b    = new_tensor_like_bias(ctx.get(), src.ffn_down_exps_b,    n_cache, format("blk.%u.ffn_down_exps_b.hot_cache",    il).c_str());
         dst.ffn_gate_exps_s  = new_tensor_like_scale  (ctx.get(), src.ffn_gate_exps_s,  n_cache, format("blk.%u.ffn_gate_exps_s.hot_cache",  il).c_str());
         dst.ffn_up_exps_s    = new_tensor_like_scale  (ctx.get(), src.ffn_up_exps_s,    n_cache, format("blk.%u.ffn_up_exps_s.hot_cache",    il).c_str());
         dst.ffn_down_exps_s  = new_tensor_like_scale  (ctx.get(), src.ffn_down_exps_s,  n_cache, format("blk.%u.ffn_down_exps_s.hot_cache",  il).c_str());
@@ -224,6 +261,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
         if (dst.ffn_gate_exps)    { zero_tensor(dst.ffn_gate_exps); }
         if (dst.ffn_up_exps)      { zero_tensor(dst.ffn_up_exps); }
         if (dst.ffn_down_exps)    { zero_tensor(dst.ffn_down_exps); }
+        if (dst.ffn_gate_up_exps_b) { zero_tensor(dst.ffn_gate_up_exps_b); }
+        if (dst.ffn_gate_exps_b)    { zero_tensor(dst.ffn_gate_exps_b); }
+        if (dst.ffn_up_exps_b)      { zero_tensor(dst.ffn_up_exps_b); }
+        if (dst.ffn_down_exps_b)    { zero_tensor(dst.ffn_down_exps_b); }
         if (dst.ffn_gate_exps_s)  { zero_tensor(dst.ffn_gate_exps_s); }
         if (dst.ffn_up_exps_s)    { zero_tensor(dst.ffn_up_exps_s); }
         if (dst.ffn_down_exps_s)  { zero_tensor(dst.ffn_down_exps_s); }
@@ -248,6 +289,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
             llama_moe_hot_cache_copy_expert_slice(src.ffn_gate_exps,    dst.ffn_gate_exps,    expert, cache_id);
             llama_moe_hot_cache_copy_expert_slice(src.ffn_up_exps,      dst.ffn_up_exps,      expert, cache_id);
             llama_moe_hot_cache_copy_expert_slice(src.ffn_down_exps,    dst.ffn_down_exps,    expert, cache_id);
+            llama_moe_hot_cache_copy_bias_slice  (src.ffn_gate_up_exps_b, dst.ffn_gate_up_exps_b, expert, cache_id);
+            llama_moe_hot_cache_copy_bias_slice  (src.ffn_gate_exps_b,    dst.ffn_gate_exps_b,    expert, cache_id);
+            llama_moe_hot_cache_copy_bias_slice  (src.ffn_up_exps_b,      dst.ffn_up_exps_b,      expert, cache_id);
+            llama_moe_hot_cache_copy_bias_slice  (src.ffn_down_exps_b,    dst.ffn_down_exps_b,    expert, cache_id);
             llama_moe_hot_cache_copy_scale_slice(src.ffn_gate_exps_s,   dst.ffn_gate_exps_s,  expert, cache_id);
             llama_moe_hot_cache_copy_scale_slice(src.ffn_up_exps_s,     dst.ffn_up_exps_s,    expert, cache_id);
             llama_moe_hot_cache_copy_scale_slice(src.ffn_down_exps_s,   dst.ffn_down_exps_s,  expert, cache_id);
@@ -315,6 +360,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build_multi(
 
             n_tensors += 4; // map + hot mask + cold mask + down
             n_tensors += src.ffn_gate_up_exps != nullptr ? 1 : 2;
+            n_tensors += src.ffn_gate_up_exps_b != nullptr ? 1 : 0;
+            n_tensors += src.ffn_gate_exps_b    != nullptr ? 1 : 0;
+            n_tensors += src.ffn_up_exps_b      != nullptr ? 1 : 0;
+            n_tensors += src.ffn_down_exps_b    != nullptr ? 1 : 0;
             n_tensors += src.ffn_gate_exps_s != nullptr ? 1 : 0;
             n_tensors += src.ffn_up_exps_s   != nullptr ? 1 : 0;
             n_tensors += src.ffn_down_exps_s != nullptr ? 1 : 0;
@@ -365,6 +414,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build_multi(
             dst_lane.ffn_gate_exps    = new_tensor_like_experts(ctx.get(), src.ffn_gate_exps,    n_cache, format("blk.%u.ffn_gate_exps.hot_cache.%zu",    il, lane_index).c_str());
             dst_lane.ffn_up_exps      = new_tensor_like_experts(ctx.get(), src.ffn_up_exps,      n_cache, format("blk.%u.ffn_up_exps.hot_cache.%zu",      il, lane_index).c_str());
             dst_lane.ffn_down_exps    = new_tensor_like_experts(ctx.get(), src.ffn_down_exps,    n_cache, format("blk.%u.ffn_down_exps.hot_cache.%zu",    il, lane_index).c_str());
+            dst_lane.ffn_gate_up_exps_b = new_tensor_like_bias(ctx.get(), src.ffn_gate_up_exps_b, n_cache, format("blk.%u.ffn_gate_up_exps_b.hot_cache.%zu", il, lane_index).c_str());
+            dst_lane.ffn_gate_exps_b    = new_tensor_like_bias(ctx.get(), src.ffn_gate_exps_b,    n_cache, format("blk.%u.ffn_gate_exps_b.hot_cache.%zu",    il, lane_index).c_str());
+            dst_lane.ffn_up_exps_b      = new_tensor_like_bias(ctx.get(), src.ffn_up_exps_b,      n_cache, format("blk.%u.ffn_up_exps_b.hot_cache.%zu",      il, lane_index).c_str());
+            dst_lane.ffn_down_exps_b    = new_tensor_like_bias(ctx.get(), src.ffn_down_exps_b,    n_cache, format("blk.%u.ffn_down_exps_b.hot_cache.%zu",    il, lane_index).c_str());
             dst_lane.ffn_gate_exps_s  = new_tensor_like_scale  (ctx.get(), src.ffn_gate_exps_s,  n_cache, format("blk.%u.ffn_gate_exps_s.hot_cache.%zu",  il, lane_index).c_str());
             dst_lane.ffn_up_exps_s    = new_tensor_like_scale  (ctx.get(), src.ffn_up_exps_s,    n_cache, format("blk.%u.ffn_up_exps_s.hot_cache.%zu",    il, lane_index).c_str());
             dst_lane.ffn_down_exps_s  = new_tensor_like_scale  (ctx.get(), src.ffn_down_exps_s,  n_cache, format("blk.%u.ffn_down_exps_s.hot_cache.%zu",  il, lane_index).c_str());
@@ -400,6 +453,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build_multi(
             if (dst_lane.ffn_gate_exps)    { zero_tensor(dst_lane.ffn_gate_exps); }
             if (dst_lane.ffn_up_exps)      { zero_tensor(dst_lane.ffn_up_exps); }
             if (dst_lane.ffn_down_exps)    { zero_tensor(dst_lane.ffn_down_exps); }
+            if (dst_lane.ffn_gate_up_exps_b) { zero_tensor(dst_lane.ffn_gate_up_exps_b); }
+            if (dst_lane.ffn_gate_exps_b)    { zero_tensor(dst_lane.ffn_gate_exps_b); }
+            if (dst_lane.ffn_up_exps_b)      { zero_tensor(dst_lane.ffn_up_exps_b); }
+            if (dst_lane.ffn_down_exps_b)    { zero_tensor(dst_lane.ffn_down_exps_b); }
             if (dst_lane.ffn_gate_exps_s)  { zero_tensor(dst_lane.ffn_gate_exps_s); }
             if (dst_lane.ffn_up_exps_s)    { zero_tensor(dst_lane.ffn_up_exps_s); }
             if (dst_lane.ffn_down_exps_s)  { zero_tensor(dst_lane.ffn_down_exps_s); }
@@ -425,6 +482,10 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build_multi(
                 llama_moe_hot_cache_copy_expert_slice(src.ffn_gate_exps,    dst_lane.ffn_gate_exps,    expert, cache_id);
                 llama_moe_hot_cache_copy_expert_slice(src.ffn_up_exps,      dst_lane.ffn_up_exps,      expert, cache_id);
                 llama_moe_hot_cache_copy_expert_slice(src.ffn_down_exps,    dst_lane.ffn_down_exps,    expert, cache_id);
+                llama_moe_hot_cache_copy_bias_slice  (src.ffn_gate_up_exps_b, dst_lane.ffn_gate_up_exps_b, expert, cache_id);
+                llama_moe_hot_cache_copy_bias_slice  (src.ffn_gate_exps_b,    dst_lane.ffn_gate_exps_b,    expert, cache_id);
+                llama_moe_hot_cache_copy_bias_slice  (src.ffn_up_exps_b,      dst_lane.ffn_up_exps_b,      expert, cache_id);
+                llama_moe_hot_cache_copy_bias_slice  (src.ffn_down_exps_b,    dst_lane.ffn_down_exps_b,    expert, cache_id);
                 llama_moe_hot_cache_copy_scale_slice(src.ffn_gate_exps_s,   dst_lane.ffn_gate_exps_s,  expert, cache_id);
                 llama_moe_hot_cache_copy_scale_slice(src.ffn_up_exps_s,     dst_lane.ffn_up_exps_s,    expert, cache_id);
                 llama_moe_hot_cache_copy_scale_slice(src.ffn_down_exps_s,   dst_lane.ffn_down_exps_s,  expert, cache_id);

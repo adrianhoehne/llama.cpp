@@ -131,6 +131,16 @@ size_t llama_moe_hot_cache_tensor_expert_bytes(const ggml_tensor * t) {
     return ggml_nbytes(t) / size_t(t->ne[2]);
 }
 
+static size_t llama_moe_hot_cache_tensor_expert_bias_bytes(const ggml_tensor * t) {
+    if (t == nullptr) {
+        return 0;
+    }
+    if (t->ne[1] <= 0) {
+        throw std::runtime_error("MoE expert bias tensor has invalid expert dimension");
+    }
+    return ggml_nbytes(t) / size_t(t->ne[1]);
+}
+
 std::vector<llama_moe_hot_cache_expert_size> llama_moe_hot_cache_collect_expert_sizes(
         const llama_model & model) {
     std::vector<llama_moe_hot_cache_expert_size> result;
@@ -145,12 +155,16 @@ std::vector<llama_moe_hot_cache_expert_size> llama_moe_hot_cache_collect_expert_
         const int64_t n_expert = down->ne[2];
         for (int64_t ex = 0; ex < n_expert; ++ex) {
             size_t bytes = llama_moe_hot_cache_tensor_expert_bytes(down);
+            bytes += llama_moe_hot_cache_tensor_expert_bias_bytes(layer.ffn_down_exps_b);
 
             if (layer.ffn_gate_up_exps != nullptr) {
                 bytes += llama_moe_hot_cache_tensor_expert_bytes(layer.ffn_gate_up_exps);
+                bytes += llama_moe_hot_cache_tensor_expert_bias_bytes(layer.ffn_gate_up_exps_b);
             } else {
                 bytes += llama_moe_hot_cache_tensor_expert_bytes(layer.ffn_gate_exps);
                 bytes += llama_moe_hot_cache_tensor_expert_bytes(layer.ffn_up_exps);
+                bytes += llama_moe_hot_cache_tensor_expert_bias_bytes(layer.ffn_gate_exps_b);
+                bytes += llama_moe_hot_cache_tensor_expert_bias_bytes(layer.ffn_up_exps_b);
             }
 
             if (bytes > 0) {

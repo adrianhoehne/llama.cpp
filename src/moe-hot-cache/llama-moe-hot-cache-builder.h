@@ -39,6 +39,12 @@ void llama_moe_hot_cache_copy_scale_slice(
         uint32_t src_expert,
         uint32_t dst_expert);
 
+void llama_moe_hot_cache_copy_bias_slice(
+        const ggml_tensor * src,
+        ggml_tensor * dst,
+        uint32_t src_expert,
+        uint32_t dst_expert);
+
 void llama_moe_hot_cache_set_tensor_i32_1d(ggml_tensor * t, uint32_t index, int32_t value);
 void llama_moe_hot_cache_set_tensor_f32_1d(ggml_tensor * t, uint32_t index, float value);
 

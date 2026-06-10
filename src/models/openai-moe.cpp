@@ -61,7 +61,9 @@ std::unique_ptr<llm_graph_context> llama_model_openai_moe::build_arch_graph(cons
     return std::make_unique<graph>(*this, params);
 }
 
-llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_params & params) :
+        llm_graph_context(params),
+        model(model) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -129,17 +131,21 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
         cb(cur, "attn_post_norm", il);
 
         // MoE branch
-        cur = build_moe_ffn(cur,
-                model.layers[il].ffn_gate_inp,  model.layers[il].ffn_gate_inp_b,
-                model.layers[il].ffn_up_exps,   model.layers[il].ffn_up_exps_b,
-                model.layers[il].ffn_gate_exps, model.layers[il].ffn_gate_exps_b,
-                model.layers[il].ffn_down_exps, model.layers[il].ffn_down_exps_b,
-                nullptr,
-                n_expert, n_expert_used,
-                LLM_FFN_SWIGLU_OAI_MOE, false,
-                hparams.expert_weights_scale,
-                LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
-                il);
+        if (ggml_tensor * hot = build_layer_moe_hot(cur, il)) {
+            cur = hot;
+        } else {
+            cur = build_moe_ffn(cur,
+                    model.layers[il].ffn_gate_inp,  model.layers[il].ffn_gate_inp_b,
+                    model.layers[il].ffn_up_exps,   model.layers[il].ffn_up_exps_b,
+                    model.layers[il].ffn_gate_exps, model.layers[il].ffn_gate_exps_b,
+                    model.layers[il].ffn_down_exps, model.layers[il].ffn_down_exps_b,
+                    nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SWIGLU_OAI_MOE, false,
+                    hparams.expert_weights_scale,
+                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
+                    il);
+        }
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);

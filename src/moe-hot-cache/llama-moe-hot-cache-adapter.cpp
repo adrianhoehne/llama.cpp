@@ -67,11 +67,18 @@ static llama_moe_hot_cache_graph_profile mellum_profile() {
     return qwen35_profile();
 }
 
+static llama_moe_hot_cache_graph_profile openai_moe_profile() {
+    // GPT-OSS uses logits-based top-k routing with OpenAI SwiGLU experts.
+    // Keep the profile conservative until GPT-OSS-specific PP shortcuts are measured.
+    return qwen35_profile();
+}
+
 static const llama_moe_hot_cache_model_adapter ADAPTERS[] = {
-    { LLM_ARCH_QWEN35MOE, "qwen35moe", llama_moe_hot_cache_graph_kind::qwen35_ffn, LLM_FFN_SILU },
-    { LLM_ARCH_QWEN3NEXT, "qwen3next", llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
-    { LLM_ARCH_GEMMA4,    "gemma4",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_GELU },
-    { LLM_ARCH_MELLUM,    "mellum",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
+    { LLM_ARCH_QWEN35MOE,  "qwen35moe", llama_moe_hot_cache_graph_kind::qwen35_ffn, LLM_FFN_SILU },
+    { LLM_ARCH_QWEN3NEXT,  "qwen3next", llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
+    { LLM_ARCH_GEMMA4,     "gemma4",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_GELU },
+    { LLM_ARCH_MELLUM,     "mellum",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
+    { LLM_ARCH_OPENAI_MOE, "gpt-oss",   llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SWIGLU_OAI_MOE },
 };
 
 } // namespace
@@ -197,6 +204,8 @@ llama_moe_hot_cache_graph_profile llama_moe_hot_cache_model_adapter::profile() c
             return gemma4_profile();
         case LLM_ARCH_MELLUM:
             return mellum_profile();
+        case LLM_ARCH_OPENAI_MOE:
+            return openai_moe_profile();
         default:
             return {};
     }

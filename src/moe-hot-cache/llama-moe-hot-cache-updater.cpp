@@ -247,6 +247,10 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_scored_observat
         llama_moe_hot_cache_copy_expert_slice(src.ffn_gate_exps,    dst.ffn_gate_exps,    candidate.add_expert, candidate.cache_id);
         llama_moe_hot_cache_copy_expert_slice(src.ffn_up_exps,      dst.ffn_up_exps,      candidate.add_expert, candidate.cache_id);
         llama_moe_hot_cache_copy_expert_slice(src.ffn_down_exps,    dst.ffn_down_exps,    candidate.add_expert, candidate.cache_id);
+        llama_moe_hot_cache_copy_bias_slice  (src.ffn_gate_up_exps_b, dst.ffn_gate_up_exps_b, candidate.add_expert, candidate.cache_id);
+        llama_moe_hot_cache_copy_bias_slice  (src.ffn_gate_exps_b,    dst.ffn_gate_exps_b,    candidate.add_expert, candidate.cache_id);
+        llama_moe_hot_cache_copy_bias_slice  (src.ffn_up_exps_b,      dst.ffn_up_exps_b,      candidate.add_expert, candidate.cache_id);
+        llama_moe_hot_cache_copy_bias_slice  (src.ffn_down_exps_b,    dst.ffn_down_exps_b,    candidate.add_expert, candidate.cache_id);
         llama_moe_hot_cache_copy_scale_slice(src.ffn_gate_exps_s,   dst.ffn_gate_exps_s,  candidate.add_expert, candidate.cache_id);
         llama_moe_hot_cache_copy_scale_slice(src.ffn_up_exps_s,     dst.ffn_up_exps_s,    candidate.add_expert, candidate.cache_id);
         llama_moe_hot_cache_copy_scale_slice(src.ffn_down_exps_s,   dst.ffn_down_exps_s,  candidate.add_expert, candidate.cache_id);
