@@ -696,7 +696,9 @@ cmake --build build -j8
           Some values are nested or overlapping measurements. <code>Parallel wall</code> is the wall
           time of the hot/cold region, <code>Hot lane</code> and <code>Cold lane</code> are lane wall
           times, <code>Overlap</code> is time hidden by parallel execution, and <code>Join wait</code>
-          is time one lane waits for the other.
+          is time one lane waits for the other. Multi-device expert lanes are graph-level branches, so
+          in <code>Full</code> mode their branch timing is used as the lane value when the legacy scheduler
+          fork does not report a lane wall time.
         </p>
       </section>
 

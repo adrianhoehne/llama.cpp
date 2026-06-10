@@ -20,6 +20,28 @@ double ratio(uint64_t value, uint64_t total) {
     return total > 0 ? (double) value / (double) total : 0.0;
 }
 
+uint64_t effective_hot_lane_wall_time_us(
+        const llama_moe_layer_perf_json_layer_snapshot & layer,
+        bool full_mode) {
+    if (layer.parallel_hot_lane_wall_time_us != 0 || !full_mode) {
+        return layer.parallel_hot_lane_wall_time_us;
+    }
+
+    // Multi-device hot-cache lanes are graph-level branches, not the legacy
+    // scheduler hot/cold fork. Use the measured hot branch as the UI lane value.
+    return layer.hot_branch_time_us;
+}
+
+uint64_t effective_cold_lane_wall_time_us(
+        const llama_moe_layer_perf_json_layer_snapshot & layer,
+        bool full_mode) {
+    if (layer.parallel_cold_lane_wall_time_us != 0 || !full_mode) {
+        return layer.parallel_cold_lane_wall_time_us;
+    }
+
+    return layer.cold_branch_time_us;
+}
+
 bool has_expert_counts(const std::vector<uint64_t> & counts) {
     return std::any_of(counts.begin(), counts.end(), [](uint64_t count) {
         return count != 0;
@@ -123,8 +145,8 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         summary_hot_gather_scatter_time_us += layer.hot_gather_scatter_time_us;
         summary_cold_gather_scatter_time_us += layer.cold_gather_scatter_time_us;
         summary_parallel_region_wall_time_us += layer.parallel_region_wall_time_us;
-        summary_parallel_hot_lane_wall_time_us += layer.parallel_hot_lane_wall_time_us;
-        summary_parallel_cold_lane_wall_time_us += layer.parallel_cold_lane_wall_time_us;
+        summary_parallel_hot_lane_wall_time_us += effective_hot_lane_wall_time_us(layer, full_mode);
+        summary_parallel_cold_lane_wall_time_us += effective_cold_lane_wall_time_us(layer, full_mode);
         summary_parallel_join_wait_time_us += layer.parallel_join_wait_time_us;
         summary_parallel_overlap_estimate_us += layer.parallel_overlap_estimate_us;
         summary_parallel_hot_launches += layer.parallel_hot_launches;
@@ -206,8 +228,8 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         out << "\"hot_slots_per_call\":" << hot_slots_per_call << ",";
         out << "\"cold_slots_per_call\":" << cold_slots_per_call << ",";
         out << "\"hot_slot_ratio\":" << ratio(hot_slots_total, slots_total);
-        out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls);
-        out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls);
+        out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(effective_hot_lane_wall_time_us(layer, full_mode), layer.calls);
+        out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(effective_cold_lane_wall_time_us(layer, full_mode), layer.calls);
         out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(layer.parallel_join_wait_time_us, layer.calls);
 
         if (full_mode) {

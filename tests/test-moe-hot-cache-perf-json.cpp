@@ -85,6 +85,27 @@ static void test_full_mode_serializes_raw_counts_as_cold() {
     require(contains(json, "\"cold_experts\":[[1,5],[3,3]]"));
 }
 
+static void test_full_mode_uses_branch_timings_for_missing_lane_timings() {
+    llama_moe_layer_perf_json_snapshot snapshot;
+    snapshot.mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
+    snapshot.n_expert = 4;
+    snapshot.n_expert_used = 2;
+
+    llama_moe_layer_perf_json_layer_snapshot layer;
+    layer.calls = 2;
+    layer.hot_slots_total = 3;
+    layer.cold_slots_total = 1;
+    layer.hot_branch_time_us = 30;
+    layer.cold_branch_time_us = 50;
+    snapshot.layers.push_back(layer);
+
+    const std::string json = llama_moe_layer_perf_json_serializer::serialize(snapshot);
+    require(contains(json, "\"parallel_hot_lane_wall_time_per_call_us\":15"));
+    require(contains(json, "\"parallel_cold_lane_wall_time_per_call_us\":25"));
+    require(contains(json, "\"hot_branch_time_per_call_us\":15"));
+    require(contains(json, "\"cold_branch_time_per_call_us\":25"));
+}
+
 static void test_full_mode_serializes_parallel_debug() {
     llama_moe_layer_perf_json_snapshot snapshot;
     snapshot.mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
@@ -123,6 +144,7 @@ int main() {
     test_disabled_json_is_minimal();
     test_update_mode_keeps_only_update_metrics();
     test_full_mode_serializes_raw_counts_as_cold();
+    test_full_mode_uses_branch_timings_for_missing_lane_timings();
     test_full_mode_serializes_parallel_debug();
     return 0;
 }
