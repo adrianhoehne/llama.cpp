@@ -14,6 +14,7 @@ Supported:
 - Gemma 4 26B-A4B
 - Qwen3Next
 - Mellum MoE models
+- Gpt-Oss Moe models
 
 ## Cached-experts configuration examples
 
