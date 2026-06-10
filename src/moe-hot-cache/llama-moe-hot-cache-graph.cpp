@@ -1872,7 +1872,24 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_moe_hot(ggml_tensor * cu
     return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, adapter);
 }
 
-ggml_tensor * llama_model_openai_moe::graph::build_layer_moe_hot(ggml_tensor * cur, ggml_tensor * logits, const int il) {
+ggml_tensor * llama_model_openai_moe::graph::build_layer_moe_hot(ggml_tensor * cur, const int il) {
+    const bool hot_cache_layer_active =
+        llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits);
+    const bool hot_cache_multi_lane =
+        hot_cache_layer_active && !model.moe_hot_cache->layers[il].lanes.empty();
+    // Multi-lane hot-cache graphs currently only support one decode token.
+    if (!hot_cache_layer_active || (hot_cache_multi_lane && (cparams.warmup || cur->ne[1] != 1))) {
+        return nullptr;
+    }
+
+    ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
+    cb(logits, "ffn_moe_logits", il);
+
+    if (model.layers[il].ffn_gate_inp_b) {
+        logits = ggml_add(ctx0, logits, model.layers[il].ffn_gate_inp_b);
+        cb(logits, "ffn_moe_logits_biased", il);
+    }
+
     const llama_moe_hot_cache_model_adapter & adapter =
         llama_moe_hot_cache_require_model_adapter(model.arch, llama_moe_hot_cache_graph_kind::logits);
     return llama_moe_hot_cache_build_moe_hot_from_logits(*this, model, cur, logits, il, adapter);

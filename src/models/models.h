@@ -1659,7 +1659,6 @@ struct llama_model_openai_moe : public llama_model_base {
 
         ggml_tensor * build_layer_moe_hot(
                     ggml_tensor * cur,
-                    ggml_tensor * logits,
                             int   il);
     };
 

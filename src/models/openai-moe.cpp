@@ -1,5 +1,4 @@
 #include "models.h"
-#include "moe-hot-cache/llama-moe-hot-cache.h"
 
 void llama_model_openai_moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -134,16 +133,8 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
         cb(cur, "attn_post_norm", il);
 
         // MoE branch
-        if (llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits)) {
-            ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
-            cb(logits, "ffn_moe_logits", il);
-
-            if (model.layers[il].ffn_gate_inp_b) {
-                logits = ggml_add(ctx0, logits, model.layers[il].ffn_gate_inp_b);
-                cb(logits, "ffn_moe_logits_biased", il);
-            }
-
-            cur = build_layer_moe_hot(cur, logits, il);
+        if (ggml_tensor * hot = build_layer_moe_hot(cur, il)) {
+            cur = hot;
         } else {
             cur = build_moe_ffn(cur,
                     model.layers[il].ffn_gate_inp,  model.layers[il].ffn_gate_inp_b,
