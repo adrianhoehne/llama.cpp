@@ -73,12 +73,27 @@ static llama_moe_hot_cache_graph_profile openai_moe_profile() {
     return qwen35_profile();
 }
 
+static llama_moe_hot_cache_graph_profile deepseek2_profile() {
+    // DeepSeek2-family GGUFs, including GLM Flash MoE exports, use a logits
+    // router with hparams-driven probability semantics and optional expert bias.
+    return qwen35_profile();
+}
+
+static llama_moe_hot_cache_graph_profile glm4_moe_profile() {
+    // GLM Flash MoE uses a logits router plus sigmoid probabilities and
+    // selection bias. Keep the graph profile conservative; the router semantics
+    // are handled by the GLM worklist path.
+    return qwen35_profile();
+}
+
 static const llama_moe_hot_cache_model_adapter ADAPTERS[] = {
     { LLM_ARCH_QWEN35MOE, "qwen35moe", llama_moe_hot_cache_graph_kind::qwen35_ffn, LLM_FFN_SILU },
     { LLM_ARCH_QWEN3NEXT, "qwen3next", llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
     { LLM_ARCH_GEMMA4,    "gemma4",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_GELU },
     { LLM_ARCH_MELLUM,    "mellum",    llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
     { LLM_ARCH_OPENAI_MOE, "gpt-oss",  llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SWIGLU_OAI_MOE },
+    { LLM_ARCH_DEEPSEEK2, "deepseek2", llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
+    { LLM_ARCH_GLM4_MOE,  "glm4moe",   llama_moe_hot_cache_graph_kind::logits,     LLM_FFN_SILU },
 };
 
 } // namespace
@@ -206,6 +221,10 @@ llama_moe_hot_cache_graph_profile llama_moe_hot_cache_model_adapter::profile() c
             return mellum_profile();
         case LLM_ARCH_OPENAI_MOE:
             return openai_moe_profile();
+        case LLM_ARCH_DEEPSEEK2:
+            return deepseek2_profile();
+        case LLM_ARCH_GLM4_MOE:
+            return glm4_moe_profile();
         default:
             return {};
     }

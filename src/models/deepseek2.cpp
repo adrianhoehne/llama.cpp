@@ -1,4 +1,6 @@
 #include "models.h"
+#include "moe-hot-cache/llama-moe-hot-cache.h"
+#include "moe-hot-cache/llama-moe-hot-cache-pp.h"
 
 void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
     uint32_t n_vocab = 0;
@@ -144,7 +146,7 @@ std::unique_ptr<llm_graph_context> llama_model_deepseek2::build_arch_graph(const
 }
 
 llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_graph_context(params) {
+    llm_graph_context(params), model(model) {
     // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
     bool is_ocr = model.arch == LLM_ARCH_DEEPSEEK2OCR;
 
@@ -384,19 +386,39 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
             cb(cur, "ffn_out", il);
         } else {
             // MoE branch
-            ggml_tensor * moe_out = build_moe_ffn(cur,
-                model.layers[il].ffn_gate_inp,
-                model.layers[il].ffn_up_exps,
-                model.layers[il].ffn_gate_exps,
-                model.layers[il].ffn_down_exps,
-                model.layers[il].ffn_exp_probs_b,
-                n_expert, n_expert_used,
-                LLM_FFN_SILU, hparams.expert_weights_norm,
-                hparams.expert_weights_scale,
-                (llama_expert_gating_func_type) hparams.expert_gating_func,
-                il,
-                nullptr,
-                model.layers[il].ffn_gate_up_exps);
+            ggml_tensor * moe_out = nullptr;
+            const bool hot_cache_layer_active =
+                llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits);
+            const bool hot_cache_multi_lane =
+                hot_cache_layer_active && !model.moe_hot_cache->layers[il].lanes.empty();
+            const bool hot_cache_group_router =
+                hparams.n_expert_groups > 1;
+            const bool hot_cache_active =
+                hot_cache_layer_active &&
+                !hot_cache_group_router &&
+                (!hot_cache_multi_lane || (!cparams.warmup && cur->ne[1] == 1)) &&
+                !llama_moe_hot_cache_pp_policy::bypass_hot_cache_for_prompt_processing(
+                        gphase, cparams.warmup, cur->ne[1], 1);
+            if (hot_cache_active) {
+                ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
+                cb(logits, "ffn_moe_logits", il);
+
+                moe_out = build_layer_moe_hot(cur, logits, il);
+            } else {
+                moe_out = build_moe_ffn(cur,
+                    model.layers[il].ffn_gate_inp,
+                    model.layers[il].ffn_up_exps,
+                    model.layers[il].ffn_gate_exps,
+                    model.layers[il].ffn_down_exps,
+                    model.layers[il].ffn_exp_probs_b,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, hparams.expert_weights_norm,
+                    hparams.expert_weights_scale,
+                    (llama_expert_gating_func_type) hparams.expert_gating_func,
+                    il,
+                    nullptr,
+                    model.layers[il].ffn_gate_up_exps);
+            }
             cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert

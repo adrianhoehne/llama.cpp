@@ -5,6 +5,7 @@
 #include "ggml.h"
 #include "ggml-cpp.h"
 #include "llama.h"
+#include "../llama-hparams.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -119,6 +120,8 @@ struct llama_moe_hot_cache_layer_lane {
     uint32_t n_hot = 0;
     uint32_t n_expert = 0;
     float expert_weights_scale = 0.0f;
+    bool expert_weights_norm = false;
+    llama_expert_gating_func_type expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
 
     bool active() const {
         return n_hot > 0 && hot_id_map != nullptr && hot_mask != nullptr && cold_mask != nullptr;
@@ -270,6 +273,17 @@ void llama_moe_hot_cache_build_worklist(
 void llama_moe_hot_cache_build_worklist_from_logits(
         ggml_tensor * dst,
         const ggml_tensor * logits,
+        const llama_moe_hot_cache_layer & layer,
+        int ith,
+        int nth,
+        llama_moe_hot_cache_worklist_order order = llama_moe_hot_cache_worklist_order::token_major);
+
+// Builds a worklist for routers that select experts from biased probabilities
+// but weight the selected experts with the unbiased probabilities.
+void llama_moe_hot_cache_build_worklist_from_biased_logits(
+        ggml_tensor * dst,
+        const ggml_tensor * logits,
+        const ggml_tensor * exp_probs_b,
         const llama_moe_hot_cache_layer & layer,
         int ith,
         int nth,

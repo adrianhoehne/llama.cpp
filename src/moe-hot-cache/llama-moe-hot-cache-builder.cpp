@@ -188,6 +188,9 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build(
         cache->layers[il].n_hot = selected_by_layer[il].size();
         cache->layers[il].n_expert = layer.ffn_down_exps ? layer.ffn_down_exps->ne[2] : 0;
         cache->layers[il].expert_weights_scale = model.hparams.expert_weights_scale;
+        cache->layers[il].expert_weights_norm = model.hparams.expert_weights_norm;
+        cache->layers[il].expert_gating_func =
+            static_cast<llama_expert_gating_func_type>(model.hparams.expert_gating_func);
     }
 
     // Reserve extra space per tensor for internal ggml bookkeeping
@@ -371,9 +374,15 @@ std::unique_ptr<llama_moe_hot_cache> llama_moe_hot_cache_build_multi(
             dst_lane.n_hot = selected_by_layer[il].size();
             dst_lane.n_expert = src.ffn_down_exps ? src.ffn_down_exps->ne[2] : 0;
             dst_lane.expert_weights_scale = model.hparams.expert_weights_scale;
+            dst_lane.expert_weights_norm = model.hparams.expert_weights_norm;
+            dst_lane.expert_gating_func =
+                static_cast<llama_expert_gating_func_type>(model.hparams.expert_gating_func);
 
             cache_layer.n_expert = dst_lane.n_expert;
             cache_layer.expert_weights_scale = model.hparams.expert_weights_scale;
+            cache_layer.expert_weights_norm = model.hparams.expert_weights_norm;
+            cache_layer.expert_gating_func =
+                static_cast<llama_expert_gating_func_type>(model.hparams.expert_gating_func);
             if (cache_layer.expert_lane_map_host.empty() && dst_lane.n_expert > 0) {
                 cache_layer.expert_lane_map_host.assign(dst_lane.n_expert, -1);
             }

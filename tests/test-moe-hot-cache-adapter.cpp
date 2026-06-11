@@ -71,6 +71,18 @@ static void test_find_supported_adapters() {
     require(std::string(openai_moe->name) == "gpt-oss");
     require(openai_moe->graph_kind == llama_moe_hot_cache_graph_kind::logits);
     require(openai_moe->ffn_op == LLM_FFN_SWIGLU_OAI_MOE);
+
+    const auto * deepseek2 = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_DEEPSEEK2);
+    require(deepseek2 != nullptr);
+    require(std::string(deepseek2->name) == "deepseek2");
+    require(deepseek2->graph_kind == llama_moe_hot_cache_graph_kind::logits);
+    require(deepseek2->ffn_op == LLM_FFN_SILU);
+
+    const auto * glm4_moe = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_GLM4_MOE);
+    require(glm4_moe != nullptr);
+    require(std::string(glm4_moe->name) == "glm4moe");
+    require(glm4_moe->graph_kind == llama_moe_hot_cache_graph_kind::logits);
+    require(glm4_moe->ffn_op == LLM_FFN_SILU);
 }
 
 static void test_rejects_unsupported_arch() {
@@ -98,6 +110,12 @@ static void test_graph_kind_capability_checks() {
 
     require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_OPENAI_MOE, llama_moe_hot_cache_graph_kind::logits));
     require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_OPENAI_MOE, llama_moe_hot_cache_graph_kind::qwen35_ffn));
+
+    require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_DEEPSEEK2, llama_moe_hot_cache_graph_kind::logits));
+    require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_DEEPSEEK2, llama_moe_hot_cache_graph_kind::qwen35_ffn));
+
+    require(llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_GLM4_MOE, llama_moe_hot_cache_graph_kind::logits));
+    require(!llama_moe_hot_cache_adapter_supports_graph_kind(LLM_ARCH_GLM4_MOE, llama_moe_hot_cache_graph_kind::qwen35_ffn));
 
     const auto * qwen_any = llama_moe_hot_cache_find_model_adapter(LLM_ARCH_QWEN35MOE, llama_moe_hot_cache_graph_kind::none);
     require(qwen_any != nullptr);
@@ -142,6 +160,20 @@ static void test_profile_defaults_are_arch_specific() {
     require(openai_moe.merge_sum_rows);
     require(!openai_moe.branch_reduce_merge);
     require(openai_moe.cpu_decode_routing_max_tokens == 1);
+
+    const auto deepseek2 = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_DEEPSEEK2);
+    require(deepseek2.cpu_decode_routing);
+    require(deepseek2.decode_direct_merge);
+    require(deepseek2.merge_sum_rows);
+    require(!deepseek2.branch_reduce_merge);
+    require(deepseek2.cpu_decode_routing_max_tokens == 1);
+
+    const auto glm4_moe = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_GLM4_MOE);
+    require(glm4_moe.cpu_decode_routing);
+    require(glm4_moe.decode_direct_merge);
+    require(glm4_moe.merge_sum_rows);
+    require(!glm4_moe.branch_reduce_merge);
+    require(glm4_moe.cpu_decode_routing_max_tokens == 1);
 }
 
 static void test_parallel_mode_is_runtime_switchable() {

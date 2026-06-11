@@ -272,6 +272,178 @@ static void build_worklist_multi_from_selected(
     }
 }
 
+static float sigmoid(float x) {
+    if (x >= 0.0f) {
+        return 1.0f/(1.0f + std::exp(-x));
+    }
+
+    const float exp_x = std::exp(x);
+    return exp_x/(1.0f + exp_x);
+}
+
+static llama_expert_gating_func_type effective_gating_func(const llama_moe_hot_cache_layer & layer) {
+    return layer.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE
+        ? LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX
+        : layer.expert_gating_func;
+}
+
+static void fill_router_probs_from_logits(
+        std::vector<float> & probs,
+        const ggml_tensor * logits,
+        int32_t token,
+        llama_expert_gating_func_type gating_func) {
+    const int32_t n_expert = logits->ne[0];
+
+    const auto logit_at = [&](int32_t expert) {
+        return *(const float *) ((const char *) logits->data + expert*logits->nb[0] + token*logits->nb[1]);
+    };
+
+    switch (gating_func) {
+        case LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX:
+            {
+                float max_logit = -std::numeric_limits<float>::infinity();
+                for (int32_t expert = 0; expert < n_expert; ++expert) {
+                    max_logit = std::max(max_logit, logit_at(expert));
+                }
+
+                float sum = 0.0f;
+                for (int32_t expert = 0; expert < n_expert; ++expert) {
+                    probs[expert] = std::exp(logit_at(expert) - max_logit);
+                    sum += probs[expert];
+                }
+                for (int32_t expert = 0; expert < n_expert; ++expert) {
+                    probs[expert] /= sum;
+                }
+            } break;
+        case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID:
+            {
+                for (int32_t expert = 0; expert < n_expert; ++expert) {
+                    probs[expert] = sigmoid(logit_at(expert));
+                }
+            } break;
+        case LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT:
+            {
+                for (int32_t expert = 0; expert < n_expert; ++expert) {
+                    probs[expert] = logit_at(expert);
+                }
+            } break;
+        default:
+            GGML_ABORT("unsupported MoE router gating function");
+    }
+}
+
+static void fill_router_selection_from_biased_logits(
+        ggml_tensor * selected,
+        ggml_tensor * weights,
+        const ggml_tensor * logits,
+        const ggml_tensor * exp_probs_b,
+        const llama_moe_hot_cache_layer & layer) {
+    GGML_ASSERT(selected != nullptr);
+    GGML_ASSERT(weights != nullptr);
+    GGML_ASSERT(logits != nullptr);
+    GGML_ASSERT(selected->type == GGML_TYPE_I32);
+    GGML_ASSERT(weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(logits->type == GGML_TYPE_F32);
+    GGML_ASSERT(weights->ne[0] == 1);
+    GGML_ASSERT(selected->ne[0] == weights->ne[1]);
+    GGML_ASSERT(selected->ne[1] == weights->ne[2]);
+    GGML_ASSERT(logits->ne[0] == layer.n_expert);
+    GGML_ASSERT(logits->ne[1] == selected->ne[1]);
+    if (exp_probs_b != nullptr) {
+        GGML_ASSERT(exp_probs_b->type == GGML_TYPE_F32);
+        GGML_ASSERT(exp_probs_b->ne[0] == logits->ne[0]);
+    }
+
+    const int32_t n_expert = logits->ne[0];
+    const int32_t n_expert_used = selected->ne[0];
+    const int32_t n_tokens = selected->ne[1];
+    GGML_ASSERT(n_expert_used > 0);
+    GGML_ASSERT(n_expert_used <= n_expert);
+    GGML_ASSERT(n_expert_used <= LLAMA_MAX_EXPERTS);
+
+    const auto bias_at = [&](int32_t expert) {
+        if (exp_probs_b == nullptr) {
+            return 0.0f;
+        }
+        return *(const float *) ((const char *) exp_probs_b->data + expert*exp_probs_b->nb[0]);
+    };
+
+    const llama_expert_gating_func_type gating_func = effective_gating_func(layer);
+    const float weight_scale =
+        layer.expert_weights_scale != 0.0f && layer.expert_weights_scale != 1.0f ? layer.expert_weights_scale : 1.0f;
+
+    std::vector<float> probs(n_expert);
+    int32_t top_experts[LLAMA_MAX_EXPERTS];
+    float top_scores[LLAMA_MAX_EXPERTS];
+    float top_weights[LLAMA_MAX_EXPERTS];
+
+    for (int32_t token = 0; token < n_tokens; ++token) {
+        fill_router_probs_from_logits(probs, logits, token, gating_func);
+
+        for (int32_t i = 0; i < n_expert_used; ++i) {
+            top_experts[i] = -1;
+            top_scores[i] = -std::numeric_limits<float>::infinity();
+            top_weights[i] = 0.0f;
+        }
+
+        for (int32_t expert = 0; expert < n_expert; ++expert) {
+            const float selection_score = probs[expert] + bias_at(expert);
+            for (int32_t pos = 0; pos < n_expert_used; ++pos) {
+                if (selection_score <= top_scores[pos]) {
+                    continue;
+                }
+
+                for (int32_t move = n_expert_used - 1; move > pos; --move) {
+                    top_scores[move] = top_scores[move - 1];
+                    top_experts[move] = top_experts[move - 1];
+                }
+                top_scores[pos] = selection_score;
+                top_experts[pos] = expert;
+                break;
+            }
+        }
+
+        for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+            const int32_t expert = top_experts[iex];
+            GGML_ASSERT(expert >= 0);
+            top_weights[iex] = probs[expert];
+        }
+
+        if (gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
+            float max_weight = -std::numeric_limits<float>::infinity();
+            for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+                max_weight = std::max(max_weight, top_weights[iex]);
+            }
+
+            float weight_sum = 0.0f;
+            for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+                top_weights[iex] = std::exp(top_weights[iex] - max_weight);
+                weight_sum += top_weights[iex];
+            }
+            for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+                top_weights[iex] /= weight_sum;
+            }
+        }
+
+        if (layer.expert_weights_norm) {
+            float weight_sum = 0.0f;
+            for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+                weight_sum += top_weights[iex];
+            }
+            weight_sum = std::max(weight_sum, 6.103515625e-5f);
+            for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+                top_weights[iex] /= weight_sum;
+            }
+        }
+
+        for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+            *(int32_t *) ((char *) selected->data + iex*selected->nb[0] + token*selected->nb[1]) = top_experts[iex];
+            *(float *) ((char *) weights->data + iex*weights->nb[1] + token*weights->nb[2]) =
+                top_weights[iex] * weight_scale;
+        }
+    }
+}
+
 static void build_worklist_multi_from_logits(
         ggml_tensor * dst,
         const ggml_tensor * logits,
@@ -754,4 +926,51 @@ void llama_moe_hot_cache_build_worklist_from_logits(
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT,  0, float(hot_slot));
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT, 0, float(cold_slot));
     }
+}
+
+void llama_moe_hot_cache_build_worklist_from_biased_logits(
+        ggml_tensor * dst,
+        const ggml_tensor * logits,
+        const ggml_tensor * exp_probs_b,
+        const llama_moe_hot_cache_layer & layer,
+        int ith,
+        int nth,
+        llama_moe_hot_cache_worklist_order order) {
+    GGML_UNUSED(nth);
+
+    if (ith != 0) {
+        return;
+    }
+
+    GGML_ASSERT(dst != nullptr);
+    GGML_ASSERT(logits != nullptr);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(logits->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->ne[1] == LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+    GGML_ASSERT(logits->ne[0] == layer.n_expert);
+
+    const int32_t capacity = dst->ne[0];
+    const int32_t n_tokens = logits->ne[1];
+    GGML_ASSERT(n_tokens > 0);
+    GGML_ASSERT(capacity % n_tokens == 0);
+
+    const int32_t n_expert_used = capacity / n_tokens;
+    GGML_ASSERT(n_expert_used > 0);
+    GGML_ASSERT(n_expert_used <= logits->ne[0]);
+    GGML_ASSERT(n_expert_used <= LLAMA_MAX_EXPERTS);
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ size_t(n_expert_used * n_tokens) * (sizeof(int32_t) + sizeof(float)) + 16*1024,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ false,
+    };
+    ggml_context_ptr tmp(ggml_init(params));
+    GGML_ASSERT(tmp != nullptr);
+
+    ggml_tensor * selected = ggml_new_tensor_2d(tmp.get(), GGML_TYPE_I32, n_expert_used, n_tokens);
+    ggml_tensor * weights = ggml_new_tensor_3d(tmp.get(), GGML_TYPE_F32, 1, n_expert_used, n_tokens);
+
+    fill_router_selection_from_biased_logits(selected, weights, logits, exp_probs_b, layer);
+    llama_moe_hot_cache_build_worklist(dst, selected, weights, layer, 0, 1, order);
 }
