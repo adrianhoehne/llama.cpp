@@ -15,6 +15,7 @@ Supported:
 - Qwen3Next
 - Mellum MoE models
 - Gpt-Oss Moe models
+- Glm4 Moe Models
 
 ## Cached-experts configuration examples
 
