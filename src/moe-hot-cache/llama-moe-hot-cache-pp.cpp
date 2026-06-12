@@ -1,5 +1,6 @@
 #include "llama-moe-hot-cache-pp.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -59,6 +60,33 @@ static bool pp_compact_cold_reduce_mode() {
     return !env_is_false(env);
 }
 
+static int64_t pp_hot_lane_capacity_divisor(int64_t n_lanes) {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_HOT_LANE_CAPACITY_DIVISOR");
+    if (env == nullptr || env[0] == '\0' || env_is_false(env)) {
+        return 1;
+    }
+    if (std::strcmp(env, "auto") == 0) {
+        return std::max<int64_t>(1, n_lanes);
+    }
+
+    char * end = nullptr;
+    const long long parsed = std::strtoll(env, &end, 10);
+    if (end == env || parsed <= 0) {
+        return std::max<int64_t>(1, n_lanes);
+    }
+
+    return std::max<int64_t>(1, parsed);
+}
+
+static bool pp_hot_dummy_padding_mode() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_HOT_DUMMY_PADDING");
+    if (env == nullptr || env[0] == '\0') {
+        return false;
+    }
+
+    return !env_is_false(env);
+}
+
 static pp_bypass_mode pp_bypass_hot_cache_mode() {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_BYPASS");
     if (env == nullptr || env[0] == '\0' || std::strcmp(env, "auto") == 0 || std::strcmp(env, "threshold") == 0) {
@@ -113,7 +141,9 @@ static llama_moe_hot_cache_graph_phase graph_phase_from_llm(
         case LLM_GRAPH_PHASE_PROMPT_PROCESSING:
             return llama_moe_hot_cache_graph_phase::prompt_processing;
         case LLM_GRAPH_PHASE_DECODE:
-            return llama_moe_hot_cache_graph_phase::decode;
+            return n_tokens > 4
+                ? llama_moe_hot_cache_graph_phase::prompt_processing
+                : llama_moe_hot_cache_graph_phase::decode;
         case LLM_GRAPH_PHASE_UNKNOWN:
             return n_tokens > 1
                 ? llama_moe_hot_cache_graph_phase::prompt_processing
@@ -172,6 +202,28 @@ bool llama_moe_hot_cache_pp_policy::compact_cold_reduce_enabled(llama_moe_hot_ca
     }
 
     return pp_compact_cold_reduce_mode();
+}
+
+bool llama_moe_hot_cache_pp_policy::hot_dummy_padding_enabled(int64_t n_tokens, bool default_enabled) {
+    if (n_tokens <= 1) {
+        return default_enabled;
+    }
+
+    return pp_hot_dummy_padding_mode();
+}
+
+int64_t llama_moe_hot_cache_pp_policy::hot_lane_capacity(
+        int64_t n_tokens,
+        int64_t capacity,
+        int64_t n_lanes,
+        bool hot_dummy_padding) {
+    if (!hot_dummy_padding || n_tokens <= 1 || capacity <= 0 || n_lanes <= 1) {
+        return capacity;
+    }
+
+    const int64_t divisor = pp_hot_lane_capacity_divisor(n_lanes);
+    const int64_t capped = (capacity + divisor - 1)/divisor;
+    return std::min<int64_t>(capacity, std::max<int64_t>(1, capped));
 }
 
 llama_moe_hot_cache_worklist_order llama_moe_hot_cache_pp_policy::worklist_order(llama_moe_hot_cache_graph_phase phase) {

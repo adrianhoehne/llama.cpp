@@ -2410,17 +2410,26 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
+    const bool has_moe_hot_cache = model.moe_hot_cache != nullptr && model.moe_hot_cache->active();
+    const uint32_t hot_cache_layer_nodes =
+        has_moe_hot_cache && model.moe_hot_cache->devices.size() > 1 ? 160u : 64u;
+
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_MELLUM) {
         uint32_t res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
         // MoE hot-cache paths add extra graph nodes per layer for worklist
         // construction plus gather/scatter around the compact hot/cold branches.
-        if (model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_MELLUM) {
-            res += 40u * model.hparams.n_layer();
+        if (has_moe_hot_cache) {
+            res += hot_cache_layer_nodes * model.hparams.n_layer();
         }
         return res;
     }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
+    if (has_moe_hot_cache) {
+        res = std::max<uint32_t>(res, n_tokens * 40);
+        res = std::max<uint32_t>(res, 32u * model.n_tensors());
+        res += hot_cache_layer_nodes * model.hparams.n_layer();
+    }
     for (const auto & lora : model.loras) {
         res += lora->get_n_nodes();
     }

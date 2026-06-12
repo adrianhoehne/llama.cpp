@@ -1,6 +1,7 @@
 #include "llama-moe-hot-cache-worklist.h"
 
 #include "llama-hparams.h"
+#include "llama-moe-hot-cache-pp.h"
 
 #include <algorithm>
 #include <cmath>
@@ -129,6 +130,15 @@ static void build_worklist_multi_from_selected(
     const int32_t total_slots = n_expert_used * n_tokens;
     const int32_t dummy_src_slot = total_slots;
     GGML_ASSERT(capacity == total_slots);
+    const bool hot_dummy_padding = llama_moe_hot_cache_pp_policy::hot_dummy_padding_enabled(
+            n_tokens,
+            llama_moe_hot_cache_hot_dummy_padding());
+    const int32_t hot_lane_capacity = (int32_t) llama_moe_hot_cache_pp_policy::hot_lane_capacity(
+            n_tokens,
+            capacity,
+            (int64_t) layer.lanes.size(),
+            hot_dummy_padding);
+    const bool cap_hot_lanes = hot_lane_capacity < capacity;
 
     auto set_field = [&](int32_t field, int32_t slot, float value) {
         char * row = (char *) dst->data + field*dst->nb[1];
@@ -143,7 +153,7 @@ static void build_worklist_multi_from_selected(
     for (size_t lane = 0; lane < LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES; ++lane) {
         const bool lane_active = lane < layer.lanes.size() && layer.lanes[lane].n_hot > 0;
         const float hot_padding_id =
-            llama_moe_hot_cache_hot_dummy_padding() && lane_active ? float(layer.lanes[lane].n_hot) : -1.0f;
+            hot_dummy_padding && lane_active ? float(layer.lanes[lane].n_hot) : -1.0f;
         fill_field(lane_id_field(lane),        hot_padding_id);
         fill_field(lane_src_slot_field(lane),  float(dummy_src_slot));
         fill_field(lane_token_id_field(lane),  0.0f);
@@ -187,7 +197,7 @@ static void build_worklist_multi_from_selected(
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   slot, weight);
     };
 
-    if (order == llama_moe_hot_cache_worklist_order::expert_major) {
+    if (order == llama_moe_hot_cache_worklist_order::expert_major && !cap_hot_lanes) {
         int32_t hot_offsets[LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES][LLAMA_MAX_EXPERTS] = {};
         int32_t cold_offsets[LLAMA_MAX_EXPERTS] = {};
 
@@ -253,7 +263,7 @@ static void build_worklist_multi_from_selected(
 
                 size_t lane = 0;
                 const int32_t hot_id = lane_hot_id_for_expert(layer, expert, lane);
-                if (hot_id >= 0) {
+                if (hot_id >= 0 && (!cap_hot_lanes || hot_slots[lane] < hot_lane_capacity)) {
                     write_hot(lane, hot_slots[lane], token, iex, expert, hot_id);
                     ++hot_slots[lane];
                 } else {
