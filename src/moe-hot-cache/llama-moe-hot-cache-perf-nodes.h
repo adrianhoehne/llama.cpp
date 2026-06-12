@@ -36,4 +36,9 @@ public:
 
 private:
     static bool contains(const char * name, const char * needle);
+    static bool has_node_base(const char * name, const char * base);
+    static const char * hot_branch_suffix(const char * name);
+    static const char * cold_branch_suffix(const char * name);
+    static bool branch_has_component_base(const char * branch_suffix, const char * component);
+    static bool branch_has_component_prefix(const char * branch_suffix, const char * component);
 };

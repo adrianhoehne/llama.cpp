@@ -104,6 +104,248 @@ static int32_t lane_hot_id_for_expert(
     return hot_id;
 }
 
+static int32_t single_lane_hot_id_for_expert(
+        const llama_moe_hot_cache_layer & layer,
+        int32_t expert) {
+    if (expert < 0 || expert >= int32_t(layer.hot_id_map_host.size())) {
+        return -1;
+    }
+
+    const int32_t hot_id = layer.hot_id_map_host[expert];
+    if (hot_id < 0 || uint32_t(hot_id) >= layer.n_hot) {
+        return -1;
+    }
+
+    return hot_id;
+}
+
+// Builds only the single-lane compact cold branch fields. Dense PP uses this
+// to keep the cold CPU tensors bounded by cold experts instead of full top-k.
+static void build_worklist_cold_compact_from_selected(
+        ggml_tensor * dst,
+        const ggml_tensor * selected_experts,
+        const ggml_tensor * weights,
+        const llama_moe_hot_cache_layer & layer) {
+    GGML_ASSERT(dst != nullptr);
+    GGML_ASSERT(selected_experts != nullptr);
+    GGML_ASSERT(weights != nullptr);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(selected_experts->type == GGML_TYPE_I32);
+    GGML_ASSERT(weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->ne[1] == LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+    GGML_ASSERT(weights->ne[0] == 1);
+    GGML_ASSERT(selected_experts->ne[0] == weights->ne[1]);
+    GGML_ASSERT(selected_experts->ne[1] == weights->ne[2]);
+    GGML_ASSERT(int64_t(layer.hot_id_map_host.size()) == layer.n_expert);
+
+    const int32_t capacity = dst->ne[0];
+    const int32_t n_expert_used = selected_experts->ne[0];
+    const int32_t n_tokens = selected_experts->ne[1];
+    const int32_t total_slots = n_expert_used * n_tokens;
+    const int32_t dummy_src_slot = total_slots;
+    GGML_ASSERT(n_expert_used > 0);
+    GGML_ASSERT(n_tokens > 0);
+
+    int32_t cold_experts = 0;
+    for (int32_t expert = 0; expert < int32_t(layer.n_expert); ++expert) {
+        cold_experts += single_lane_hot_id_for_expert(layer, expert) < 0 ? 1 : 0;
+    }
+
+    const int32_t max_cold_slots = std::min(n_expert_used, cold_experts) * n_tokens;
+    GGML_ASSERT(cold_experts > 0);
+    GGML_ASSERT(capacity == max_cold_slots);
+
+    auto set_field = [&](int32_t field, int32_t slot, float value) {
+        char * row = (char *) dst->data + field*dst->nb[1];
+        *(float *)(row + slot*dst->nb[0]) = value;
+    };
+
+    auto fill_field = [&](int32_t field, float value) {
+        float * row = (float *) ((char *) dst->data + field*dst->nb[1]);
+        std::fill(row, row + capacity, value);
+    };
+
+    for (int32_t field = 0; field < LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT; ++field) {
+        fill_field(field, 0.0f);
+    }
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,       -1.0f);
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, float(dummy_src_slot));
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, 0.0f);
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   0.0f);
+
+    const auto selected_expert_at = [&](int32_t iex, int32_t token) {
+        return *(const int32_t *) ((const char *) selected_experts->data + iex*selected_experts->nb[0] + token*selected_experts->nb[1]);
+    };
+
+    const auto weight_at = [&](int32_t iex, int32_t token) {
+        return *(const float *) ((const char *) weights->data + iex*weights->nb[1] + token*weights->nb[2]);
+    };
+
+    const auto write_cold = [&](int32_t slot, int32_t token, int32_t iex, int32_t expert) {
+        const float weight = weight_at(iex, token);
+        const int32_t src_slot = token*n_expert_used + iex;
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,       slot, float(expert));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, slot, float(src_slot));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, slot, float(token));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   slot, weight);
+    };
+
+    int32_t cold_offsets[LLAMA_MAX_EXPERTS] = {};
+    GGML_ASSERT(layer.n_expert <= LLAMA_MAX_EXPERTS);
+
+    for (int32_t token = 0; token < n_tokens; ++token) {
+        for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+            const int32_t expert = selected_expert_at(iex, token);
+            GGML_ASSERT(expert >= 0);
+            GGML_ASSERT(expert < int32_t(layer.hot_id_map_host.size()));
+            if (single_lane_hot_id_for_expert(layer, expert) < 0) {
+                ++cold_offsets[expert];
+            }
+        }
+    }
+
+    int32_t running = 0;
+    for (uint32_t expert = 0; expert < layer.n_expert; ++expert) {
+        const int32_t start = running;
+        running += cold_offsets[expert];
+        cold_offsets[expert] = start;
+    }
+    GGML_ASSERT(running <= capacity);
+
+    for (int32_t token = 0; token < n_tokens; ++token) {
+        for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+            const int32_t expert = selected_expert_at(iex, token);
+            if (single_lane_hot_id_for_expert(layer, expert) < 0) {
+                const int32_t slot = cold_offsets[expert]++;
+                GGML_ASSERT(slot >= 0);
+                GGML_ASSERT(slot < capacity);
+                write_cold(slot, token, iex, expert);
+            }
+        }
+    }
+
+    if (capacity > 0) {
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT, 0, float(running));
+    }
+}
+
+// Builds only the compact cold branch fields. Its capacity is bounded by the
+// number of cold experts in the layer instead of the full top-k slot grid.
+static void build_worklist_multi_cold_compact_from_selected(
+        ggml_tensor * dst,
+        const ggml_tensor * selected_experts,
+        const ggml_tensor * weights,
+        const llama_moe_hot_cache_layer & layer) {
+    GGML_ASSERT(dst != nullptr);
+    GGML_ASSERT(selected_experts != nullptr);
+    GGML_ASSERT(weights != nullptr);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(selected_experts->type == GGML_TYPE_I32);
+    GGML_ASSERT(weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->ne[1] == LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+    GGML_ASSERT(weights->ne[0] == 1);
+    GGML_ASSERT(selected_experts->ne[0] == weights->ne[1]);
+    GGML_ASSERT(selected_experts->ne[1] == weights->ne[2]);
+    GGML_ASSERT(layer.lanes.size() <= LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES);
+    GGML_ASSERT(int64_t(layer.expert_lane_map_host.size()) == layer.n_expert);
+
+    const int32_t capacity = dst->ne[0];
+    const int32_t n_expert_used = selected_experts->ne[0];
+    const int32_t n_tokens = selected_experts->ne[1];
+    const int32_t total_slots = n_expert_used * n_tokens;
+    const int32_t dummy_src_slot = total_slots;
+    GGML_ASSERT(n_expert_used > 0);
+    GGML_ASSERT(n_tokens > 0);
+
+    int32_t cold_experts = 0;
+    for (int32_t expert = 0; expert < int32_t(layer.n_expert); ++expert) {
+        size_t lane = 0;
+        cold_experts += lane_hot_id_for_expert(layer, expert, lane) < 0 ? 1 : 0;
+    }
+
+    const int32_t max_cold_slots = std::min(n_expert_used, cold_experts) * n_tokens;
+    GGML_ASSERT(cold_experts > 0);
+    GGML_ASSERT(capacity == max_cold_slots);
+
+    auto set_field = [&](int32_t field, int32_t slot, float value) {
+        char * row = (char *) dst->data + field*dst->nb[1];
+        *(float *)(row + slot*dst->nb[0]) = value;
+    };
+
+    auto fill_field = [&](int32_t field, float value) {
+        float * row = (float *) ((char *) dst->data + field*dst->nb[1]);
+        std::fill(row, row + capacity, value);
+    };
+
+    for (int32_t field = 0; field < LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT; ++field) {
+        fill_field(field, 0.0f);
+    }
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,       -1.0f);
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, float(dummy_src_slot));
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, 0.0f);
+    fill_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   0.0f);
+
+    const auto selected_expert_at = [&](int32_t iex, int32_t token) {
+        return *(const int32_t *) ((const char *) selected_experts->data + iex*selected_experts->nb[0] + token*selected_experts->nb[1]);
+    };
+
+    const auto weight_at = [&](int32_t iex, int32_t token) {
+        return *(const float *) ((const char *) weights->data + iex*weights->nb[1] + token*weights->nb[2]);
+    };
+
+    const auto write_cold = [&](int32_t slot, int32_t token, int32_t iex, int32_t expert) {
+        const float weight = weight_at(iex, token);
+        const int32_t src_slot = token*n_expert_used + iex;
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID,       slot, float(expert));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_SRC_SLOT, slot, float(src_slot));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, slot, float(token));
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   slot, weight);
+    };
+
+    int32_t cold_offsets[LLAMA_MAX_EXPERTS] = {};
+    GGML_ASSERT(layer.n_expert <= LLAMA_MAX_EXPERTS);
+
+    for (int32_t token = 0; token < n_tokens; ++token) {
+        for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+            const int32_t expert = selected_expert_at(iex, token);
+            GGML_ASSERT(expert >= 0);
+            GGML_ASSERT(expert < int32_t(layer.expert_lane_map_host.size()));
+
+            size_t lane = 0;
+            if (lane_hot_id_for_expert(layer, expert, lane) < 0) {
+                ++cold_offsets[expert];
+            }
+        }
+    }
+
+    int32_t running = 0;
+    for (uint32_t expert = 0; expert < layer.n_expert; ++expert) {
+        const int32_t start = running;
+        running += cold_offsets[expert];
+        cold_offsets[expert] = start;
+    }
+    GGML_ASSERT(running <= capacity);
+
+    for (int32_t token = 0; token < n_tokens; ++token) {
+        for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+            const int32_t expert = selected_expert_at(iex, token);
+            size_t lane = 0;
+            if (lane_hot_id_for_expert(layer, expert, lane) < 0) {
+                const int32_t slot = cold_offsets[expert]++;
+                GGML_ASSERT(slot >= 0);
+                GGML_ASSERT(slot < capacity);
+                write_cold(slot, token, iex, expert);
+            }
+        }
+    }
+
+    if (capacity > 0) {
+        set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT, 0, float(running));
+    }
+}
+
 static void build_worklist_multi_from_selected(
         ggml_tensor * dst,
         const ggml_tensor * selected_experts,
@@ -123,6 +365,11 @@ static void build_worklist_multi_from_selected(
     GGML_ASSERT(selected_experts->ne[1] == weights->ne[2]);
     GGML_ASSERT(layer.lanes.size() <= LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES);
     GGML_ASSERT(int64_t(layer.expert_lane_map_host.size()) == layer.n_expert);
+
+    if (order == llama_moe_hot_cache_worklist_order::cold_compact) {
+        build_worklist_multi_cold_compact_from_selected(dst, selected_experts, weights, layer);
+        return;
+    }
 
     const int32_t capacity = dst->ne[0];
     const int32_t n_expert_used = selected_experts->ne[0];
@@ -564,6 +811,8 @@ const char * llama_moe_hot_cache_worklist_order_name(llama_moe_hot_cache_worklis
             return "expert_major";
         case llama_moe_hot_cache_worklist_order::token_aligned:
             return "token_aligned";
+        case llama_moe_hot_cache_worklist_order::cold_compact:
+            return "cold_compact";
     }
 
     return "unknown";
@@ -608,6 +857,11 @@ void llama_moe_hot_cache_build_worklist(
     const int32_t dummy_src_slot = total_slots;
     const float hot_padding_id =
         llama_moe_hot_cache_hot_dummy_padding() && layer.n_hot > 0 ? float(layer.n_hot) : -1.0f;
+
+    if (order == llama_moe_hot_cache_worklist_order::cold_compact) {
+        build_worklist_cold_compact_from_selected(dst, selected_experts, weights, layer);
+        return;
+    }
 
     GGML_ASSERT(capacity == total_slots);
 
@@ -671,7 +925,26 @@ void llama_moe_hot_cache_build_worklist(
         ++cold_slot;
     };
 
-    if (order == llama_moe_hot_cache_worklist_order::expert_major) {
+    if (order == llama_moe_hot_cache_worklist_order::token_aligned) {
+        for (int32_t token = 0; token < n_tokens; ++token) {
+            for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+                const int32_t expert = selected_expert_at(iex, token);
+                GGML_ASSERT(expert >= 0);
+                GGML_ASSERT(expert < int32_t(layer.hot_id_map_host.size()));
+
+                const int32_t src_slot = token*n_expert_used + iex;
+                const int32_t hot_id = layer.hot_id_map_host[expert];
+                if (hot_id >= 0) {
+                    GGML_ASSERT(hot_id < int32_t(layer.n_hot));
+                    write_hot(src_slot, token, iex, expert, hot_id);
+                    ++hot_slot;
+                } else {
+                    write_cold(src_slot, token, iex, expert);
+                    ++cold_slot;
+                }
+            }
+        }
+    } else if (order == llama_moe_hot_cache_worklist_order::expert_major) {
         GGML_ASSERT(layer.n_hot <= LLAMA_MAX_EXPERTS);
         GGML_ASSERT(layer.n_expert <= LLAMA_MAX_EXPERTS);
 

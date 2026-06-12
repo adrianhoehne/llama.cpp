@@ -69,6 +69,27 @@ static bool pp_dense_mode() {
     return !env_is_false(env);
 }
 
+static bool pp_weighted_cold_reduce_mode() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE");
+    if (env == nullptr || env[0] == '\0') {
+        return true;
+    }
+
+    return !env_is_false(env);
+}
+
+static llama_moe_hot_cache_pp_cold_backend pp_cold_backend_mode() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND");
+    if (env == nullptr || env[0] == '\0' || env_is_false(env) || std::strcmp(env, "cpu") == 0) {
+        return llama_moe_hot_cache_pp_cold_backend::cpu;
+    }
+    if (std::strcmp(env, "primary") == 0 || std::strcmp(env, "gpu") == 0) {
+        return llama_moe_hot_cache_pp_cold_backend::primary;
+    }
+
+    return llama_moe_hot_cache_pp_cold_backend::cpu;
+}
+
 static int64_t pp_hot_lane_capacity_divisor(int64_t n_lanes) {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_HOT_LANE_CAPACITY_DIVISOR");
     if (env == nullptr || env[0] == '\0' || env_is_false(env)) {
@@ -219,6 +240,18 @@ bool llama_moe_hot_cache_pp_policy::dense_enabled(llama_moe_hot_cache_graph_phas
     }
 
     return pp_dense_mode();
+}
+
+bool llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
+    if (phase != llama_moe_hot_cache_graph_phase::prompt_processing || n_tokens <= 1) {
+        return false;
+    }
+
+    return pp_weighted_cold_reduce_mode();
+}
+
+llama_moe_hot_cache_pp_cold_backend llama_moe_hot_cache_pp_policy::cold_backend() {
+    return pp_cold_backend_mode();
 }
 
 bool llama_moe_hot_cache_pp_policy::hot_dummy_padding_enabled(int64_t n_tokens, bool default_enabled) {

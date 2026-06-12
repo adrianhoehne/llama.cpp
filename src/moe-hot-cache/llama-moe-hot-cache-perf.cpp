@@ -371,7 +371,6 @@ static llama_moe_layer_perf_json_layer_snapshot llama_moe_layer_perf_make_json_l
     dst.merge_time_us = src.merge_time_us;
     dst.hot_gather_scatter_time_us = src.hot_gather_scatter_time_us;
     dst.cold_gather_scatter_time_us = src.cold_gather_scatter_time_us;
-
     dst.parallel_region_wall_time_us = src.parallel_region_wall_time_us;
     dst.parallel_hot_lane_wall_time_us = src.parallel_hot_lane_wall_time_us;
     dst.parallel_cold_lane_wall_time_us = src.parallel_cold_lane_wall_time_us;

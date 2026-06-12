@@ -28,6 +28,8 @@ static void clear_env() {
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_WORKLIST_ORDER", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_COMPACT_COLD_REDUCE", nullptr);
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE", nullptr);
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_BYPASS", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_BYPASS_MIN_TOKENS", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO", nullptr);
@@ -123,6 +125,33 @@ static void test_compact_cold_reduce_modes() {
     require(!plan.compact_cold_reduce);
 }
 
+static void test_weighted_cold_reduce_and_backend_modes() {
+    clear_env();
+
+    require(llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+    require(!llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
+            llama_moe_hot_cache_graph_phase::decode, 1));
+    require(llama_moe_hot_cache_pp_policy::cold_backend() == llama_moe_hot_cache_pp_cold_backend::cpu);
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE", "off");
+    require(!llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE", "on");
+    require(llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", "primary");
+    require(llama_moe_hot_cache_pp_policy::cold_backend() == llama_moe_hot_cache_pp_cold_backend::primary);
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", "gpu");
+    require(llama_moe_hot_cache_pp_policy::cold_backend() == llama_moe_hot_cache_pp_cold_backend::primary);
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", "cpu");
+    require(llama_moe_hot_cache_pp_policy::cold_backend() == llama_moe_hot_cache_pp_cold_backend::cpu);
+}
+
 static void test_worklist_order_modes() {
     clear_env();
 
@@ -209,6 +238,7 @@ int main() {
     test_phase_and_default_worklist_order();
     test_reduce_merge_modes();
     test_compact_cold_reduce_modes();
+    test_weighted_cold_reduce_and_backend_modes();
     test_worklist_order_modes();
     test_bypass_hot_cache_for_prompt_processing();
     test_bypass_hot_cache_for_prompt_processing_hot_expert_ratio();

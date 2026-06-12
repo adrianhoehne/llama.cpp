@@ -31,28 +31,124 @@ bool llama_moe_layer_perf_node_classifier::contains(const char * name, const cha
     return name != nullptr && std::strstr(name, needle) != nullptr;
 }
 
+bool llama_moe_layer_perf_node_classifier::has_node_base(const char * name, const char * base) {
+    const char * p = name;
+    const size_t base_len = std::strlen(base);
+
+    while (p != nullptr && (p = std::strstr(p, base)) != nullptr) {
+        const char next = p[base_len];
+        if (next == '\0' || next == '-' || next == '_') {
+            return true;
+        }
+        p += base_len;
+    }
+
+    return false;
+}
+
+const char * llama_moe_layer_perf_node_classifier::hot_branch_suffix(const char * name) {
+    const char * p = name == nullptr ? nullptr : std::strstr(name, "ffn_moe_hot");
+    if (p == nullptr) {
+        return nullptr;
+    }
+
+    p += std::strlen("ffn_moe_hot");
+    while (*p >= '0' && *p <= '9') {
+        ++p;
+    }
+
+    if (*p != '_') {
+        return nullptr;
+    }
+
+    ++p;
+    if (std::strncmp(p, "cold_", 5) == 0) {
+        return nullptr;
+    }
+
+    return p;
+}
+
+const char * llama_moe_layer_perf_node_classifier::cold_branch_suffix(const char * name) {
+    const char * p = name == nullptr ? nullptr : std::strstr(name, "ffn_moe_cold_");
+    if (p == nullptr) {
+        return nullptr;
+    }
+
+    return p + std::strlen("ffn_moe_cold_");
+}
+
+bool llama_moe_layer_perf_node_classifier::branch_has_component_base(const char * branch_suffix, const char * component) {
+    const size_t component_len = std::strlen(component);
+    const char * p = branch_suffix;
+
+    while (p != nullptr && (p = std::strstr(p, component)) != nullptr) {
+        const bool starts_at_component = p == branch_suffix || p[-1] == '_';
+        const bool ends_at_component = p[component_len] == '\0' || p[component_len] == '-';
+        const bool is_gate_up_when_matching_up =
+            std::strcmp(component, "up") == 0 &&
+            p >= branch_suffix + 5 &&
+            std::strncmp(p - 5, "gate_", 5) == 0;
+
+        if (starts_at_component && ends_at_component && !is_gate_up_when_matching_up) {
+            return true;
+        }
+
+        p += component_len;
+    }
+
+    return false;
+}
+
+bool llama_moe_layer_perf_node_classifier::branch_has_component_prefix(const char * branch_suffix, const char * component) {
+    const size_t component_len = std::strlen(component);
+    const char * p = branch_suffix;
+
+    while (p != nullptr && (p = std::strstr(p, component)) != nullptr) {
+        const bool starts_at_component = p == branch_suffix || p[-1] == '_';
+        const char next = p[component_len];
+        const bool has_component_boundary = next == '\0' || next == '-' || next == '_';
+        const bool is_qualified_ids =
+            std::strcmp(component, "ids") == 0 &&
+            ((p >= branch_suffix + 4 && std::strncmp(p - 4, "src_", 4) == 0) ||
+             (p >= branch_suffix + 6 && std::strncmp(p - 6, "token_", 6) == 0) ||
+             (p >= branch_suffix + 6 && std::strncmp(p - 6, "scale_", 6) == 0) ||
+             (p >= branch_suffix + 7 && std::strncmp(p - 7, "expert_", 7) == 0));
+
+        if (starts_at_component && has_component_boundary && !is_qualified_ids) {
+            return true;
+        }
+
+        p += component_len;
+    }
+
+    return false;
+}
+
 bool llama_moe_layer_perf_node_classifier::is_any_node(const char * name) {
     return contains(name, "ffn_moe_");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_topk_node(const char * name) {
-    return contains(name, "ffn_moe_topk-");
+    return has_node_base(name, "ffn_moe_topk");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_count_node(const char * name) {
-    return contains(name, "ffn_moe_hot_count-");
+    return has_node_base(name, "ffn_moe_hot_count");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_count_node(const char * name) {
-    return contains(name, "ffn_moe_cold_count-");
+    return has_node_base(name, "ffn_moe_cold_count");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_expert_ids_node(const char * name) {
-    return contains(name, "ffn_moe_hot_expert_ids_compact-");
+    const char * suffix = hot_branch_suffix(name);
+    return suffix != nullptr && branch_has_component_prefix(suffix, "expert_ids");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_ids_node(const char * name) {
-    return contains(name, "ffn_moe_cold_ids_compact-");
+    const char * suffix = cold_branch_suffix(name);
+    return suffix != nullptr && branch_has_component_prefix(suffix, "ids");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_update_node(const char * name) {
@@ -64,101 +160,103 @@ bool llama_moe_layer_perf_node_classifier::is_update_node(const char * name) {
 }
 
 bool llama_moe_layer_perf_node_classifier::is_gate_node(const char * name) {
-    return contains(name, "ffn_moe_gate-") ||
-           contains(name, "ffn_moe_hot_gate-") ||
-           contains(name, "ffn_moe_cold_gate-");
+    return has_node_base(name, "ffn_moe_gate") ||
+           branch_has_component_base(hot_branch_suffix(name), "gate") ||
+           branch_has_component_base(cold_branch_suffix(name), "gate");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_up_node(const char * name) {
-    return contains(name, "ffn_moe_up-") ||
-           contains(name, "ffn_moe_hot_up-") ||
-           contains(name, "ffn_moe_cold_up-");
+    return has_node_base(name, "ffn_moe_up") ||
+           branch_has_component_base(hot_branch_suffix(name), "up") ||
+           branch_has_component_base(cold_branch_suffix(name), "up");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_down_node(const char * name) {
-    return contains(name, "ffn_moe_down-") ||
-           contains(name, "ffn_moe_hot_down-") ||
-           contains(name, "ffn_moe_cold_down-");
+    return has_node_base(name, "ffn_moe_down") ||
+           branch_has_component_base(hot_branch_suffix(name), "down") ||
+           branch_has_component_base(cold_branch_suffix(name), "down");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_gate_up_node(const char * name) {
-    return contains(name, "ffn_moe_hot_gate_up-");
+    return branch_has_component_base(hot_branch_suffix(name), "gate_up");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_gate_up_node(const char * name) {
-    return contains(name, "ffn_moe_cold_gate_up-");
+    return branch_has_component_base(cold_branch_suffix(name), "gate_up");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_gate_node(const char * name) {
-    return contains(name, "ffn_moe_hot_gate-");
+    return branch_has_component_base(hot_branch_suffix(name), "gate");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_gate_node(const char * name) {
-    return contains(name, "ffn_moe_cold_gate-");
+    return branch_has_component_base(cold_branch_suffix(name), "gate");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_up_node(const char * name) {
-    return contains(name, "ffn_moe_hot_up-");
+    return branch_has_component_base(hot_branch_suffix(name), "up");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_up_node(const char * name) {
-    return contains(name, "ffn_moe_cold_up-");
+    return branch_has_component_base(cold_branch_suffix(name), "up");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_down_node(const char * name) {
-    return contains(name, "ffn_moe_hot_down-");
+    return branch_has_component_base(hot_branch_suffix(name), "down");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_down_node(const char * name) {
-    return contains(name, "ffn_moe_cold_down-");
+    return branch_has_component_base(cold_branch_suffix(name), "down");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_branch_node(const char * name) {
-    return contains(name, "ffn_moe_hot_");
+    return hot_branch_suffix(name) != nullptr;
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_branch_node(const char * name) {
-    return contains(name, "ffn_moe_cold_");
+    return cold_branch_suffix(name) != nullptr;
 }
 
 bool llama_moe_layer_perf_node_classifier::is_worklist_node(const char * name) {
-    return contains(name, "ffn_moe_worklist-");
+    return has_node_base(name, "ffn_moe_worklist");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_routing_node(const char * name) {
-    return contains(name, "ffn_moe_logits-") ||
-           contains(name, "ffn_moe_probs-") ||
-           contains(name, "ffn_moe_argsort-") ||
-           contains(name, "ffn_moe_topk-") ||
-           contains(name, "ffn_moe_weights-") ||
-           contains(name, "ffn_moe_weights_sum-") ||
-           contains(name, "ffn_moe_weights_sum_clamped-") ||
-           contains(name, "ffn_moe_weights_norm-") ||
-           contains(name, "ffn_moe_weights_scaled-");
+    return has_node_base(name, "ffn_moe_logits") ||
+           has_node_base(name, "ffn_moe_probs") ||
+           has_node_base(name, "ffn_moe_argsort") ||
+           has_node_base(name, "ffn_moe_topk") ||
+           has_node_base(name, "ffn_moe_weights") ||
+           has_node_base(name, "ffn_moe_weights_sum") ||
+           has_node_base(name, "ffn_moe_weights_sum_clamped") ||
+           has_node_base(name, "ffn_moe_weights_norm") ||
+           has_node_base(name, "ffn_moe_weights_scaled");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_merge_node(const char * name) {
-    return contains(name, "ffn_moe_hot_cold_slots-") ||
-           contains(name, "ffn_moe_out-");
+    return has_node_base(name, "ffn_moe_hot_cold_slots") ||
+           has_node_base(name, "ffn_moe_out");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node(const char * name) {
-    return contains(name, "ffn_moe_hot_ids_compact-") ||
-           contains(name, "ffn_moe_hot_expert_ids_compact-") ||
-           contains(name, "ffn_moe_hot_src_slots-") ||
-           contains(name, "ffn_moe_hot_token_ids-") ||
-           contains(name, "ffn_moe_hot_weights_compact-") ||
-           contains(name, "ffn_moe_hot_inputs-") ||
-           contains(name, "ffn_moe_hot_slots-");
+    const char * suffix = hot_branch_suffix(name);
+    return branch_has_component_prefix(suffix, "ids") ||
+           branch_has_component_prefix(suffix, "expert_ids") ||
+           branch_has_component_prefix(suffix, "src_slots") ||
+           branch_has_component_prefix(suffix, "token_ids") ||
+           branch_has_component_prefix(suffix, "weights") ||
+           branch_has_component_prefix(suffix, "inputs") ||
+           branch_has_component_prefix(suffix, "slots");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_gather_scatter_node(const char * name) {
-    return contains(name, "ffn_moe_cold_ids_compact-") ||
-           contains(name, "ffn_moe_cold_src_slots-") ||
-           contains(name, "ffn_moe_cold_token_ids-") ||
-           contains(name, "ffn_moe_cold_weights_compact-") ||
-           contains(name, "ffn_moe_cold_inputs-") ||
-           contains(name, "ffn_moe_cold_slots-");
+    const char * suffix = cold_branch_suffix(name);
+    return branch_has_component_prefix(suffix, "ids") ||
+           branch_has_component_prefix(suffix, "src_slots") ||
+           branch_has_component_prefix(suffix, "token_ids") ||
+           branch_has_component_prefix(suffix, "weights") ||
+           branch_has_component_prefix(suffix, "inputs") ||
+           branch_has_component_prefix(suffix, "slots");
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_expert_matmul_node(const char * name) {

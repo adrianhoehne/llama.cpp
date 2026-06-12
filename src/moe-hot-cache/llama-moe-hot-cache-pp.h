@@ -11,6 +11,11 @@ enum class llama_moe_hot_cache_graph_phase {
     prompt_processing,
 };
 
+enum class llama_moe_hot_cache_pp_cold_backend {
+    cpu,
+    primary,
+};
+
 struct llama_moe_hot_cache_pp_execution_plan {
     llama_moe_hot_cache_graph_phase phase = llama_moe_hot_cache_graph_phase::decode;
     llama_moe_hot_cache_worklist_order worklist_order = llama_moe_hot_cache_worklist_order::token_major;
@@ -35,6 +40,8 @@ public:
     static bool reduce_merge_enabled(int64_t n_tokens, int64_t capacity);
     static bool compact_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
     static bool dense_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
+    static bool weighted_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
+    static llama_moe_hot_cache_pp_cold_backend cold_backend();
     static bool hot_dummy_padding_enabled(int64_t n_tokens, bool default_enabled);
     static int64_t hot_lane_capacity(int64_t n_tokens, int64_t capacity, int64_t n_lanes, bool hot_dummy_padding);
     static llama_moe_hot_cache_worklist_order worklist_order(llama_moe_hot_cache_graph_phase phase);

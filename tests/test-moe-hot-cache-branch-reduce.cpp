@@ -77,7 +77,48 @@ static void test_compact_cold_reduce_sums_by_token() {
     }
 }
 
+static void test_compact_cold_weighted_reduce_sums_by_token() {
+    auto ctx = make_ctx();
+    require(ctx != nullptr);
+
+    const int64_t n_embd = 3;
+    const int64_t n_tokens = 2;
+    const int64_t capacity = 4;
+
+    ggml_tensor * branch_out = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_embd, capacity);
+    ggml_tensor * worklist = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+    ggml_tensor * output = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_embd, n_tokens);
+
+    for (int64_t slot = 0; slot < capacity; ++slot) {
+        for (int64_t embd = 0; embd < n_embd; ++embd) {
+            set_branch_value(branch_out, embd, slot, float(slot + 1) + 0.1f*float(embd));
+        }
+    }
+
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT, 0, 4.0f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, 0, 0.0f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT, 0, 0.5f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, 1, 1.0f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT, 1, 2.0f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, 2, 0.0f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT, 2, 1.5f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_TOKEN_ID, 3, -1.0f);
+    set_worklist_field(worklist, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT, 3, 10.0f);
+
+    llama_moe_hot_cache_reduce_cold_weighted_token_rows(output, branch_out, worklist, 0, 2);
+    llama_moe_hot_cache_reduce_cold_weighted_token_rows(output, branch_out, worklist, 1, 2);
+
+    for (int64_t embd = 0; embd < n_embd; ++embd) {
+        const float s0 = 1.0f + 0.1f*float(embd);
+        const float s1 = 2.0f + 0.1f*float(embd);
+        const float s2 = 3.0f + 0.1f*float(embd);
+        require_close(get_output_value(output, embd, 0), s0*0.5f + s2*1.5f);
+        require_close(get_output_value(output, embd, 1), s1*2.0f);
+    }
+}
+
 int main() {
     test_compact_cold_reduce_sums_by_token();
+    test_compact_cold_weighted_reduce_sums_by_token();
     return 0;
 }

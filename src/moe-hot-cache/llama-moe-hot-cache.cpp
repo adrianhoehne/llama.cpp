@@ -96,15 +96,51 @@ static llama_moe_hot_cache_weighting_config weighting_config_from_params(
     return config;
 }
 
+static bool env_has_value(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && value[0] != '\0';
+}
+
+static bool weighting_mode_explicit(const llama_model_params * params) {
+    return (params != nullptr &&
+            params->moe_hot_cache_weighting != nullptr &&
+            params->moe_hot_cache_weighting[0] != '\0') ||
+           env_has_value("LLAMA_MOE_HOT_CACHE_WEIGHTING") ||
+           env_has_value("LLAMA_MOE_HOT_CACHE_QWEN_WEIGHTING");
+}
+
+static bool layer_curve_explicit(const llama_model_params * params) {
+    return env_has_value("LLAMA_MOE_HOT_CACHE_LAYER_CURVE") ||
+           env_has_value("LLAMA_MOE_HOT_CACHE_QWEN_LAYER_CURVE") ||
+           env_has_value("LLAMA_MOE_HOT_CACHE_GEMMA4_LAYER_CURVE") ||
+           (params != nullptr && params->moe_hot_cache_layer_curve != 0.5f);
+}
+
+static llama_moe_hot_cache_weighting_config weighting_config_for_arch(
+        llm_arch arch,
+        const llama_model_params * params) {
+    auto config = weighting_config_from_params(params);
+
+    if (arch == LLM_ARCH_OPENAI_MOE) {
+        if (!weighting_mode_explicit(params)) {
+            config.mode = llama_moe_hot_cache_weighting_mode::time;
+        }
+        if (!layer_curve_explicit(params)) {
+            config.layer_curve = 1.0;
+        }
+    }
+
+    return config;
+}
+
 static std::vector<llama_moe_hot_cache_entry> score_observations_for_arch(
         llm_arch arch,
         const std::vector<llama_moe_hot_cache_layer_observation> & observations,
-        const llama_model_params * params = nullptr) {
+        const llama_moe_hot_cache_weighting_config & config) {
     switch (arch) {
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_GEMMA4:
         default: {
-            const auto config = weighting_config_from_params(params);
             return llama_moe_hot_cache_weighting::score_observations(observations, config);
         }
     }
@@ -203,12 +239,12 @@ void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & pa
 
     const std::string json_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
-    const auto config = weighting_config_from_params(&params);
+    const auto config = weighting_config_for_arch(model.arch, &params);
     LLAMA_LOG_WARN("%s: MoE hot-cache weighting = %s, layer_curve = %.2f\n",
             __func__,
             llama_moe_hot_cache_weighting::mode_name(config.mode),
             config.layer_curve);
-    const auto observed = score_observations_for_arch(model.arch, observations, &params);
+    const auto observed = score_observations_for_arch(model.arch, observations, config);
     const auto sizes = llama_moe_hot_cache_collect_expert_sizes(model);
 
     const auto lane_requests = hot_cache_lane_requests(params);
@@ -324,7 +360,8 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_update_from_perf_json(
     std::vector<llama_moe_hot_cache_entry> scored_observed;
     try {
         const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
-        scored_observed = score_observations_for_arch(model.arch, observations, &model.get_params());
+        const auto config = weighting_config_for_arch(model.arch, &model.get_params());
+        scored_observed = score_observations_for_arch(model.arch, observations, config);
     } catch (const std::exception & e) {
         LLAMA_LOG_WARN("%s: failed to score MoE layer perf JSON: %s\n", __func__, e.what());
         return stats;
@@ -350,7 +387,8 @@ llama_moe_hot_cache_update_stats llama_moe_hot_cache_apply_json(
     std::vector<llama_moe_hot_cache_entry> scored_observed;
     try {
         const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
-        scored_observed = score_observations_for_arch(model.arch, observations, &model.get_params());
+        const auto config = weighting_config_for_arch(model.arch, &model.get_params());
+        scored_observed = score_observations_for_arch(model.arch, observations, config);
     } catch (const std::exception & e) {
         LLAMA_LOG_WARN("%s: failed to parse MoE hot-cache JSON: %s\n", __func__, e.what());
         return stats;
