@@ -99,6 +99,24 @@ static void llama_moe_hot_cache_set_pp_reduce_merge_env(const std::string & valu
 #endif
 }
 
+static void llama_moe_hot_cache_set_pp_dense_min_tokens_env(int64_t value) {
+    const std::string text = std::to_string(value);
+#if defined(_WIN32)
+    _putenv_s("LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS", text.c_str());
+#else
+    setenv("LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS", text.c_str(), 1);
+#endif
+}
+
+static void llama_moe_hot_cache_set_pp_min_hot_expert_ratio_env(double value) {
+    const std::string text = std::to_string(value);
+#if defined(_WIN32)
+    _putenv_s("LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO", text.c_str());
+#else
+    setenv("LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO", text.c_str(), 1);
+#endif
+}
+
 static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
     LLAMA_EXAMPLE_SERVER,
@@ -2539,6 +2557,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             llama_moe_hot_cache_set_pp_reduce_merge_env(value);
         }
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE_PP_REDUCE_MERGE"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-pp-dense-min-tokens"}, "N",
+        "experimental: minimum prompt-processing ubatch size for MoE Hot-Cache dense PP (default: 256, 0 = no minimum)",
+        [](common_params &, const std::string & value_str) {
+            const int64_t value = std::stoll(value_str);
+            if (value < 0) {
+                throw std::invalid_argument("--moe-hot-cache-pp-dense-min-tokens must be >= 0");
+            }
+            llama_moe_hot_cache_set_pp_dense_min_tokens_env(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS"));
+    add_opt(common_arg(
+        {"--moe-hot-cache-pp-min-hot-expert-ratio"}, "F",
+        "experimental: minimum hot-expert coverage ratio required for MoE Hot-Cache prompt processing (default: model-specific, 0 = disabled)",
+        [](common_params &, const std::string & value_str) {
+            const double value = std::stod(value_str);
+            if (value < 0.0 || value > 1.0) {
+                throw std::invalid_argument("--moe-hot-cache-pp-min-hot-expert-ratio must be between 0 and 1");
+            }
+            llama_moe_hot_cache_set_pp_min_hot_expert_ratio_env(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

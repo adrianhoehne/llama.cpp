@@ -2,7 +2,7 @@
 
 This is an experimental, AI-assisted fork of llama.cpp. The goal is to explore a static MoE expert hot cache for machines that can run large MoE models only with a CPU/GPU split.
 
-Use with caution. The feature is experimental and workload-dependent. Qwen3.5/Qwen3.6 MoE is the primary optimized path; Gemma 4 26B-A4B has an experimental hot-cache graph hook.
+Use with caution. The feature is experimental and workload-dependent. Supported paths include Qwen3.5/Qwen3.6 MoE, Qwen3Next, Gemma 4 26B-A4B, Mellum, GPT-OSS MoE, DeepSeek2-family MoE exports such as GLM Flash, and native GLM4 MoE.
 
 Online documentation: <https://adrianhoehne.github.io/llama.cpp/>
 
@@ -18,6 +18,8 @@ Detailed developer documentation:
 
 - [Usage guide and arguments](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-hot-cache-usage-guide.html)
 - [Architecture explainer](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-hot-cache-architecture-explainer.html)
+- [PP architecture](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-hot-cache-pp-architecture.html)
+- [PP journey](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-hot-cache-pp-journey.html)
 - [Journey and learnings](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-hot-cache-journey-learnings.html)
 - [Interactive token visualization](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/moe-experts-first-visual-explainer.html)
 - [Qwen3Next implementation](https://adrianhoehne.github.io/llama.cpp/docs/moe-hot-cache/qwen3-coder-next-hot-cache-implementation.html)
@@ -49,7 +51,7 @@ Normal hot-cache start: loads the expert list, keeps the cold experts on the CPU
 
 For hot-cache benchmarking and normal single-user tuning, prefer `--parallel 1`. Server-side parallel requests are not recommended for this feature because different prompts are likely to need different experts. Mixing them lowers the effective hot-cache hit rate and makes dynamic updates chase multiple workloads at once. This is separate from the internal hot/cold branch parallelization, which can stay enabled.
 
-For large prompt-processing batches, add `--moe-hot-cache-pp-reduce-merge auto`. This reduces hot and cold MoE branch outputs before the final merge, which avoids carrying the full expert-slot tensor through the PP merge. Decode is unchanged.
+For large prompt-processing batches, add `--moe-hot-cache-pp-reduce-merge auto`. This reduces hot and cold MoE branch outputs before the final merge, which avoids carrying the full expert-slot tensor through the PP merge. Supported adapters also enable dense PP by profile, so real multi-token prompt processing can use the hot-cache path while warmup and tiny decode batches stay on their conservative paths. Decode is unchanged.
 
 Final speed test without perf counters, for the least distorted tokens/s measurement.
 

@@ -594,12 +594,13 @@ static ggml_backend_t llama_moe_hot_cache_primary_merge_backend(
 static ggml_backend_t llama_moe_hot_cache_pp_cold_backend(
         const llm_graph_context & graph,
         const llama_model & model,
-        int il) {
+        int il,
+        const llama_moe_hot_cache_graph_profile & profile) {
     if (graph.cparams.warmup) {
         return nullptr;
     }
 
-    switch (llama_moe_hot_cache_pp_policy::cold_backend()) {
+    switch (llama_moe_hot_cache_pp_policy::cold_backend(profile)) {
         case llama_moe_hot_cache_pp_cold_backend::cpu:
             return graph.backend_cpu;
         case llama_moe_hot_cache_pp_cold_backend::primary:
@@ -653,6 +654,15 @@ static int32_t llama_moe_hot_cache_lane_weight_field(size_t lane) {
         case 0: return LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_WEIGHT;
         case 1: return LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_WEIGHT;
         case 2: return LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_WEIGHT;
+    }
+    GGML_ABORT("invalid MoE hot-cache lane");
+}
+
+static int32_t llama_moe_hot_cache_lane_expert_id_field(size_t lane) {
+    switch (lane) {
+        case 0: return LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_EXPERT_ID;
+        case 1: return LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_EXPERT_ID;
+        case 2: return LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_EXPERT_ID;
     }
     GGML_ABORT("invalid MoE hot-cache lane");
 }
@@ -928,7 +938,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
     GGML_ASSERT(!cache.lanes.empty());
     GGML_ASSERT(cache.lanes.size() <= LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES);
     if (graph_phase == llama_moe_hot_cache_graph_phase::prompt_processing && n_tokens > 1) {
-        if (llama_moe_hot_cache_pp_policy::dense_enabled(graph_phase, n_tokens)) {
+        if (llama_moe_hot_cache_pp_policy::dense_enabled(graph_phase, n_tokens, profile)) {
             return llama_moe_hot_cache_build_moe_hot_multi_pp_dense_from_logits(graph, model, cur, logits, il, adapter);
         }
         return llama_moe_hot_cache_build_moe_hot_multi_pp_from_logits(graph, model, cur, logits, il, adapter);
@@ -1180,6 +1190,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_pp_dense_from_logits(
     const int64_t capacity = n_moe_slots*n_tokens;
     const auto & layer = model.layers[il];
     const auto & cache = model.moe_hot_cache->layers[il];
+    const llama_moe_hot_cache_graph_profile profile = adapter.profile();
     const bool has_cold_experts = llama_moe_hot_cache_layer_has_cold_experts(cache);
     const int64_t cold_capacity = has_cold_experts
         ? llama_moe_hot_cache_layer_cold_capacity(cache, n_moe_slots, n_tokens)
@@ -1191,7 +1202,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_pp_dense_from_logits(
                 llama_moe_hot_cache_graph_phase::prompt_processing,
                 n_tokens);
 
-    GGML_ASSERT(adapter.graph_kind == llama_moe_hot_cache_graph_kind::logits);
+    GGML_ASSERT(adapter.graph_kind != llama_moe_hot_cache_graph_kind::none);
     GGML_ASSERT(cache.lanes.empty());
     GGML_ASSERT(!cache.hot_id_map_host.empty());
     GGML_ASSERT(n_tokens > 1);
@@ -1301,7 +1312,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_pp_dense_from_logits(
     branch_outputs.push_back(hot_out);
 
     if (has_cold_experts) {
-        ggml_backend_t cold_backend = llama_moe_hot_cache_pp_cold_backend(graph, model, il);
+        ggml_backend_t cold_backend = llama_moe_hot_cache_pp_cold_backend(graph, model, il, profile);
         ggml_backend_t cold_reduce_backend = llama_moe_hot_cache_custom_reduce_backend(graph, cold_backend);
         const bool use_weighted_cold_reduce =
             use_compact_cold_reduce &&
@@ -1474,6 +1485,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_pp_dense_from_logit
     const int64_t capacity = n_moe_slots*n_tokens;
     const auto & layer = model.layers[il];
     const auto & cache = model.moe_hot_cache->layers[il];
+    const llama_moe_hot_cache_graph_profile profile = adapter.profile();
     const bool has_cold_experts = llama_moe_hot_cache_layer_has_cold_experts(cache);
     const int64_t cold_capacity = has_cold_experts
         ? llama_moe_hot_cache_layer_cold_capacity(cache, n_moe_slots, n_tokens)
@@ -1509,7 +1521,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_pp_dense_from_logit
             llama_moe_hot_cache_select_worklist_op(llama_moe_hot_cache_worklist_order::token_aligned),
             1,
             const_cast<llama_moe_hot_cache_layer *>(&cache));
-    graph.cb(worklist, "ffn_moe_worklist_pp_dense", il);
+    graph.cb(worklist, "ffn_moe_worklist_multi_pp_dense", il);
 
     ggml_tensor * compact_cold_worklist = nullptr;
     if (use_compact_cold_reduce) {
@@ -1565,6 +1577,10 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_pp_dense_from_logit
             ? lane_count
             : ggml_add(ctx0, hot_count_total, lane_count);
 
+        ggml_tensor * lane_expert_ids = view_worklist_field(llama_moe_hot_cache_lane_expert_id_field(lane_index));
+        graph.cb(lane_expert_ids, format("ffn_moe_hot%zu_expert_ids_pp_dense", lane_index).c_str(), il);
+        ggml_build_forward_expand(gf, lane_expert_ids);
+
         ggml_tensor * lane_ids = ggml_cast(ctx0, view_worklist_field(llama_moe_hot_cache_lane_id_field(lane_index)), GGML_TYPE_I32);
         lane_ids = ggml_reshape_2d(ctx0, lane_ids, n_moe_slots, n_tokens);
         graph.cb(lane_ids, format("ffn_moe_hot%zu_ids_pp_dense", lane_index).c_str(), il);
@@ -1617,7 +1633,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_pp_dense_from_logit
     }
 
     if (has_cold_experts) {
-        ggml_backend_t cold_backend = llama_moe_hot_cache_pp_cold_backend(graph, model, il);
+        ggml_backend_t cold_backend = llama_moe_hot_cache_pp_cold_backend(graph, model, il, profile);
         ggml_backend_t cold_reduce_backend = llama_moe_hot_cache_custom_reduce_backend(graph, cold_backend);
         const bool use_weighted_cold_reduce =
             use_compact_cold_reduce &&
@@ -1835,7 +1851,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_pp_from_logits(
             llama_moe_hot_cache_select_worklist_op(worklist_order),
             1,
             const_cast<llama_moe_hot_cache_layer *>(&cache));
-    graph.cb(worklist, "ffn_moe_worklist", il);
+    graph.cb(worklist, "ffn_moe_worklist_multi_pp", il);
 
     const auto view_worklist_field = [&](int32_t field, int64_t length = -1) {
         return ggml_view_1d(ctx0, worklist, length < 0 ? capacity : length, field*worklist->nb[1]);
@@ -1926,6 +1942,10 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_pp_from_logits(
         hot_count_total = hot_count_total == nullptr
             ? lane_count
             : ggml_add(ctx0, hot_count_total, lane_count);
+
+        ggml_tensor * lane_expert_ids = view_worklist_field(llama_moe_hot_cache_lane_expert_id_field(lane_index), hot_lane_capacity);
+        graph.cb(lane_expert_ids, format("ffn_moe_hot%zu_expert_ids_compact_pp", lane_index).c_str(), il);
+        ggml_build_forward_expand(gf, lane_expert_ids);
 
         ggml_tensor * lane_ids = ggml_cast(ctx0, view_worklist_field(llama_moe_hot_cache_lane_id_field(lane_index), hot_lane_capacity), GGML_TYPE_I32);
         lane_ids = ggml_reshape_2d(ctx0, lane_ids, 1, hot_lane_capacity);
@@ -2127,7 +2147,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_from_logits(
 
     if (graph_phase == llama_moe_hot_cache_graph_phase::prompt_processing &&
             n_tokens > 1 &&
-            llama_moe_hot_cache_pp_policy::dense_enabled(graph_phase, n_tokens)) {
+            llama_moe_hot_cache_pp_policy::dense_enabled(graph_phase, n_tokens, profile)) {
         return llama_moe_hot_cache_build_moe_hot_pp_dense_from_logits(graph, model, cur, logits, il, adapter);
     }
 
@@ -2635,6 +2655,12 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_hot(ggml_tensor * cu
     }
 
     GGML_ASSERT(!cache.hot_id_map_host.empty());
+
+    if (graph_phase == llama_moe_hot_cache_graph_phase::prompt_processing &&
+            n_tokens > 1 &&
+            llama_moe_hot_cache_pp_policy::dense_enabled(graph_phase, n_tokens, profile)) {
+        return llama_moe_hot_cache_build_moe_hot_pp_dense_from_logits(*this, model, cur, logits, il, adapter);
+    }
 
     const int64_t capacity = n_moe_slots*n_tokens;
     const llama_moe_hot_cache_pp_execution_plan pp_plan = llama_moe_hot_cache_pp_policy::build(
@@ -3145,19 +3171,33 @@ ggml_tensor * llama_model_glm4_moe::graph::build_layer_moe_hot(ggml_tensor * cur
 ggml_tensor * llama_model_openai_moe::graph::build_layer_moe_hot(ggml_tensor * cur, const int il) {
     const bool hot_cache_layer_active =
         llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits);
+    const llama_moe_hot_cache_layer * hot_cache_layer =
+        hot_cache_layer_active ? &model.moe_hot_cache->layers[il] : nullptr;
     const bool hot_cache_multi_lane =
-        hot_cache_layer_active && !model.moe_hot_cache->layers[il].lanes.empty();
-    const llama_moe_hot_cache_graph_phase graph_phase =
-        llama_moe_hot_cache_graph_phase_from_llm(gphase, cparams.warmup, cur->ne[1]);
-    // Multi-lane supports single-token decode and real prompt processing. Tiny
-    // multi-token decode batches, such as the BOS/EOS startup run, use the
-    // upstream MoE path because they are neither PP worklists nor decode slots.
+        hot_cache_layer != nullptr && !hot_cache_layer->lanes.empty();
+    uint32_t hot_cache_n_hot = hot_cache_layer != nullptr ? hot_cache_layer->n_hot : 0;
+    if (hot_cache_multi_lane) {
+        hot_cache_n_hot = 0;
+        for (const auto & lane : hot_cache_layer->lanes) {
+            hot_cache_n_hot += lane.n_hot;
+        }
+    }
+    const uint32_t hot_cache_n_expert = hot_cache_layer != nullptr ? hot_cache_layer->n_expert : 0;
+    const llama_moe_hot_cache_graph_profile hot_cache_profile =
+        llama_moe_hot_cache_graph_profile_for_arch(model.arch);
     // GPT-OSS trims the final layer to output rows before the MoE. PP ubatches
     // without output rows have zero tokens here and are left to the original path.
-    if (!hot_cache_layer_active || cur->ne[1] == 0 ||
-            (hot_cache_multi_lane &&
-             graph_phase != llama_moe_hot_cache_graph_phase::prompt_processing &&
-             cur->ne[1] != 1)) {
+    if (cur->ne[1] == 0 ||
+            !llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+                    gphase,
+                    cparams.warmup,
+                    cur->ne[1],
+                    hot_cache_layer_active,
+                    hot_cache_multi_lane,
+                    0,
+                    hot_cache_n_hot,
+                    hot_cache_n_expert,
+                    hot_cache_profile.pp_min_hot_expert_ratio)) {
         return nullptr;
     }
 

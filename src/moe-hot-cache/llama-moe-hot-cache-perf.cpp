@@ -223,6 +223,8 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
 
     if (llama_moe_layer_perf_node_classifier::is_topk_node(name)) {
         llama_moe_layer_perf_tensor_reader::count_topk_locked(g_llama_moe_layer_perf, (uint32_t) layer, t);
+    } else if (llama_moe_layer_perf_node_classifier::is_multi_pp_worklist_node(name)) {
+        llama_moe_layer_perf_tensor_reader::count_worklist_counts_locked(g_llama_moe_layer_perf, (uint32_t) layer, t, true);
     } else if (llama_moe_layer_perf_node_classifier::is_hot_count_node(name)) {
         llama_moe_layer_perf_tensor_reader::count_worklist_count_locked(g_llama_moe_layer_perf, (uint32_t) layer, t, true);
     } else if (llama_moe_layer_perf_node_classifier::is_cold_count_node(name)) {

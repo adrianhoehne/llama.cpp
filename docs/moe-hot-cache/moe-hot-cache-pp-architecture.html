@@ -332,6 +332,7 @@
         <a href="#summary">Summary</a>
         <a href="#phase-model">Phase Model</a>
         <a href="#routing-prework">Routing Prework</a>
+        <a href="#dense-pp">Dense PP Graph</a>
         <a href="#fusion-detail">CUDA Fusion</a>
         <a href="#class-diagram">Class Diagram</a>
         <a href="#runtime-flow">Runtime Flow</a>
@@ -354,8 +355,10 @@
           </p>
           <div class="badge-row">
             <span class="badge green">PP reduce merge</span>
+            <span class="badge green">Dense PP worklist</span>
             <span class="badge green">Compact cold reduce</span>
             <span class="badge green">Expert-major worklist</span>
+            <span class="badge green">Multi-lane PP accounting</span>
             <span class="badge">Decode stays token-major</span>
           </div>
         </div>
@@ -402,7 +405,7 @@
             <p>
               Prompt batches use the PP phase even if the final ubatch has only
               one token. Large PP shapes can use expert-major worklists, PP
-              reduce merge, and compact cold reduce.
+              reduce merge, dense PP graph forms, and compact cold reduce.
             </p>
           </div>
           <div class="mini">
@@ -481,6 +484,57 @@
           produce the same ordering. After top-k renormalization, the global
           softmax denominator cancels out. That makes the two routing variants
           equivalent for Qwen3.6, even though the graph node sequence differs.
+        </p>
+      </section>
+
+      <section class="panel" id="dense-pp">
+        <h2>Dense PP Graph</h2>
+        <p>
+          Dense PP is the default prompt-processing graph for the supported
+          hot-cache adapters. The name means the graph keeps the original
+          selected-slot grid available for merge semantics while the worklist
+          decides which slots are hot, which are cold, and which expert lane
+          should process each hot slot.
+        </p>
+        <p>
+          This is separate from <code>--moe-hot-cache-pp-reduce-merge</code>.
+          Dense PP decides whether a real multi-token prompt-processing batch
+          can enter the hot-cache graph. PP reduce-merge decides whether hot
+          and cold branch outputs are reduced to <code>[n_embd, n_tokens]</code>
+          before the final add. Both can be benchmarked independently.
+        </p>
+        <div class="grid-3">
+          <div class="mini">
+            <h3>Adapter Default</h3>
+            <p>
+              <code>llama_moe_hot_cache_graph_profile::pp_dense</code> enables
+              dense PP for Qwen35Moe, Qwen3Next, Gemma4, Mellum, GPT-OSS,
+              DeepSeek2, and GLM4 MoE profiles.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Cold Placement</h3>
+            <p>
+              <code>pp_primary_cold_backend</code> keeps dense PP cold-branch
+              graph work on the primary backend by default. The uncached expert
+              tensors still follow the normal CPU/RAM MoE path.
+            </p>
+          </div>
+          <div class="mini">
+            <h3>Multi-Lane Counters</h3>
+            <p>
+              The multi-lane dense worklist exposes fixed <code>HOT</code>,
+              <code>HOT1</code>, and <code>HOT2</code> fields. Perf readback
+              sums those lane counts so the UI hit rate matches all cached
+              expert lanes, not only the first lane.
+            </p>
+          </div>
+        </div>
+        <p class="note">
+          For A/B testing, set <code>LLAMA_MOE_HOT_CACHE_PP_DENSE=0</code> to
+          disable dense PP or <code>LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND=cpu</code>
+          to force the older cold-backend placement. These switches are intended
+          for diagnosis, not normal profile files.
         </p>
       </section>
 
@@ -686,6 +740,18 @@
               <td>Allows the large PP cold-path optimization to be disabled independently.</td>
             </tr>
             <tr>
+              <td><code>dense_enabled</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-pp.cpp">llama-moe-hot-cache-pp.cpp</a></td>
+              <td>Combines graph phase, token count, adapter profile, and <code>LLAMA_MOE_HOT_CACHE_PP_DENSE</code>.</td>
+              <td>Lets real prompt-processing batches use the dense hot-cache graph while decode remains isolated.</td>
+            </tr>
+            <tr>
+              <td><code>cold_backend</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-pp.cpp">llama-moe-hot-cache-pp.cpp</a></td>
+              <td>Chooses CPU or primary backend placement for dense PP cold graph work.</td>
+              <td>Makes the new cold-placement behavior profile-driven and overrideable for benchmarks.</td>
+            </tr>
+            <tr>
               <td><code>worklist_order</code></td>
               <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-pp.cpp">llama-moe-hot-cache-pp.cpp</a></td>
               <td>Selects token-major or expert-major worklist order.</td>
@@ -720,6 +786,24 @@
               <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-graph.cpp">llama-moe-hot-cache-graph.cpp</a></td>
               <td>Connects policy, worklist, hot lane, cold lane, and merge tensors.</td>
               <td>Contains glue only; feature decisions and low-level work stay in helpers.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_build_moe_hot_pp_dense_from_logits</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-graph.cpp">llama-moe-hot-cache-graph.cpp</a></td>
+              <td>Builds the single-lane dense PP graph from router logits.</td>
+              <td>Keeps prompt-processing hot-cache execution in the generic logits adapter path.</td>
+            </tr>
+            <tr>
+              <td><code>llama_moe_hot_cache_build_moe_hot_multi_pp_dense_from_logits</code></td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-graph.cpp">llama-moe-hot-cache-graph.cpp</a></td>
+              <td>Builds dense PP for up to three hot-cache expert lanes plus the cold lane.</td>
+              <td>Lets multi-GPU hot-cache profiles use PP instead of falling back to the default llama path.</td>
+            </tr>
+            <tr>
+              <td><code>ffn_moe_worklist_multi_pp_dense</code> perf handling</td>
+              <td><a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-perf-reader.cpp">perf-reader.cpp</a> and <a class="file-link" href="../../src/moe-hot-cache/llama-moe-hot-cache-perf-json.cpp">perf-json.cpp</a></td>
+              <td>Reads multi-lane dense PP worklists and derives hot/cold slot totals when direct counters are absent.</td>
+              <td>Keeps Web UI hit-rate and update inputs correct for multi-lane PP runs.</td>
             </tr>
           </tbody>
         </table>

@@ -60,13 +60,28 @@ static bool pp_compact_cold_reduce_mode() {
     return !env_is_false(env);
 }
 
-static bool pp_dense_mode() {
+static bool pp_dense_mode(bool default_enabled) {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_DENSE");
     if (env == nullptr || env[0] == '\0') {
-        return false;
+        return default_enabled;
     }
 
     return !env_is_false(env);
+}
+
+static int64_t pp_dense_min_tokens() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS");
+    if (env == nullptr || env[0] == '\0') {
+        return 256;
+    }
+
+    char * end = nullptr;
+    const long long parsed = std::strtoll(env, &end, 10);
+    if (end == env || parsed < 0) {
+        return 256;
+    }
+
+    return (int64_t) parsed;
 }
 
 static bool pp_weighted_cold_reduce_mode() {
@@ -78,9 +93,13 @@ static bool pp_weighted_cold_reduce_mode() {
     return !env_is_false(env);
 }
 
-static llama_moe_hot_cache_pp_cold_backend pp_cold_backend_mode() {
+static llama_moe_hot_cache_pp_cold_backend pp_cold_backend_mode(
+        llama_moe_hot_cache_pp_cold_backend default_backend) {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND");
-    if (env == nullptr || env[0] == '\0' || env_is_false(env) || std::strcmp(env, "cpu") == 0) {
+    if (env == nullptr || env[0] == '\0') {
+        return default_backend;
+    }
+    if (env_is_false(env) || std::strcmp(env, "cpu") == 0) {
         return llama_moe_hot_cache_pp_cold_backend::cpu;
     }
     if (std::strcmp(env, "primary") == 0 || std::strcmp(env, "gpu") == 0) {
@@ -235,11 +254,19 @@ bool llama_moe_hot_cache_pp_policy::compact_cold_reduce_enabled(llama_moe_hot_ca
 }
 
 bool llama_moe_hot_cache_pp_policy::dense_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
+    llama_moe_hot_cache_graph_profile profile;
+    return dense_enabled(phase, n_tokens, profile);
+}
+
+bool llama_moe_hot_cache_pp_policy::dense_enabled(
+        llama_moe_hot_cache_graph_phase phase,
+        int64_t n_tokens,
+        const llama_moe_hot_cache_graph_profile & profile) {
     if (phase != llama_moe_hot_cache_graph_phase::prompt_processing || n_tokens <= 1) {
         return false;
     }
 
-    return pp_dense_mode();
+    return pp_dense_mode(profile.pp_dense) && n_tokens >= pp_dense_min_tokens();
 }
 
 bool llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
@@ -251,7 +278,15 @@ bool llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(llama_moe_hot_c
 }
 
 llama_moe_hot_cache_pp_cold_backend llama_moe_hot_cache_pp_policy::cold_backend() {
-    return pp_cold_backend_mode();
+    return cold_backend({});
+}
+
+llama_moe_hot_cache_pp_cold_backend llama_moe_hot_cache_pp_policy::cold_backend(
+        const llama_moe_hot_cache_graph_profile & profile) {
+    const llama_moe_hot_cache_pp_cold_backend default_backend = profile.pp_primary_cold_backend
+        ? llama_moe_hot_cache_pp_cold_backend::primary
+        : llama_moe_hot_cache_pp_cold_backend::cpu;
+    return pp_cold_backend_mode(default_backend);
 }
 
 bool llama_moe_hot_cache_pp_policy::hot_dummy_padding_enabled(int64_t n_tokens, bool default_enabled) {
@@ -282,6 +317,48 @@ llama_moe_hot_cache_worklist_order llama_moe_hot_cache_pp_policy::worklist_order
     }
 
     return pp_worklist_order_mode();
+}
+
+bool llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+        llm_graph_phase phase,
+        bool warmup,
+        int64_t n_tokens,
+        bool layer_active,
+        bool multi_lane,
+        int64_t pp_bypass_default_min_tokens,
+        uint32_t n_hot_experts,
+        uint32_t n_total_experts,
+        double pp_bypass_default_min_hot_expert_ratio) {
+    if (!layer_active || warmup || n_tokens <= 0) {
+        return false;
+    }
+
+    const llama_moe_hot_cache_graph_phase graph_phase = graph_phase_from_llm(phase, warmup, n_tokens);
+    if (graph_phase == llama_moe_hot_cache_graph_phase::warmup) {
+        return false;
+    }
+
+    if (graph_phase == llama_moe_hot_cache_graph_phase::prompt_processing &&
+            bypass_hot_cache_for_prompt_processing(
+                    phase,
+                    warmup,
+                    n_tokens,
+                    pp_bypass_default_min_tokens,
+                    n_hot_experts,
+                    n_total_experts,
+                    pp_bypass_default_min_hot_expert_ratio)) {
+        return false;
+    }
+
+    if (!multi_lane) {
+        return true;
+    }
+
+    if (graph_phase == llama_moe_hot_cache_graph_phase::prompt_processing) {
+        return n_tokens > 1;
+    }
+
+    return n_tokens == 1;
 }
 
 bool llama_moe_hot_cache_pp_policy::bypass_hot_cache_for_prompt_processing(

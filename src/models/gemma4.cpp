@@ -1,6 +1,7 @@
 #include "models.h"
 
 #include "moe-hot-cache/llama-moe-hot-cache.h"
+#include "moe-hot-cache/llama-moe-hot-cache-pp.h"
 
 void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
@@ -324,9 +325,30 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
             const bool hot_cache_layer_active =
                 llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits);
+            const llama_moe_hot_cache_layer * hot_cache_layer =
+                hot_cache_layer_active ? &model.moe_hot_cache->layers[il] : nullptr;
             const bool hot_cache_multi_lane =
-                hot_cache_layer_active && !model.moe_hot_cache->layers[il].lanes.empty();
-            if (hot_cache_layer_active && (!hot_cache_multi_lane || (!cparams.warmup && cur_moe->ne[1] == 1))) {
+                hot_cache_layer != nullptr && !hot_cache_layer->lanes.empty();
+            uint32_t hot_cache_n_hot = hot_cache_layer != nullptr ? hot_cache_layer->n_hot : 0;
+            if (hot_cache_multi_lane) {
+                hot_cache_n_hot = 0;
+                for (const auto & lane : hot_cache_layer->lanes) {
+                    hot_cache_n_hot += lane.n_hot;
+                }
+            }
+            const uint32_t hot_cache_n_expert = hot_cache_layer != nullptr ? hot_cache_layer->n_expert : 0;
+            const llama_moe_hot_cache_graph_profile hot_cache_profile =
+                llama_moe_hot_cache_graph_profile_for_arch(model.arch);
+            if (llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+                    gphase,
+                    cparams.warmup,
+                    cur_moe->ne[1],
+                    hot_cache_layer_active,
+                    hot_cache_multi_lane,
+                    0,
+                    hot_cache_n_hot,
+                    hot_cache_n_expert,
+                    hot_cache_profile.pp_min_hot_expert_ratio)) {
                 cur_moe = build_layer_moe_hot(cur_moe, logits, il);
             } else {
                 cur_moe = build_moe_ffn(cur_moe,

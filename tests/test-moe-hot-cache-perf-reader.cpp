@@ -1,4 +1,5 @@
 #include "../src/moe-hot-cache/llama-moe-hot-cache-perf-reader.h"
+#include "../src/moe-hot-cache/llama-moe-hot-cache.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -131,6 +132,43 @@ static void test_count_worklist_count_ignores_invalid_inputs() {
     require(state.layers[0].hot_slots_total == 0);
 }
 
+static void test_count_worklist_counts_reads_multi_lane_fields() {
+    ggml_backend_ptr backend = make_cpu_backend();
+    auto ctx = make_ctx();
+
+    constexpr int64_t capacity = 4;
+    ggml_tensor * worklist = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, capacity, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
+
+    std::vector<float> data((size_t) capacity*LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COUNT, 0.0f);
+    const auto set_count = [&](int32_t field, float value) {
+        data[(size_t) field*capacity] = value;
+    };
+    set_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT, 2.0f);
+    set_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_COUNT, 3.0f);
+    set_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_COUNT, 4.0f);
+    set_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT, 5.0f);
+    set_tensor_data<float>(worklist, data);
+
+    llama_moe_layer_perf_state single_state;
+    single_state.ensure_shape_locked(1, 4, 2);
+    llama_moe_layer_perf_tensor_reader::count_worklist_counts_locked(single_state, 0, worklist, false);
+    require(single_state.layers[0].calls == 1);
+    require(single_state.layers[0].hot_worklist_calls == 1);
+    require(single_state.layers[0].cold_worklist_calls == 1);
+    require(single_state.layers[0].hot_slots_total == 2);
+    require(single_state.layers[0].cold_slots_total == 5);
+
+    llama_moe_layer_perf_state multi_state;
+    multi_state.ensure_shape_locked(1, 4, 2);
+    llama_moe_layer_perf_tensor_reader::count_worklist_counts_locked(multi_state, 0, worklist, true);
+    require(multi_state.layers[0].calls == 1);
+    require(multi_state.layers[0].hot_worklist_calls == 1);
+    require(multi_state.layers[0].cold_worklist_calls == 1);
+    require(multi_state.layers[0].hot_slots_total == 9);
+    require(multi_state.layers[0].cold_slots_total == 5);
+}
+
 static void test_count_branch_experts_reads_i32_and_f32() {
     ggml_backend_ptr backend = make_cpu_backend();
     auto ctx = make_ctx();
@@ -163,6 +201,7 @@ int main() {
     test_count_topk_counts_valid_ids_and_call();
     test_count_worklist_count_reads_f32_and_i32();
     test_count_worklist_count_ignores_invalid_inputs();
+    test_count_worklist_counts_reads_multi_lane_fields();
     test_count_branch_experts_reads_i32_and_f32();
     return 0;
 }

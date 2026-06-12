@@ -497,7 +497,8 @@
         <p>
           This page is the operational companion to the
           <a href="moe-hot-cache-architecture-explainer.html">architecture explainer</a>.
-          It assumes an already supported MoE architecture such as Qwen35Moe, Qwen3Next, Gemma4, or Mellum.
+          It assumes an already supported MoE architecture such as Qwen35Moe, Qwen3Next, Gemma4, Mellum,
+          GPT-OSS, DeepSeek2-family MoE exports such as GLM Flash, or native GLM4 MoE.
           The key rule is simple: keep the normal MoE experts on the CPU with <code>--cpu-moe</code>,
           then add a selected GPU copy through <code>--moe-hot-cache</code>.
         </p>
@@ -646,6 +647,11 @@ cmake --build build -j8
         <div class="note">
           <strong>Benchmarking:</strong>
           <code>llama-bench</code> also accepts <code>--moe-layer-perf-out FNAME</code>. It resets MoE perf counters after warmup, runs the measured benchmark repetitions, and writes the same JSON schema as <code>GET /moe-layer-perf</code>. Use this when you need repeatable PP/TG measurements without running <code>llama-server</code>. Treat synthetic TG runs as a hit-rate check: generated benchmark tokens can select experts that are not well represented in a hot-cache file learned from a different prompt.
+        </div>
+
+        <div class="note">
+          <strong>Prompt processing:</strong>
+          Supported adapters enable the dense PP hot-cache path by profile. Real multi-token PP batches can enter the hot-cache graph, including multi-lane expert caches, while warmup and tiny decode batches stay on conservative decode-oriented paths. Dense PP starts at <code>--moe-hot-cache-pp-dense-min-tokens</code>, default <code>256</code>, and can be guarded by <code>--moe-hot-cache-pp-min-hot-expert-ratio</code> when a profile has too little hot expert coverage. <code>--moe-hot-cache-pp-reduce-merge auto</code> is a separate merge optimization for large PP shapes; dense PP can be compared independently with <code>LLAMA_MOE_HOT_CACHE_PP_DENSE=0</code>.
         </div>
       </section>
 
@@ -982,7 +988,19 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
                 <td><code>--moe-hot-cache-pp-reduce-merge MODE</code></td>
                 <td><code>moe-hot-cache-pp-reduce-merge = MODE</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_PP_REDUCE_MERGE</code><br><code>LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE</code></td>
                 <td><code>off</code>, <code>on</code>, <code>auto</code>. Default <code>off</code>.</td>
-                <td>Prompt-processing optimization. Reduces each hot/cold branch to <code>[n_embd, n_tokens]</code> before the final merge. In <code>auto</code>, it enables only for larger PP shapes: <code>n_tokens &gt;= 32</code> and capacity <code>&gt;= 64</code>. The graph phase is explicit, so a one-token PP tail remains PP while tiny multi-token TG remains decode.</td>
+                <td>Prompt-processing merge optimization. Reduces each hot/cold branch to <code>[n_embd, n_tokens]</code> before the final merge. In <code>auto</code>, it enables only for larger PP shapes: <code>n_tokens &gt;= 32</code> and capacity <code>&gt;= 64</code>. This is independent from dense PP, which decides whether the prompt-processing hot-cache graph itself is used.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-pp-dense-min-tokens N</code></td>
+                <td><code>moe-hot-cache-pp-dense-min-tokens = N</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS</code><br><code>LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS</code></td>
+                <td>Integer <code>&gt;= 0</code>, default <code>256</code></td>
+                <td>Minimum real PP batch size before supported adapters use the dense PP hot-cache graph. Use <code>0</code> to allow all multi-token PP batches. This does not affect one-token decode.</td>
+              </tr>
+              <tr>
+                <td><code>--moe-hot-cache-pp-min-hot-expert-ratio F</code></td>
+                <td><code>moe-hot-cache-pp-min-hot-expert-ratio = F</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO</code><br><code>LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO</code></td>
+                <td>Float <code>0.0</code> to <code>1.0</code>, profile default normally <code>0.0</code></td>
+                <td>Requires at least this fraction of the observed experts to be present in hot-cache lanes before PP enters the hot-cache graph. This is useful for very low-coverage profiles: PP can stay on the normal path while TG still uses the hot cache.</td>
               </tr>
             </tbody>
           </table>
@@ -1147,6 +1165,26 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
                 <td>Moves decode-time hot/cold routing and worklist creation into a CPU custom operation for tiny decode batches. This avoids building larger GPU-side helper graphs for decode, which is usually faster for the supported MoE paths. The shortcut is gated by the explicit graph phase and the adapter's <code>cpu_decode_routing_max_tokens</code>, so prompt-processing tails do not use it. Disabling it forces the more graph-heavy route and is mostly useful for debugging routing differences.</td>
               </tr>
               <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_PP_DENSE</code></td>
+                <td>Boolean, profile-dependent default</td>
+                <td>Controls whether supported adapters use the dense prompt-processing hot-cache graph for real multi-token PP batches. Qwen35Moe, Qwen3Next, Gemma4, Mellum, GPT-OSS, DeepSeek2, and GLM4 MoE profiles enable it by default. Set it to <code>0</code>, <code>off</code>, or <code>false</code> for A/B comparisons against the older sparse PP path. It does not affect one-token decode.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS</code></td>
+                <td>Integer <code>&gt;= 0</code>, default <code>256</code></td>
+                <td>Environment form of <code>--moe-hot-cache-pp-dense-min-tokens</code>. It is read by the adapter policy before dense PP is selected.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO</code></td>
+                <td>Float <code>0.0..1.0</code>, profile-dependent default</td>
+                <td>Environment form of <code>--moe-hot-cache-pp-min-hot-expert-ratio</code>. It overrides the adapter profile guard for deciding whether PP has enough hot expert coverage.</td>
+              </tr>
+              <tr>
+                <td><code>LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND</code></td>
+                <td><code>primary</code>/<code>gpu</code>, <code>cpu</code>, or false. Profile default is <code>primary</code> for dense-PP adapters.</td>
+                <td>Chooses where the dense PP cold branch is placed. The profile default keeps cold PP branch graph work on the primary backend for better graph locality while the uncached expert tensors still come from the normal CPU/RAM MoE path. Use <code>cpu</code> to force the older CPU placement when isolating backend movement or memory behavior.</td>
+              </tr>
+              <tr>
                 <td><code>LLAMA_MOE_HOT_CACHE_DECODE_DIRECT_MERGE</code></td>
                 <td>Boolean, default on where supported</td>
                 <td>Allows single-token decode to merge hot and cold results directly into the final FFN output shape. Without it, the graph may carry larger expert-slot intermediates and reduce them later. Direct merge cuts intermediate tensor work and is one of the main decode-speed shortcuts for supported Qwen and Gemma paths.</td>
@@ -1200,6 +1238,9 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
           <span class="pill">Qwen3Next</span>
           <span class="pill">Gemma4</span>
           <span class="pill">Mellum</span>
+          <span class="pill">GPT-OSS</span>
+          <span class="pill">DeepSeek2 / GLM Flash</span>
+          <span class="pill">GLM4 MoE</span>
           <span class="pill"><span class="warn">Normal models:</span>&nbsp;use standard llama.cpp path</span>
         </div>
       </section>

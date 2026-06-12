@@ -509,17 +509,19 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
             hot_cache_n_hot += lane.n_hot;
         }
     }
-    const bool hot_cache_active =
-        hot_cache_layer_active &&
-        (!hot_cache_multi_lane || (!cparams.warmup && cur->ne[1] == 1)) &&
-        !llama_moe_hot_cache_pp_policy::bypass_hot_cache_for_prompt_processing(
+    const uint32_t hot_cache_n_expert = hot_cache_layer != nullptr ? hot_cache_layer->n_expert : 0;
+    const llama_moe_hot_cache_graph_profile hot_cache_profile =
+        llama_moe_hot_cache_graph_profile_for_arch(model.arch);
+    const bool hot_cache_active = llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
             gphase,
             cparams.warmup,
             cur->ne[1],
+            hot_cache_layer_active,
+            hot_cache_multi_lane,
             0,
             hot_cache_n_hot,
-            hot_cache_layer->n_expert,
-            0.0);
+            hot_cache_n_expert,
+            hot_cache_profile.pp_min_hot_expert_ratio);
     if (hot_cache_active) {
         moe_out = build_layer_ffn_hot(cur, il);
     } else {

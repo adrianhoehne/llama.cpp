@@ -26,10 +26,41 @@ bool has_expert_counts(const std::vector<uint64_t> & counts) {
     });
 }
 
+uint64_t sum_expert_counts(const std::vector<uint64_t> & counts) {
+    uint64_t total = 0;
+    for (uint64_t count : counts) {
+        total += count;
+    }
+    return total;
+}
+
+uint64_t effective_hot_slots_total(const llama_moe_layer_perf_json_layer_snapshot & layer) {
+    if (layer.hot_slots_total != 0 || layer.hot_worklist_calls != 0) {
+        return layer.hot_slots_total;
+    }
+
+    return sum_expert_counts(layer.hot_experts);
+}
+
+uint64_t effective_cold_slots_total(const llama_moe_layer_perf_json_layer_snapshot & layer) {
+    if (layer.cold_slots_total != 0 || layer.cold_worklist_calls != 0) {
+        return layer.cold_slots_total;
+    }
+
+    return sum_expert_counts(layer.cold_experts);
+}
+
 bool raw_counts_are_cold(const llama_moe_layer_perf_json_layer_snapshot & layer) {
+    const bool has_branch_counts =
+        has_expert_counts(layer.hot_experts) ||
+        has_expert_counts(layer.cold_experts);
+    const bool has_worklist_counts =
+        layer.hot_worklist_calls != 0 ||
+        layer.cold_worklist_calls != 0;
+
     return layer.expert_hits_total != 0 &&
-           !has_expert_counts(layer.hot_experts) &&
-           !has_expert_counts(layer.cold_experts);
+           !has_branch_counts &&
+           !has_worklist_counts;
 }
 
 void write_expert_counts(std::ostringstream & out, const std::vector<uint64_t> & counts) {
@@ -110,8 +141,8 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         const bool raw_as_cold = raw_counts_are_cold(layer);
 
         summary_calls += layer.calls;
-        summary_hot_slots += raw_as_cold ? 0 : layer.hot_slots_total;
-        summary_cold_slots += raw_as_cold ? layer.expert_hits_total : layer.cold_slots_total;
+        summary_hot_slots += raw_as_cold ? 0 : effective_hot_slots_total(layer);
+        summary_cold_slots += raw_as_cold ? layer.expert_hits_total : effective_cold_slots_total(layer);
         summary_total_moe_time_us += layer.total_moe_time_us;
         summary_routing_time_us += layer.routing_time_us;
         summary_worklist_time_us += layer.worklist_time_us;
@@ -185,8 +216,8 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         first_layer = false;
 
         const bool raw_as_cold = raw_counts_are_cold(layer);
-        const uint64_t hot_slots_total = raw_as_cold ? 0 : layer.hot_slots_total;
-        const uint64_t cold_slots_total = raw_as_cold ? layer.expert_hits_total : layer.cold_slots_total;
+        const uint64_t hot_slots_total = raw_as_cold ? 0 : effective_hot_slots_total(layer);
+        const uint64_t cold_slots_total = raw_as_cold ? layer.expert_hits_total : effective_cold_slots_total(layer);
 
         const double hot_slots_per_call =
             raw_as_cold ? 0.0 :

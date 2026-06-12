@@ -18,6 +18,9 @@ struct llama_moe_hot_cache_graph_profile {
     bool branch_reduce_merge = false;
     int64_t cpu_decode_routing_max_tokens = 1;
     int prefix_reduce_tasks_max = 4;
+    bool pp_dense = false;
+    bool pp_primary_cold_backend = false;
+    double pp_min_hot_expert_ratio = 0.0;
 };
 
 enum class llama_moe_hot_cache_graph_kind {

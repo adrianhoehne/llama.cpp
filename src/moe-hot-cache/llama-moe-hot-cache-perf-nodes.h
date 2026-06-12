@@ -11,6 +11,7 @@ public:
     static bool is_cold_count_node(const char * name);
     static bool is_hot_expert_ids_node(const char * name);
     static bool is_cold_ids_node(const char * name);
+    static bool is_multi_pp_worklist_node(const char * name);
 
     static bool is_gate_node(const char * name);
     static bool is_up_node(const char * name);

@@ -542,12 +542,30 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
         ggml_tensor * moe_out = nullptr;
         const bool hot_cache_layer_active =
             llama_moe_hot_cache_layer_active_for_graph(model, il, llama_moe_hot_cache_graph_kind::logits);
+        const llama_moe_hot_cache_layer * hot_cache_layer =
+            hot_cache_layer_active ? &model.moe_hot_cache->layers[il] : nullptr;
         const bool hot_cache_multi_lane =
-            hot_cache_layer_active && !model.moe_hot_cache->layers[il].lanes.empty();
-        const bool hot_cache_active =
-            hot_cache_layer_active &&
-            (!hot_cache_multi_lane || (!cparams.warmup && cur->ne[1] == 1)) &&
-            !llama_moe_hot_cache_pp_policy::bypass_hot_cache_for_prompt_processing(gphase, cparams.warmup, cur->ne[1], 1);
+            hot_cache_layer != nullptr && !hot_cache_layer->lanes.empty();
+        uint32_t hot_cache_n_hot = hot_cache_layer != nullptr ? hot_cache_layer->n_hot : 0;
+        if (hot_cache_multi_lane) {
+            hot_cache_n_hot = 0;
+            for (const auto & lane : hot_cache_layer->lanes) {
+                hot_cache_n_hot += lane.n_hot;
+            }
+        }
+        const uint32_t hot_cache_n_expert = hot_cache_layer != nullptr ? hot_cache_layer->n_expert : 0;
+        const llama_moe_hot_cache_graph_profile hot_cache_profile =
+            llama_moe_hot_cache_graph_profile_for_arch(model.arch);
+        const bool hot_cache_active = llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+                gphase,
+                cparams.warmup,
+                cur->ne[1],
+                hot_cache_layer_active,
+                hot_cache_multi_lane,
+                0,
+                hot_cache_n_hot,
+                hot_cache_n_expert,
+                hot_cache_profile.pp_min_hot_expert_ratio);
         if (hot_cache_active) {
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
             cb(logits, "ffn_moe_logits", il);

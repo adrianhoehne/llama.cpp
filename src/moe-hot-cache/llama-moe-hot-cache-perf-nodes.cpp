@@ -151,12 +151,19 @@ bool llama_moe_layer_perf_node_classifier::is_cold_ids_node(const char * name) {
     return suffix != nullptr && branch_has_component_prefix(suffix, "ids");
 }
 
+bool llama_moe_layer_perf_node_classifier::is_multi_pp_worklist_node(const char * name) {
+    return is_worklist_node(name) &&
+           contains(name, "multi_pp") &&
+           !contains(name, " (");
+}
+
 bool llama_moe_layer_perf_node_classifier::is_update_node(const char * name) {
     return is_topk_node(name) ||
            is_hot_count_node(name) ||
            is_cold_count_node(name) ||
            is_hot_expert_ids_node(name) ||
-           is_cold_ids_node(name);
+           is_cold_ids_node(name) ||
+           is_multi_pp_worklist_node(name);
 }
 
 bool llama_moe_layer_perf_node_classifier::is_gate_node(const char * name) {

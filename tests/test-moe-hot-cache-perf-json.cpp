@@ -85,6 +85,27 @@ static void test_full_mode_serializes_raw_counts_as_cold() {
     require(contains(json, "\"cold_experts\":[[1,5],[3,3]]"));
 }
 
+static void test_full_mode_derives_slots_from_branch_experts() {
+    llama_moe_layer_perf_json_snapshot snapshot;
+    snapshot.mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
+    snapshot.n_expert = 4;
+    snapshot.n_expert_used = 2;
+
+    llama_moe_layer_perf_json_layer_snapshot layer;
+    layer.calls = 1;
+    layer.expert_hits_total = 8;
+    layer.hot_experts = { 0, 3, 2, 0 };
+    layer.cold_experts = { 1, 0, 0, 2 };
+    snapshot.layers.push_back(layer);
+
+    const std::string json = llama_moe_layer_perf_json_serializer::serialize(snapshot);
+    require(contains(json, "\"hot_slots_total\":5"));
+    require(contains(json, "\"cold_slots_total\":3"));
+    require(contains(json, "\"hot_slot_ratio\":0.625"));
+    require(contains(json, "\"hot_experts\":[[1,3],[2,2]]"));
+    require(contains(json, "\"cold_experts\":[[0,1],[3,2]]"));
+}
+
 static void test_full_mode_serializes_parallel_debug() {
     llama_moe_layer_perf_json_snapshot snapshot;
     snapshot.mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
@@ -123,6 +144,7 @@ int main() {
     test_disabled_json_is_minimal();
     test_update_mode_keeps_only_update_metrics();
     test_full_mode_serializes_raw_counts_as_cold();
+    test_full_mode_derives_slots_from_branch_experts();
     test_full_mode_serializes_parallel_debug();
     return 0;
 }

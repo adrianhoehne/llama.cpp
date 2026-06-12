@@ -27,6 +27,8 @@ static void set_env_var(const char * name, const char * value) {
 static void clear_env() {
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_WORKLIST_ORDER", nullptr);
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE", nullptr);
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_COMPACT_COLD_REDUCE", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", nullptr);
@@ -38,6 +40,13 @@ static void clear_env() {
 static llama_moe_hot_cache_graph_profile profile_with_decode_branch_reduce() {
     llama_moe_hot_cache_graph_profile profile;
     profile.branch_reduce_merge = true;
+    return profile;
+}
+
+static llama_moe_hot_cache_graph_profile profile_with_pp_dense_primary_cold() {
+    llama_moe_hot_cache_graph_profile profile;
+    profile.pp_dense = true;
+    profile.pp_primary_cold_backend = true;
     return profile;
 }
 
@@ -127,12 +136,37 @@ static void test_compact_cold_reduce_modes() {
 
 static void test_weighted_cold_reduce_and_backend_modes() {
     clear_env();
+    const auto pp_profile = profile_with_pp_dense_primary_cold();
 
+    require(!llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+    require(!llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128, pp_profile));
+    require(llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 256, pp_profile));
+    require(!llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::decode, 1, pp_profile));
+    require(llama_moe_hot_cache_pp_policy::cold_backend(pp_profile) == llama_moe_hot_cache_pp_cold_backend::primary);
     require(llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
             llama_moe_hot_cache_graph_phase::prompt_processing, 128));
     require(!llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
             llama_moe_hot_cache_graph_phase::decode, 1));
     require(llama_moe_hot_cache_pp_policy::cold_backend() == llama_moe_hot_cache_pp_cold_backend::cpu);
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE", "off");
+    require(!llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128, pp_profile));
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE", "on");
+    require(!llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS", "0");
+    require(llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+    require(llama_moe_hot_cache_pp_policy::dense_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 2));
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS", nullptr);
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE", nullptr);
 
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE", "off");
     require(!llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
@@ -150,6 +184,7 @@ static void test_weighted_cold_reduce_and_backend_modes() {
 
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", "cpu");
     require(llama_moe_hot_cache_pp_policy::cold_backend() == llama_moe_hot_cache_pp_cold_backend::cpu);
+    require(llama_moe_hot_cache_pp_policy::cold_backend(pp_profile) == llama_moe_hot_cache_pp_cold_backend::cpu);
 }
 
 static void test_worklist_order_modes() {
@@ -234,6 +269,54 @@ static void test_bypass_hot_cache_for_prompt_processing_hot_expert_ratio() {
             LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 512, 0, 256, 256, 0.0));
 }
 
+static void test_hot_cache_active_for_layer() {
+    clear_env();
+
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, false, false));
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, true, 128, true, false));
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 0, true, false));
+
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, false));
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, true));
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_DECODE, false, 1, true, true));
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_DECODE, false, 4, true, true));
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_DECODE, false, 4, true, false));
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_BYPASS", "on");
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, true));
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_DECODE, false, 1, true, true));
+
+    clear_env();
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_BYPASS_MIN_TOKENS", "512");
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, true));
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 512, true, true));
+
+    clear_env();
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO", "0.05");
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, true, 0, 1, 64, 0.0));
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, true, 0, 4, 64, 0.0));
+
+    clear_env();
+    require(!llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, true, 0, 1, 64, 0.05));
+    require(llama_moe_hot_cache_pp_policy::hot_cache_active_for_layer(
+            LLM_GRAPH_PHASE_PROMPT_PROCESSING, false, 128, true, true, 0, 4, 64, 0.05));
+}
+
 int main() {
     test_phase_and_default_worklist_order();
     test_reduce_merge_modes();
@@ -242,6 +325,7 @@ int main() {
     test_worklist_order_modes();
     test_bypass_hot_cache_for_prompt_processing();
     test_bypass_hot_cache_for_prompt_processing_hot_expert_ratio();
+    test_hot_cache_active_for_layer();
     clear_env();
     return 0;
 }

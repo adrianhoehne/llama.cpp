@@ -2,8 +2,23 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "llama-moe-hot-cache.h"
 
 #include <vector>
+
+namespace {
+
+uint64_t read_f32_count_field(ggml_tensor * t, int32_t field) {
+    if (t == nullptr || t->type != GGML_TYPE_F32 || field < 0 || field >= t->ne[1]) {
+        return 0;
+    }
+
+    float count = 0.0f;
+    ggml_backend_tensor_get(t, &count, field*t->nb[1], sizeof(count));
+    return count > 0.0f ? (uint64_t) (count + 0.5f) : 0;
+}
+
+} // namespace
 
 void llama_moe_layer_perf_tensor_reader::count_topk_locked(
         llama_moe_layer_perf_state & state,
@@ -38,6 +53,36 @@ void llama_moe_layer_perf_tensor_reader::count_topk_locked(
 
     if (layer < state.layers.size()) {
         state.add_locked(state.layers[layer].calls, 1);
+    }
+}
+
+void llama_moe_layer_perf_tensor_reader::count_worklist_counts_locked(
+        llama_moe_layer_perf_state & state,
+        uint32_t layer,
+        ggml_tensor * t,
+        bool multi_lane) {
+    if (t == nullptr || layer >= state.layers.size() || t->type != GGML_TYPE_F32) {
+        return;
+    }
+
+    uint64_t hot = read_f32_count_field(t, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT_COUNT);
+    if (multi_lane) {
+        hot += read_f32_count_field(t, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT1_COUNT);
+        hot += read_f32_count_field(t, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_HOT2_COUNT);
+    }
+    const uint64_t cold = read_f32_count_field(t, LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT);
+
+    auto & dst = state.layers[layer];
+    state.add_locked(dst.calls, 1);
+    state.add_locked(dst.hot_worklist_calls, 1);
+    state.add_locked(dst.cold_worklist_calls, 1);
+    state.add_locked(dst.hot_slots_total, hot);
+    state.add_locked(dst.cold_slots_total, cold);
+    if (hot == 0) {
+        state.add_locked(dst.hot_zero_calls, 1);
+    }
+    if (cold == 0) {
+        state.add_locked(dst.cold_zero_calls, 1);
     }
 }
 

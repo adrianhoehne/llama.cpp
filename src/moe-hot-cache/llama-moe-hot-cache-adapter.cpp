@@ -13,8 +13,15 @@ static bool env_enabled_by_default(const char * name) {
            (std::strcmp(env, "0") != 0 && std::strcmp(env, "off") != 0 && std::strcmp(env, "false") != 0);
 }
 
+static llama_moe_hot_cache_graph_profile enable_default_pp_hot_cache(
+        llama_moe_hot_cache_graph_profile profile) {
+    profile.pp_dense = true;
+    profile.pp_primary_cold_backend = true;
+    return profile;
+}
+
 static llama_moe_hot_cache_graph_profile qwen35_profile() {
-    return {
+    return enable_default_pp_hot_cache({
         /* cpu_decode_routing      = */ llama_moe_hot_cache_graph_tweaks::cpu_decode_routing(),
         /* decode_direct_merge     = */ llama_moe_hot_cache_graph_tweaks::decode_direct_merge(),
         /* decode_strided_sum_rows = */ llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows(),
@@ -27,14 +34,14 @@ static llama_moe_hot_cache_graph_profile qwen35_profile() {
         /* branch_reduce_merge     = */ false,
         /* cpu_decode_routing_max_tokens = */ 1,
         /* prefix_reduce_tasks_max = */ llama_moe_hot_cache_graph_tweaks::prefix_reduce_tasks_max(),
-    };
+    });
 }
 
 static llama_moe_hot_cache_graph_profile qwen3next_profile() {
     // Qwen3-Coder-Next uses the Qwen3Next MoE block plus a separate shared
     // expert path. It also reaches the MoE block with tiny multi-token batches
-    // during decode, so keep routing on the compact CPU path for those batches
-    // while leaving merge shortcuts at their single-token constraints.
+    // during decode, so keep decode merge shortcuts at their single-token
+    // constraints while using the generic PP dense path for prompt processing.
     llama_moe_hot_cache_graph_profile profile = qwen35_profile();
     profile.cpu_decode_routing_max_tokens = 4;
     profile.prefix_reduce_tasks_max = 1;
@@ -45,7 +52,7 @@ static llama_moe_hot_cache_graph_profile gemma4_profile() {
     // Gemma's cold lane is usually sparse during decode. Use the direct merge
     // path so the CPU lane reduces only the compact cold prefix before joining
     // the hot lane, instead of materializing and reducing the full slot tensor.
-    return {
+    return enable_default_pp_hot_cache({
         /* cpu_decode_routing      = */ llama_moe_hot_cache_graph_tweaks::cpu_decode_routing(),
         /* decode_direct_merge     = */ llama_moe_hot_cache_graph_tweaks::decode_direct_merge(),
         /* decode_strided_sum_rows = */ llama_moe_hot_cache_graph_tweaks::decode_strided_sum_rows(),
@@ -58,18 +65,19 @@ static llama_moe_hot_cache_graph_profile gemma4_profile() {
         /* branch_reduce_merge     = */ llama_moe_hot_cache_graph_tweaks::branch_reduce_merge(),
         /* cpu_decode_routing_max_tokens = */ 1,
         /* prefix_reduce_tasks_max = */ llama_moe_hot_cache_graph_tweaks::prefix_reduce_tasks_max(),
-    };
+    });
 }
 
 static llama_moe_hot_cache_graph_profile mellum_profile() {
     // Mellum uses a Qwen-style sparse SILU MoE block with plain router logits.
-    // Keep the profile conservative until Mellum-specific PP shortcuts are measured.
+    // It can use the generic PP dense path because routing is represented by
+    // selected experts plus weights before the Hot-Cache worklist split.
     return qwen35_profile();
 }
 
 static llama_moe_hot_cache_graph_profile openai_moe_profile() {
     // GPT-OSS uses logits-based top-k routing with OpenAI SwiGLU experts.
-    // Reuse the conservative logits profile until GPT-OSS-specific PP shortcuts are measured.
+    // The adapter only swaps the FFN op; PP dense routing is shared.
     return qwen35_profile();
 }
 
@@ -81,9 +89,12 @@ static llama_moe_hot_cache_graph_profile deepseek2_profile() {
 
 static llama_moe_hot_cache_graph_profile glm4_moe_profile() {
     // GLM Flash MoE uses a logits router plus sigmoid probabilities and
-    // selection bias. Keep the graph profile conservative; the router semantics
-    // are handled by the GLM worklist path.
-    return qwen35_profile();
+    // selection bias. Its current profiles can have a very low hot-expert
+    // coverage, so PP falls back to the original path until a useful fraction
+    // of experts is resident in the Hot-Cache.
+    llama_moe_hot_cache_graph_profile profile = qwen35_profile();
+    profile.pp_min_hot_expert_ratio = 0.05;
+    return profile;
 }
 
 static const llama_moe_hot_cache_model_adapter ADAPTERS[] = {

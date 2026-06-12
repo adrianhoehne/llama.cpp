@@ -39,6 +39,7 @@ static void clear_profile_env() {
     set_env_var("LLAMA_MOE_HOT_CACHE_BRANCH_REDUCE_MERGE", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PREFIX_REDUCE_TASKS", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", nullptr);
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_MIN_HOT_EXPERT_RATIO", nullptr);
 }
 
 static void test_find_supported_adapters() {
@@ -96,6 +97,8 @@ static void test_rejects_unsupported_arch() {
     require(!profile.decode_direct_merge);
     require(!profile.merge_sum_rows);
     require(!profile.branch_reduce_merge);
+    require(!profile.pp_dense);
+    require(!profile.pp_primary_cold_backend);
 }
 
 static void test_graph_kind_capability_checks() {
@@ -135,17 +138,24 @@ static void test_profile_defaults_are_arch_specific() {
     require(qwen.merge_sum_rows);
     require(!qwen.branch_reduce_merge);
     require(qwen.cpu_decode_routing_max_tokens == 1);
+    require(qwen.pp_dense);
+    require(qwen.pp_primary_cold_backend);
+    require(qwen.pp_min_hot_expert_ratio == 0.0);
 
     const auto qwen_next = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_QWEN3NEXT);
     require(qwen_next.cpu_decode_routing);
     require(qwen_next.cpu_decode_routing_max_tokens == 4);
     require(qwen_next.prefix_reduce_tasks_max == 1);
+    require(qwen_next.pp_dense);
+    require(qwen_next.pp_primary_cold_backend);
 
     const auto gemma = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_GEMMA4);
     require(gemma.cpu_decode_routing);
     require(gemma.decode_direct_merge);
     require(gemma.branch_reduce_merge);
     require(gemma.cpu_decode_routing_max_tokens == 1);
+    require(gemma.pp_dense);
+    require(gemma.pp_primary_cold_backend);
 
     const auto mellum = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_MELLUM);
     require(mellum.cpu_decode_routing);
@@ -153,6 +163,8 @@ static void test_profile_defaults_are_arch_specific() {
     require(mellum.merge_sum_rows);
     require(!mellum.branch_reduce_merge);
     require(mellum.cpu_decode_routing_max_tokens == 1);
+    require(mellum.pp_dense);
+    require(mellum.pp_primary_cold_backend);
 
     const auto openai_moe = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_OPENAI_MOE);
     require(openai_moe.cpu_decode_routing);
@@ -160,6 +172,8 @@ static void test_profile_defaults_are_arch_specific() {
     require(openai_moe.merge_sum_rows);
     require(!openai_moe.branch_reduce_merge);
     require(openai_moe.cpu_decode_routing_max_tokens == 1);
+    require(openai_moe.pp_dense);
+    require(openai_moe.pp_primary_cold_backend);
 
     const auto deepseek2 = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_DEEPSEEK2);
     require(deepseek2.cpu_decode_routing);
@@ -167,6 +181,8 @@ static void test_profile_defaults_are_arch_specific() {
     require(deepseek2.merge_sum_rows);
     require(!deepseek2.branch_reduce_merge);
     require(deepseek2.cpu_decode_routing_max_tokens == 1);
+    require(deepseek2.pp_dense);
+    require(deepseek2.pp_primary_cold_backend);
 
     const auto glm4_moe = llama_moe_hot_cache_graph_profile_for_arch(LLM_ARCH_GLM4_MOE);
     require(glm4_moe.cpu_decode_routing);
@@ -174,6 +190,9 @@ static void test_profile_defaults_are_arch_specific() {
     require(glm4_moe.merge_sum_rows);
     require(!glm4_moe.branch_reduce_merge);
     require(glm4_moe.cpu_decode_routing_max_tokens == 1);
+    require(glm4_moe.pp_dense);
+    require(glm4_moe.pp_primary_cold_backend);
+    require(glm4_moe.pp_min_hot_expert_ratio == 0.05);
 }
 
 static void test_parallel_mode_is_runtime_switchable() {
