@@ -197,7 +197,26 @@ static void build_worklist_multi_from_selected(
         set_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT,   slot, weight);
     };
 
-    if (order == llama_moe_hot_cache_worklist_order::expert_major && !cap_hot_lanes) {
+    if (order == llama_moe_hot_cache_worklist_order::token_aligned) {
+        for (int32_t token = 0; token < n_tokens; ++token) {
+            for (int32_t iex = 0; iex < n_expert_used; ++iex) {
+                const int32_t expert = selected_expert_at(iex, token);
+                GGML_ASSERT(expert >= 0);
+                GGML_ASSERT(expert < int32_t(layer.expert_lane_map_host.size()));
+
+                size_t lane = 0;
+                const int32_t hot_id = lane_hot_id_for_expert(layer, expert, lane);
+                const int32_t src_slot = token*n_expert_used + iex;
+                if (hot_id >= 0) {
+                    write_hot(lane, src_slot, token, iex, expert, hot_id);
+                    ++hot_slots[lane];
+                } else {
+                    write_cold(src_slot, token, iex, expert);
+                    ++cold_slot;
+                }
+            }
+        }
+    } else if (order == llama_moe_hot_cache_worklist_order::expert_major && !cap_hot_lanes) {
         int32_t hot_offsets[LLAMA_MOE_HOT_CACHE_MAX_EXPERT_LANES][LLAMA_MAX_EXPERTS] = {};
         int32_t cold_offsets[LLAMA_MAX_EXPERTS] = {};
 
@@ -543,6 +562,8 @@ const char * llama_moe_hot_cache_worklist_order_name(llama_moe_hot_cache_worklis
             return "token_major";
         case llama_moe_hot_cache_worklist_order::expert_major:
             return "expert_major";
+        case llama_moe_hot_cache_worklist_order::token_aligned:
+            return "token_aligned";
     }
 
     return "unknown";

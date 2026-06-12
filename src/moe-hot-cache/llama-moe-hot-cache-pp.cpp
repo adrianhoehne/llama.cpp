@@ -60,6 +60,15 @@ static bool pp_compact_cold_reduce_mode() {
     return !env_is_false(env);
 }
 
+static bool pp_dense_mode() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_DENSE");
+    if (env == nullptr || env[0] == '\0') {
+        return false;
+    }
+
+    return !env_is_false(env);
+}
+
 static int64_t pp_hot_lane_capacity_divisor(int64_t n_lanes) {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_HOT_LANE_CAPACITY_DIVISOR");
     if (env == nullptr || env[0] == '\0' || env_is_false(env)) {
@@ -202,6 +211,14 @@ bool llama_moe_hot_cache_pp_policy::compact_cold_reduce_enabled(llama_moe_hot_ca
     }
 
     return pp_compact_cold_reduce_mode();
+}
+
+bool llama_moe_hot_cache_pp_policy::dense_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
+    if (phase != llama_moe_hot_cache_graph_phase::prompt_processing || n_tokens <= 1) {
+        return false;
+    }
+
+    return pp_dense_mode();
 }
 
 bool llama_moe_hot_cache_pp_policy::hot_dummy_padding_enabled(int64_t n_tokens, bool default_enabled) {

@@ -257,6 +257,7 @@ bool llama_moe_hot_cache_layer_active_for_graph(
 enum class llama_moe_hot_cache_worklist_order {
     token_major,
     expert_major,
+    token_aligned,
 };
 
 const char * llama_moe_hot_cache_worklist_order_name(llama_moe_hot_cache_worklist_order order);
