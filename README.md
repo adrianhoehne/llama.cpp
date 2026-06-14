@@ -161,39 +161,63 @@ Maybe, some time a good C programmer comes around, picks this idea and creates s
 
 ## Benchmark results
 
-| Model | Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
-|---|---|---:|---|---|---|---:|---:|---:|---:|---|
-| Qwen3.6-35B-A3B, 34.66B total / 3B active | Q8_K_XL | 38.5 GB | Default LLama | primary |  | 49.77 | 16.93 | 0.000 | 10000 |  |
-| Qwen3.6-35B-A3B, 34.66B total / 3B active | Q8_K_XL | 38.5 GB | Hot-Cache | primary |  | 56.85 | 18.73 | 0.371 | 10000 | This is a low value hot ratio, only 37%, the higher this value is the faster PP and TG will be. |
-| - | - | - | - | - | - | - | - | - | - | - |
-| Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active | Q8_0 | 12.9 GB | Default LLama | primary |  | 283.87 | 34.21 | 0.000 | 5556 |  |
-| Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active | Q8_0 | 12.9 GB | Hot-Cache | primary |  | 266.65 | 58.95 | 0.955 | 5399 |  |
-| Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active | Q8_0 | 12.9 GB | Hot-Cache | primary | secondary | 204.30 | 19.59 | 1.000 | 6078 |  |
-| Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active | Q8_0 | 12.9 GB | Hot-Cache | secondary | primary | 217.25 | 17.14 | 0.998 | 10000 |  |
-| - | - | - | - | - | - | - | - | - | - | - |
-| Mellum2-12B-A2.5B Base, 12.15B total / 2.5B active | BF16 | 24.3 GB | Hot-Cache | primary |  | 80.03 | 22.64 | 0.765 | 6744 |  |
-| - | - | - | - | - | - | - | - | - | - | - |
-| Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active | Q4_K_M | 8.1 GB | Default LLama | primary |  | 1573.03 | 105.49 | 0.000 | 5418 | This is a good example when NOT to use this branch. If the model can live completely in VRAM then the overhead is too big. |
-| Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active | Q4_K_M | 8.1 GB | Hot-Cache | primary |  | 1090.49 | 99.27 | 1.000 | 3025 |  |
-| - | - | - | - | - | - | - | - | - | - | - |
-| Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active | Q6_K | 10.9 GB | Hot-Cache | primary |  | 373.48 | 69.38 | 0.985 | 5974 |  |
-| - | - | - | - | - | - | - | - | - | - | - |
-| GPT-OSS-20B, 20.91B total / 3.6B active | Q8_K_XL | 13.2 GB | Default LLama | primary |  | 113.07 | 13.77 | 0.000 | 7497 |  |
-| GPT-OSS-20B, 20.91B total / 3.6B active | Q8_K_XL | 13.2 GB | Hot-Cache | primary |  | 213.62 | 31.56 | 0.778 | 9940 |  |
-| GPT-OSS-20B, 20.91B total / 3.6B active | Q8_K_XL | 13.2 GB | Hot-Cache | primary | secondary | 140.25 | 16.33 | 0.983 | 9052 |  |
-| - | - | - | - | - | - | - | - | - | - | - |
-| GLM-4.7-Flash-REAP-23B-A3B, 23.00B total / 3B active | Q8_K_XL | 27.5 GB | Default LLama | primary |  | 64.44 | 9.77 | 0.000 | 8360 |  |
-| GLM-4.7-Flash-REAP-23B-A3B, 23.00B total / 3B active | Q8_K_XL | 27.5 GB | Hot-Cache | primary |  | 36.22 | 9.70 | 0.120 | 7283 |  |
-| GLM-4.7-Flash-REAP-23B-A3B, 23.00B total / 3B active | Q8_K_XL | 27.5 GB | Hot-Cache | primary | secondary | 34.79 | 7.78 | 0.326 | 5703 |  |
-| - | - | - | - | - | - | - | - | - | - | - |
-| Gemma-4-26B-A4B-it, 25.23B total / 4B active | Q6_K_XL | 23.3 GB | Default LLama | primary |  | 90.35 | 16.92 | 0.000 | 8711 |  |
-| Gemma-4-26B-A4B-it, 25.23B total / 4B active | Q6_K_XL | 23.3 GB | Hot-Cache | primary |  | 94.81 | 25.18 | 0.706 | 9538 |  |
-| Gemma-4-26B-A4B-it, 25.23B total / 4B active | Q6_K_XL | 23.3 GB | Hot-Cache | primary | secondary | 88.14 | 14.37 | 0.858 | 5968 |  |
-| Gemma-4-26B-A4B-it, 25.23B total / 4B active | Q6_K_XL | 23.3 GB | Hot-Cache | primary | secondary | 81.90 | 14.35 | 0.855 | 5922 |  |
-| - | - | - | - | - | - | - | - | - | - | - |
-| Qwen3-Coder-Next, 79.67B total / 3B active | IQ4_NL | 39.2 GB | Default LLama | primary |  | 69.71 | 9.51 | 0.000 | 7136 |  |
-| Qwen3-Coder-Next, 79.67B total / 3B active | IQ4_NL | 39.2 GB | Hot-Cache | primary |  | 64.75 | 11.44 | 0.434 | 7865 |  |
-| Qwen3-Coder-Next, 79.67B total / 3B active | IQ4_NL | 39.2 GB | Hot-Cache | primary | secondary | 41.67 | 5.36 | 0.543 | 7627 |  |
+### Qwen3.6-35B-A3B, 34.66B total / 3B active
+
+| Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
+|---|---:|---|---|---|---:|---:|---:|---:|---|
+| Q8_K_XL | 38.5 GB | Default LLama | primary |  | 49.77 | 16.93 | 0.000 | 10000 |  |
+| Q8_K_XL | 38.5 GB | Hot-Cache | primary |  | 56.85 | 18.73 | 0.371 | 10000 | This is a low value hot ratio, only 37%, the higher this value is the faster PP and TG will be. |
+
+### Mellum2-12B-A2.5B Thinking, 12.15B total / 2.5B active
+
+| Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
+|---|---:|---|---|---|---:|---:|---:|---:|---|
+| Q8_0 | 12.9 GB | Default LLama | primary |  | 283.87 | 34.21 | 0.000 | 5556 |  |
+| Q8_0 | 12.9 GB | Hot-Cache | primary |  | 266.65 | 58.95 | 0.955 | 5399 |  |
+| Q8_0 | 12.9 GB | Hot-Cache | primary | secondary | 204.30 | 19.59 | 1.000 | 6078 |  |
+| Q8_0 | 12.9 GB | Hot-Cache | secondary | primary | 217.25 | 17.14 | 0.998 | 10000 |  |
+| Q4_K_M | 8.1 GB | Default LLama | primary |  | 1573.03 | 105.49 | 0.000 | 5418 | This is a good example when NOT to use this branch. If the model can live completely in VRAM then the overhead is too big. |
+| Q4_K_M | 8.1 GB | Hot-Cache | primary |  | 1090.49 | 99.27 | 1.000 | 3025 |  |
+| Q6_K | 10.9 GB | Hot-Cache | primary |  | 373.48 | 69.38 | 0.985 | 5974 |  |
+
+### Mellum2-12B-A2.5B Base, 12.15B total / 2.5B active
+
+| Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
+|---|---:|---|---|---|---:|---:|---:|---:|---|
+| BF16 | 24.3 GB | Hot-Cache | primary |  | 80.03 | 22.64 | 0.765 | 6744 |  |
+
+### GPT-OSS-20B, 20.91B total / 3.6B active
+
+| Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
+|---|---:|---|---|---|---:|---:|---:|---:|---|
+| Q8_K_XL | 13.2 GB | Default LLama | primary |  | 113.07 | 13.77 | 0.000 | 7497 |  |
+| Q8_K_XL | 13.2 GB | Hot-Cache | primary |  | 213.62 | 31.56 | 0.778 | 9940 |  |
+| Q8_K_XL | 13.2 GB | Hot-Cache | primary | secondary | 140.25 | 16.33 | 0.983 | 9052 |  |
+
+### GLM-4.7-Flash-REAP-23B-A3B, 23.00B total / 3B active
+
+| Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
+|---|---:|---|---|---|---:|---:|---:|---:|---|
+| Q8_K_XL | 27.5 GB | Default LLama | primary |  | 64.44 | 9.77 | 0.000 | 8360 |  |
+| Q8_K_XL | 27.5 GB | Hot-Cache | primary |  | 36.22 | 9.70 | 0.120 | 7283 |  |
+| Q8_K_XL | 27.5 GB | Hot-Cache | primary | secondary | 34.79 | 7.78 | 0.326 | 5703 |  |
+
+### Gemma-4-26B-A4B-it, 25.23B total / 4B active
+
+| Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
+|---|---:|---|---|---|---:|---:|---:|---:|---|
+| Q6_K_XL | 23.3 GB | Default LLama | primary |  | 90.35 | 16.92 | 0.000 | 8711 |  |
+| Q6_K_XL | 23.3 GB | Hot-Cache | primary |  | 94.81 | 25.18 | 0.706 | 9538 |  |
+| Q6_K_XL | 23.3 GB | Hot-Cache | primary | secondary | 88.14 | 14.37 | 0.858 | 5968 |  |
+| Q6_K_XL | 23.3 GB | Hot-Cache | primary | secondary | 81.90 | 14.35 | 0.855 | 5922 |  |
+
+### Qwen3-Coder-Next, 79.67B total / 3B active
+
+| Quantization | Disk size | Mode | RTX 2060 12GB eGPU | Quadro 4GB iGPU | PP t/s | TG t/s | Hot ratio | Output | Comment |
+|---|---:|---|---|---|---:|---:|---:|---:|---|
+| IQ4_NL | 39.2 GB | Default LLama | primary |  | 69.71 | 9.51 | 0.000 | 7136 |  |
+| IQ4_NL | 39.2 GB | Hot-Cache | primary |  | 64.75 | 11.44 | 0.434 | 7865 |  |
+| IQ4_NL | 39.2 GB | Hot-Cache | primary | secondary | 41.67 | 5.36 | 0.543 | 7627 |  |
 
 ---
 
