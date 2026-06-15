@@ -14,8 +14,10 @@ public:
     static bool is_multi_pp_worklist_node(const char * name);
 
     static bool is_gate_node(const char * name);
+    static bool is_gate_up_node(const char * name);
     static bool is_up_node(const char * name);
     static bool is_down_node(const char * name);
+    static bool is_activation_node(const char * name);
     static bool is_hot_gate_up_node(const char * name);
     static bool is_cold_gate_up_node(const char * name);
     static bool is_hot_gate_node(const char * name);
@@ -24,6 +26,8 @@ public:
     static bool is_cold_up_node(const char * name);
     static bool is_hot_down_node(const char * name);
     static bool is_cold_down_node(const char * name);
+    static bool is_hot_activation_node(const char * name);
+    static bool is_cold_activation_node(const char * name);
     static bool is_hot_branch_node(const char * name);
     static bool is_cold_branch_node(const char * name);
     static bool is_worklist_node(const char * name);
@@ -42,4 +46,5 @@ private:
     static const char * cold_branch_suffix(const char * name);
     static bool branch_has_component_base(const char * branch_suffix, const char * component);
     static bool branch_has_component_prefix(const char * branch_suffix, const char * component);
+    static bool branch_has_activation(const char * branch_suffix);
 };

@@ -125,6 +125,15 @@ bool llama_moe_layer_perf_node_classifier::branch_has_component_prefix(const cha
     return false;
 }
 
+bool llama_moe_layer_perf_node_classifier::branch_has_activation(const char * branch_suffix) {
+    return branch_has_component_prefix(branch_suffix, "silu")   ||
+           branch_has_component_prefix(branch_suffix, "swiglu") ||
+           branch_has_component_prefix(branch_suffix, "gelu")   ||
+           branch_has_component_prefix(branch_suffix, "geglu")  ||
+           branch_has_component_prefix(branch_suffix, "relu")   ||
+           branch_has_component_prefix(branch_suffix, "reglu");
+}
+
 bool llama_moe_layer_perf_node_classifier::is_any_node(const char * name) {
     return contains(name, "ffn_moe_");
 }
@@ -172,6 +181,12 @@ bool llama_moe_layer_perf_node_classifier::is_gate_node(const char * name) {
            branch_has_component_base(cold_branch_suffix(name), "gate");
 }
 
+bool llama_moe_layer_perf_node_classifier::is_gate_up_node(const char * name) {
+    return has_node_base(name, "ffn_moe_gate_up") ||
+           is_hot_gate_up_node(name) ||
+           is_cold_gate_up_node(name);
+}
+
 bool llama_moe_layer_perf_node_classifier::is_up_node(const char * name) {
     return has_node_base(name, "ffn_moe_up") ||
            branch_has_component_base(hot_branch_suffix(name), "up") ||
@@ -182,6 +197,17 @@ bool llama_moe_layer_perf_node_classifier::is_down_node(const char * name) {
     return has_node_base(name, "ffn_moe_down") ||
            branch_has_component_base(hot_branch_suffix(name), "down") ||
            branch_has_component_base(cold_branch_suffix(name), "down");
+}
+
+bool llama_moe_layer_perf_node_classifier::is_activation_node(const char * name) {
+    return has_node_base(name, "ffn_moe_silu")       ||
+           has_node_base(name, "ffn_moe_swiglu")     ||
+           has_node_base(name, "ffn_moe_gelu")       ||
+           has_node_base(name, "ffn_moe_geglu")      ||
+           has_node_base(name, "ffn_moe_relu")       ||
+           has_node_base(name, "ffn_moe_reglu")      ||
+           branch_has_activation(hot_branch_suffix(name)) ||
+           branch_has_activation(cold_branch_suffix(name));
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_gate_up_node(const char * name) {
@@ -216,6 +242,14 @@ bool llama_moe_layer_perf_node_classifier::is_cold_down_node(const char * name) 
     return branch_has_component_base(cold_branch_suffix(name), "down");
 }
 
+bool llama_moe_layer_perf_node_classifier::is_hot_activation_node(const char * name) {
+    return branch_has_activation(hot_branch_suffix(name));
+}
+
+bool llama_moe_layer_perf_node_classifier::is_cold_activation_node(const char * name) {
+    return branch_has_activation(cold_branch_suffix(name));
+}
+
 bool llama_moe_layer_perf_node_classifier::is_hot_branch_node(const char * name) {
     return hot_branch_suffix(name) != nullptr;
 }
@@ -246,6 +280,10 @@ bool llama_moe_layer_perf_node_classifier::is_merge_node(const char * name) {
 }
 
 bool llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node(const char * name) {
+    if (contains(name, "slots_reduced")) {
+        return false;
+    }
+
     const char * suffix = hot_branch_suffix(name);
     return branch_has_component_prefix(suffix, "ids") ||
            branch_has_component_prefix(suffix, "expert_ids") ||
@@ -257,6 +295,10 @@ bool llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node(const char
 }
 
 bool llama_moe_layer_perf_node_classifier::is_cold_gather_scatter_node(const char * name) {
+    if (contains(name, "slots_reduced")) {
+        return false;
+    }
+
     const char * suffix = cold_branch_suffix(name);
     return branch_has_component_prefix(suffix, "ids") ||
            branch_has_component_prefix(suffix, "src_slots") ||
@@ -281,7 +323,8 @@ bool llama_moe_layer_perf_node_classifier::is_cold_expert_matmul_node(const char
 }
 
 bool llama_moe_layer_perf_node_classifier::is_expert_matmul_node(const char * name) {
-    return is_gate_node(name) ||
+    return is_gate_up_node(name) ||
+           is_gate_node(name)    ||
            is_up_node(name)   ||
            is_down_node(name);
 }

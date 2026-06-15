@@ -68,7 +68,18 @@ static void test_full_mode_serializes_raw_counts_as_cold() {
     layer.calls = 2;
     layer.expert_hits_total = 8;
     layer.total_moe_time_us = 120;
+    layer.expert_matmul_time_us = 40;
     layer.routing_time_us = 12;
+    layer.gate_up_time_us = 20;
+    layer.activation_time_us = 10;
+    layer.pp_dense_calls = 2;
+    layer.pp_dense_total_time_us = 100;
+    layer.pp_dense_routing_time_us = 8;
+    layer.pp_dense_hot_ffn_time_us = 50;
+    layer.pp_dense_cold_ffn_time_us = 14;
+    layer.pp_dense_merge_time_us = 18;
+    layer.pp_dense_hot_gate_up_time_us = 30;
+    layer.pp_dense_cold_down_time_us = 14;
     layer.experts = { 0, 5, 0, 3 };
     layer.hot_experts = { 0, 0, 0, 0 };
     layer.cold_experts = { 0, 0, 0, 0 };
@@ -81,7 +92,17 @@ static void test_full_mode_serializes_raw_counts_as_cold() {
     require(contains(json, "\"hot_slots_per_call\":0"));
     require(contains(json, "\"cold_slots_per_call\":4"));
     require(contains(json, "\"total_moe_time_per_call_us\":60"));
+    require(contains(json, "\"expert_matmul_time_per_call_us\":20"));
     require(contains(json, "\"routing_time_per_call_us\":6"));
+    require(contains(json, "\"gate_up_time_per_call_us\":10"));
+    require(contains(json, "\"activation_time_per_call_us\":5"));
+    require(contains(json, "\"pp_dense_layer_calls\":2"));
+    require(contains(json, "\"pp_dense_total_time_per_call_us\":50"));
+    require(contains(json, "\"pp_dense_hot_ffn_time_per_call_us\":25"));
+    require(contains(json, "\"pp_dense_cold_ffn_time_per_call_us\":7"));
+    require(contains(json, "\"pp_dense_merge_time_per_call_us\":9"));
+    require(contains(json, "\"pp_dense_hot_gate_up_time_per_call_us\":15"));
+    require(contains(json, "\"pp_dense_cold_down_time_per_call_us\":7"));
     require(contains(json, "\"cold_experts\":[[1,5],[3,3]]"));
 }
 

@@ -20,6 +20,27 @@
 static llama_moe_layer_perf_state g_llama_moe_layer_perf;
 static std::atomic<int> g_llama_moe_layer_perf_mode{-1};
 
+static bool llama_moe_layer_perf_name_contains(const char * name, const char * needle) {
+    return name != nullptr && std::strstr(name, needle) != nullptr;
+}
+
+static bool llama_moe_layer_perf_is_pp_dense_node(const char * name) {
+    return llama_moe_layer_perf_name_contains(name, "pp_dense");
+}
+
+static bool llama_moe_layer_perf_is_pp_dense_main_worklist_node(const char * name) {
+    return llama_moe_layer_perf_name_contains(name, "ffn_moe_worklist") &&
+           llama_moe_layer_perf_is_pp_dense_node(name) &&
+           !llama_moe_layer_perf_name_contains(name, "cold_compact") &&
+           !llama_moe_layer_perf_name_contains(name, " (");
+}
+
+static bool llama_moe_layer_perf_is_pp_dense_merge_node(const char * name) {
+    return llama_moe_layer_perf_is_pp_dense_node(name) &&
+           (llama_moe_layer_perf_node_classifier::is_merge_node(name) ||
+            llama_moe_layer_perf_name_contains(name, "slots_reduced"));
+}
+
 bool llama_moe_layer_perf_parse_mode(const char * value, llama_moe_layer_perf_mode & mode) {
     if (value == nullptr) {
         return false;
@@ -180,6 +201,8 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
     }
 
     if (mode == LLAMA_MOE_LAYER_PERF_MODE_FULL && elapsed_us > 0) {
+        const bool is_pp_dense = llama_moe_layer_perf_is_pp_dense_node(name);
+
         g_llama_moe_layer_perf.add_locked(dst.total_moe_time_us, elapsed_us);
 
         if (llama_moe_layer_perf_node_classifier::is_expert_matmul_node(name)) {
@@ -212,13 +235,67 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
             g_llama_moe_layer_perf.add_locked(dst.cold_gather_scatter_time_us, elapsed_us);
         }
 
-        if (llama_moe_layer_perf_node_classifier::is_gate_node(name)) {
+        if (llama_moe_layer_perf_node_classifier::is_gate_up_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.gate_up_time_us, elapsed_us);
+        } else if (llama_moe_layer_perf_node_classifier::is_gate_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.gate_time_us, elapsed_us);
         } else if (llama_moe_layer_perf_node_classifier::is_up_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.up_time_us, elapsed_us);
         } else if (llama_moe_layer_perf_node_classifier::is_down_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.down_time_us, elapsed_us);
+        } else if (llama_moe_layer_perf_node_classifier::is_activation_node(name)) {
+            g_llama_moe_layer_perf.add_locked(dst.activation_time_us, elapsed_us);
         }
+
+        if (is_pp_dense) {
+            g_llama_moe_layer_perf.add_locked(dst.pp_dense_total_time_us, elapsed_us);
+
+            if (llama_moe_layer_perf_node_classifier::is_routing_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_routing_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_worklist_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_worklist_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_is_pp_dense_merge_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_merge_time_us, elapsed_us);
+            }
+
+            if (llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_hot_prepare_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_cold_gather_scatter_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_cold_prepare_time_us, elapsed_us);
+            }
+
+            if (llama_moe_layer_perf_node_classifier::is_hot_expert_matmul_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_hot_ffn_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_cold_expert_matmul_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_cold_ffn_time_us, elapsed_us);
+            }
+
+            if (llama_moe_layer_perf_node_classifier::is_hot_gate_up_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_hot_gate_up_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_hot_gate_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_hot_gate_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_hot_up_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_hot_up_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_hot_down_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_hot_down_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_hot_activation_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_hot_activation_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_cold_gate_up_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_cold_gate_up_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_cold_gate_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_cold_gate_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_cold_up_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_cold_up_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_cold_down_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_cold_down_time_us, elapsed_us);
+            } else if (llama_moe_layer_perf_node_classifier::is_cold_activation_node(name)) {
+                g_llama_moe_layer_perf.add_locked(dst.pp_dense_cold_activation_time_us, elapsed_us);
+            }
+        }
+    }
+
+    if (mode == LLAMA_MOE_LAYER_PERF_MODE_FULL && llama_moe_layer_perf_is_pp_dense_main_worklist_node(name)) {
+        g_llama_moe_layer_perf.add_locked(dst.pp_dense_calls, 1);
     }
 
     if (llama_moe_layer_perf_node_classifier::is_topk_node(name)) {
@@ -364,6 +441,7 @@ static llama_moe_layer_perf_json_layer_snapshot llama_moe_layer_perf_make_json_l
     dst.cold_worklist_calls = src.cold_worklist_calls;
 
     dst.total_moe_time_us = src.total_moe_time_us;
+    dst.expert_matmul_time_us = src.expert_matmul_time_us;
     dst.hot_branch_time_us = src.hot_branch_time_us;
     dst.cold_branch_time_us = src.cold_branch_time_us;
     dst.hot_expert_matmul_time_us = src.hot_expert_matmul_time_us;
@@ -373,6 +451,25 @@ static llama_moe_layer_perf_json_layer_snapshot llama_moe_layer_perf_make_json_l
     dst.merge_time_us = src.merge_time_us;
     dst.hot_gather_scatter_time_us = src.hot_gather_scatter_time_us;
     dst.cold_gather_scatter_time_us = src.cold_gather_scatter_time_us;
+    dst.pp_dense_calls = src.pp_dense_calls;
+    dst.pp_dense_total_time_us = src.pp_dense_total_time_us;
+    dst.pp_dense_routing_time_us = src.pp_dense_routing_time_us;
+    dst.pp_dense_worklist_time_us = src.pp_dense_worklist_time_us;
+    dst.pp_dense_hot_prepare_time_us = src.pp_dense_hot_prepare_time_us;
+    dst.pp_dense_hot_ffn_time_us = src.pp_dense_hot_ffn_time_us;
+    dst.pp_dense_cold_prepare_time_us = src.pp_dense_cold_prepare_time_us;
+    dst.pp_dense_cold_ffn_time_us = src.pp_dense_cold_ffn_time_us;
+    dst.pp_dense_merge_time_us = src.pp_dense_merge_time_us;
+    dst.pp_dense_hot_gate_time_us = src.pp_dense_hot_gate_time_us;
+    dst.pp_dense_hot_up_time_us = src.pp_dense_hot_up_time_us;
+    dst.pp_dense_hot_gate_up_time_us = src.pp_dense_hot_gate_up_time_us;
+    dst.pp_dense_hot_down_time_us = src.pp_dense_hot_down_time_us;
+    dst.pp_dense_hot_activation_time_us = src.pp_dense_hot_activation_time_us;
+    dst.pp_dense_cold_gate_time_us = src.pp_dense_cold_gate_time_us;
+    dst.pp_dense_cold_up_time_us = src.pp_dense_cold_up_time_us;
+    dst.pp_dense_cold_gate_up_time_us = src.pp_dense_cold_gate_up_time_us;
+    dst.pp_dense_cold_down_time_us = src.pp_dense_cold_down_time_us;
+    dst.pp_dense_cold_activation_time_us = src.pp_dense_cold_activation_time_us;
     dst.parallel_region_wall_time_us = src.parallel_region_wall_time_us;
     dst.parallel_hot_lane_wall_time_us = src.parallel_hot_lane_wall_time_us;
     dst.parallel_cold_lane_wall_time_us = src.parallel_cold_lane_wall_time_us;
@@ -406,6 +503,11 @@ static llama_moe_layer_perf_json_layer_snapshot llama_moe_layer_perf_make_json_l
     dst.parallel_split_debug_hot_backend = src.parallel_split_debug_hot_backend;
     dst.parallel_split_debug_cold_backend = src.parallel_split_debug_cold_backend;
     dst.parallel_split_debug_join_backend = src.parallel_split_debug_join_backend;
+    dst.gate_up_time_us = src.gate_up_time_us;
+    dst.gate_time_us = src.gate_time_us;
+    dst.up_time_us = src.up_time_us;
+    dst.down_time_us = src.down_time_us;
+    dst.activation_time_us = src.activation_time_us;
 
     dst.experts = src.experts;
     dst.hot_experts = src.hot_experts;

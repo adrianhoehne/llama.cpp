@@ -26,6 +26,26 @@ struct llama_moe_layer_perf_layer {
     uint64_t hot_gather_scatter_time_us = 0;
     uint64_t cold_gather_scatter_time_us = 0;
 
+    uint64_t pp_dense_calls = 0;
+    uint64_t pp_dense_total_time_us = 0;
+    uint64_t pp_dense_routing_time_us = 0;
+    uint64_t pp_dense_worklist_time_us = 0;
+    uint64_t pp_dense_hot_prepare_time_us = 0;
+    uint64_t pp_dense_hot_ffn_time_us = 0;
+    uint64_t pp_dense_cold_prepare_time_us = 0;
+    uint64_t pp_dense_cold_ffn_time_us = 0;
+    uint64_t pp_dense_merge_time_us = 0;
+    uint64_t pp_dense_hot_gate_time_us = 0;
+    uint64_t pp_dense_hot_up_time_us = 0;
+    uint64_t pp_dense_hot_gate_up_time_us = 0;
+    uint64_t pp_dense_hot_down_time_us = 0;
+    uint64_t pp_dense_hot_activation_time_us = 0;
+    uint64_t pp_dense_cold_gate_time_us = 0;
+    uint64_t pp_dense_cold_up_time_us = 0;
+    uint64_t pp_dense_cold_gate_up_time_us = 0;
+    uint64_t pp_dense_cold_down_time_us = 0;
+    uint64_t pp_dense_cold_activation_time_us = 0;
+
     uint64_t parallel_region_wall_time_us = 0;
     uint64_t parallel_hot_lane_wall_time_us = 0;
     uint64_t parallel_cold_lane_wall_time_us = 0;
@@ -61,9 +81,11 @@ struct llama_moe_layer_perf_layer {
     int32_t parallel_split_debug_cold_backend = -1;
     int32_t parallel_split_debug_join_backend = -1;
 
+    uint64_t gate_up_time_us = 0;
     uint64_t gate_time_us = 0;
     uint64_t up_time_us = 0;
     uint64_t down_time_us = 0;
+    uint64_t activation_time_us = 0;
 
     std::vector<uint64_t> experts;
     std::vector<uint64_t> hot_experts;

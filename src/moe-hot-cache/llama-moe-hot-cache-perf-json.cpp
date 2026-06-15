@@ -115,6 +115,7 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     uint64_t summary_hot_slots = 0;
     uint64_t summary_cold_slots = 0;
     uint64_t summary_total_moe_time_us = 0;
+    uint64_t summary_expert_matmul_time_us = 0;
     uint64_t summary_routing_time_us = 0;
     uint64_t summary_worklist_time_us = 0;
     uint64_t summary_merge_time_us = 0;
@@ -124,6 +125,25 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     uint64_t summary_cold_expert_matmul_time_us = 0;
     uint64_t summary_hot_gather_scatter_time_us = 0;
     uint64_t summary_cold_gather_scatter_time_us = 0;
+    uint64_t summary_pp_dense_calls = 0;
+    uint64_t summary_pp_dense_total_time_us = 0;
+    uint64_t summary_pp_dense_routing_time_us = 0;
+    uint64_t summary_pp_dense_worklist_time_us = 0;
+    uint64_t summary_pp_dense_hot_prepare_time_us = 0;
+    uint64_t summary_pp_dense_hot_ffn_time_us = 0;
+    uint64_t summary_pp_dense_cold_prepare_time_us = 0;
+    uint64_t summary_pp_dense_cold_ffn_time_us = 0;
+    uint64_t summary_pp_dense_merge_time_us = 0;
+    uint64_t summary_pp_dense_hot_gate_time_us = 0;
+    uint64_t summary_pp_dense_hot_up_time_us = 0;
+    uint64_t summary_pp_dense_hot_gate_up_time_us = 0;
+    uint64_t summary_pp_dense_hot_down_time_us = 0;
+    uint64_t summary_pp_dense_hot_activation_time_us = 0;
+    uint64_t summary_pp_dense_cold_gate_time_us = 0;
+    uint64_t summary_pp_dense_cold_up_time_us = 0;
+    uint64_t summary_pp_dense_cold_gate_up_time_us = 0;
+    uint64_t summary_pp_dense_cold_down_time_us = 0;
+    uint64_t summary_pp_dense_cold_activation_time_us = 0;
     uint64_t summary_parallel_region_wall_time_us = 0;
     uint64_t summary_parallel_hot_lane_wall_time_us = 0;
     uint64_t summary_parallel_cold_lane_wall_time_us = 0;
@@ -132,6 +152,11 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     uint64_t summary_parallel_hot_launches = 0;
     uint64_t summary_parallel_cold_launches = 0;
     uint64_t summary_parallel_fallbacks = 0;
+    uint64_t summary_gate_up_time_us = 0;
+    uint64_t summary_gate_time_us = 0;
+    uint64_t summary_up_time_us = 0;
+    uint64_t summary_down_time_us = 0;
+    uint64_t summary_activation_time_us = 0;
 
     for (const auto & layer : snapshot.layers) {
         if (!non_empty_layer(layer)) {
@@ -144,6 +169,7 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         summary_hot_slots += raw_as_cold ? 0 : effective_hot_slots_total(layer);
         summary_cold_slots += raw_as_cold ? layer.expert_hits_total : effective_cold_slots_total(layer);
         summary_total_moe_time_us += layer.total_moe_time_us;
+        summary_expert_matmul_time_us += layer.expert_matmul_time_us;
         summary_routing_time_us += layer.routing_time_us;
         summary_worklist_time_us += layer.worklist_time_us;
         summary_merge_time_us += layer.merge_time_us;
@@ -153,6 +179,25 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         summary_cold_expert_matmul_time_us += layer.cold_expert_matmul_time_us;
         summary_hot_gather_scatter_time_us += layer.hot_gather_scatter_time_us;
         summary_cold_gather_scatter_time_us += layer.cold_gather_scatter_time_us;
+        summary_pp_dense_calls += layer.pp_dense_calls;
+        summary_pp_dense_total_time_us += layer.pp_dense_total_time_us;
+        summary_pp_dense_routing_time_us += layer.pp_dense_routing_time_us;
+        summary_pp_dense_worklist_time_us += layer.pp_dense_worklist_time_us;
+        summary_pp_dense_hot_prepare_time_us += layer.pp_dense_hot_prepare_time_us;
+        summary_pp_dense_hot_ffn_time_us += layer.pp_dense_hot_ffn_time_us;
+        summary_pp_dense_cold_prepare_time_us += layer.pp_dense_cold_prepare_time_us;
+        summary_pp_dense_cold_ffn_time_us += layer.pp_dense_cold_ffn_time_us;
+        summary_pp_dense_merge_time_us += layer.pp_dense_merge_time_us;
+        summary_pp_dense_hot_gate_time_us += layer.pp_dense_hot_gate_time_us;
+        summary_pp_dense_hot_up_time_us += layer.pp_dense_hot_up_time_us;
+        summary_pp_dense_hot_gate_up_time_us += layer.pp_dense_hot_gate_up_time_us;
+        summary_pp_dense_hot_down_time_us += layer.pp_dense_hot_down_time_us;
+        summary_pp_dense_hot_activation_time_us += layer.pp_dense_hot_activation_time_us;
+        summary_pp_dense_cold_gate_time_us += layer.pp_dense_cold_gate_time_us;
+        summary_pp_dense_cold_up_time_us += layer.pp_dense_cold_up_time_us;
+        summary_pp_dense_cold_gate_up_time_us += layer.pp_dense_cold_gate_up_time_us;
+        summary_pp_dense_cold_down_time_us += layer.pp_dense_cold_down_time_us;
+        summary_pp_dense_cold_activation_time_us += layer.pp_dense_cold_activation_time_us;
         summary_parallel_region_wall_time_us += layer.parallel_region_wall_time_us;
         summary_parallel_hot_lane_wall_time_us += layer.parallel_hot_lane_wall_time_us;
         summary_parallel_cold_lane_wall_time_us += layer.parallel_cold_lane_wall_time_us;
@@ -161,6 +206,11 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         summary_parallel_hot_launches += layer.parallel_hot_launches;
         summary_parallel_cold_launches += layer.parallel_cold_launches;
         summary_parallel_fallbacks += layer.parallel_fallbacks;
+        summary_gate_up_time_us += layer.gate_up_time_us;
+        summary_gate_time_us += layer.gate_time_us;
+        summary_up_time_us += layer.up_time_us;
+        summary_down_time_us += layer.down_time_us;
+        summary_activation_time_us += layer.activation_time_us;
     }
 
     const uint64_t summary_slots = summary_hot_slots + summary_cold_slots;
@@ -182,6 +232,7 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(summary_parallel_join_wait_time_us, summary_calls);
     if (full_mode) {
         out << ",\"total_moe_time_per_call_us\":" << per_call(summary_total_moe_time_us, summary_calls);
+        out << ",\"expert_matmul_time_per_call_us\":" << per_call(summary_expert_matmul_time_us, summary_calls);
         out << ",\"routing_time_per_call_us\":" << per_call(summary_routing_time_us, summary_calls);
         out << ",\"worklist_time_per_call_us\":" << per_call(summary_worklist_time_us, summary_calls);
         out << ",\"merge_time_per_call_us\":" << per_call(summary_merge_time_us, summary_calls);
@@ -191,6 +242,30 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         out << ",\"cold_expert_matmul_time_per_call_us\":" << per_call(summary_cold_expert_matmul_time_us, summary_calls);
         out << ",\"hot_gather_scatter_time_per_call_us\":" << per_call(summary_hot_gather_scatter_time_us, summary_calls);
         out << ",\"cold_gather_scatter_time_per_call_us\":" << per_call(summary_cold_gather_scatter_time_us, summary_calls);
+        out << ",\"gate_up_time_per_call_us\":" << per_call(summary_gate_up_time_us, summary_calls);
+        out << ",\"gate_time_per_call_us\":" << per_call(summary_gate_time_us, summary_calls);
+        out << ",\"up_time_per_call_us\":" << per_call(summary_up_time_us, summary_calls);
+        out << ",\"down_time_per_call_us\":" << per_call(summary_down_time_us, summary_calls);
+        out << ",\"activation_time_per_call_us\":" << per_call(summary_activation_time_us, summary_calls);
+        out << ",\"pp_dense_layer_calls\":" << summary_pp_dense_calls;
+        out << ",\"pp_dense_total_time_per_call_us\":" << per_call(summary_pp_dense_total_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_routing_time_per_call_us\":" << per_call(summary_pp_dense_routing_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_worklist_time_per_call_us\":" << per_call(summary_pp_dense_worklist_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_hot_prepare_time_per_call_us\":" << per_call(summary_pp_dense_hot_prepare_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_hot_ffn_time_per_call_us\":" << per_call(summary_pp_dense_hot_ffn_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_cold_prepare_time_per_call_us\":" << per_call(summary_pp_dense_cold_prepare_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_cold_ffn_time_per_call_us\":" << per_call(summary_pp_dense_cold_ffn_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_merge_time_per_call_us\":" << per_call(summary_pp_dense_merge_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_hot_gate_time_per_call_us\":" << per_call(summary_pp_dense_hot_gate_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_hot_up_time_per_call_us\":" << per_call(summary_pp_dense_hot_up_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_hot_gate_up_time_per_call_us\":" << per_call(summary_pp_dense_hot_gate_up_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_hot_down_time_per_call_us\":" << per_call(summary_pp_dense_hot_down_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_hot_activation_time_per_call_us\":" << per_call(summary_pp_dense_hot_activation_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_cold_gate_time_per_call_us\":" << per_call(summary_pp_dense_cold_gate_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_cold_up_time_per_call_us\":" << per_call(summary_pp_dense_cold_up_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_cold_gate_up_time_per_call_us\":" << per_call(summary_pp_dense_cold_gate_up_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_cold_down_time_per_call_us\":" << per_call(summary_pp_dense_cold_down_time_us, summary_pp_dense_calls);
+        out << ",\"pp_dense_cold_activation_time_per_call_us\":" << per_call(summary_pp_dense_cold_activation_time_us, summary_pp_dense_calls);
         out << ",\"parallel_region_wall_time_per_call_us\":" << per_call(summary_parallel_region_wall_time_us, summary_calls);
         out << ",\"parallel_overlap_estimate_per_call_us\":" << per_call(summary_parallel_overlap_estimate_us, summary_calls);
         out << ",\"parallel_hot_launches\":" << summary_parallel_hot_launches;
@@ -243,6 +318,7 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
 
         if (full_mode) {
             out << ",\"total_moe_time_per_call_us\":" << per_call(layer.total_moe_time_us, layer.calls);
+            out << ",\"expert_matmul_time_per_call_us\":" << per_call(layer.expert_matmul_time_us, layer.calls);
             out << ",\"routing_time_per_call_us\":" << per_call(layer.routing_time_us, layer.calls);
             out << ",\"worklist_time_per_call_us\":" << per_call(layer.worklist_time_us, layer.calls);
             out << ",\"merge_time_per_call_us\":" << per_call(layer.merge_time_us, layer.calls);
@@ -252,6 +328,30 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
             out << ",\"cold_expert_matmul_time_per_call_us\":" << per_call(layer.cold_expert_matmul_time_us, layer.calls);
             out << ",\"hot_gather_scatter_time_per_call_us\":" << per_call(layer.hot_gather_scatter_time_us, layer.calls);
             out << ",\"cold_gather_scatter_time_per_call_us\":" << per_call(layer.cold_gather_scatter_time_us, layer.calls);
+            out << ",\"gate_up_time_per_call_us\":" << per_call(layer.gate_up_time_us, layer.calls);
+            out << ",\"gate_time_per_call_us\":" << per_call(layer.gate_time_us, layer.calls);
+            out << ",\"up_time_per_call_us\":" << per_call(layer.up_time_us, layer.calls);
+            out << ",\"down_time_per_call_us\":" << per_call(layer.down_time_us, layer.calls);
+            out << ",\"activation_time_per_call_us\":" << per_call(layer.activation_time_us, layer.calls);
+            out << ",\"pp_dense_layer_calls\":" << layer.pp_dense_calls;
+            out << ",\"pp_dense_total_time_per_call_us\":" << per_call(layer.pp_dense_total_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_routing_time_per_call_us\":" << per_call(layer.pp_dense_routing_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_worklist_time_per_call_us\":" << per_call(layer.pp_dense_worklist_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_hot_prepare_time_per_call_us\":" << per_call(layer.pp_dense_hot_prepare_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_hot_ffn_time_per_call_us\":" << per_call(layer.pp_dense_hot_ffn_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_cold_prepare_time_per_call_us\":" << per_call(layer.pp_dense_cold_prepare_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_cold_ffn_time_per_call_us\":" << per_call(layer.pp_dense_cold_ffn_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_merge_time_per_call_us\":" << per_call(layer.pp_dense_merge_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_hot_gate_time_per_call_us\":" << per_call(layer.pp_dense_hot_gate_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_hot_up_time_per_call_us\":" << per_call(layer.pp_dense_hot_up_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_hot_gate_up_time_per_call_us\":" << per_call(layer.pp_dense_hot_gate_up_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_hot_down_time_per_call_us\":" << per_call(layer.pp_dense_hot_down_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_hot_activation_time_per_call_us\":" << per_call(layer.pp_dense_hot_activation_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_cold_gate_time_per_call_us\":" << per_call(layer.pp_dense_cold_gate_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_cold_up_time_per_call_us\":" << per_call(layer.pp_dense_cold_up_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_cold_gate_up_time_per_call_us\":" << per_call(layer.pp_dense_cold_gate_up_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_cold_down_time_per_call_us\":" << per_call(layer.pp_dense_cold_down_time_us, layer.pp_dense_calls);
+            out << ",\"pp_dense_cold_activation_time_per_call_us\":" << per_call(layer.pp_dense_cold_activation_time_us, layer.pp_dense_calls);
             out << ",\"parallel_region_wall_time_per_call_us\":" << per_call(layer.parallel_region_wall_time_us, layer.calls);
             out << ",\"parallel_overlap_estimate_per_call_us\":" << per_call(layer.parallel_overlap_estimate_us, layer.calls);
             out << ",\"parallel_hot_launches\":" << layer.parallel_hot_launches;
