@@ -157,4 +157,5 @@ AGENTS.local.md
 model_config.ini
 fpu_starter
 rebase_commands.txt
-
+data
+run_codex
