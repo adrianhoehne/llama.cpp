@@ -31,7 +31,6 @@ static bool llama_moe_layer_perf_is_pp_dense_node(const char * name) {
 static bool llama_moe_layer_perf_is_pp_dense_main_worklist_node(const char * name) {
     return llama_moe_layer_perf_name_contains(name, "ffn_moe_worklist") &&
            llama_moe_layer_perf_is_pp_dense_node(name) &&
-           !llama_moe_layer_perf_name_contains(name, "cold_compact") &&
            !llama_moe_layer_perf_name_contains(name, " (");
 }
 

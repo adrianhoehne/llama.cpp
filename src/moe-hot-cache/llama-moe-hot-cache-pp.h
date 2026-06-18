@@ -20,7 +20,6 @@ struct llama_moe_hot_cache_pp_execution_plan {
     llama_moe_hot_cache_graph_phase phase = llama_moe_hot_cache_graph_phase::decode;
     llama_moe_hot_cache_worklist_order worklist_order = llama_moe_hot_cache_worklist_order::token_major;
     bool branch_reduce_merge = false;
-    bool compact_cold_reduce = false;
 
     bool is_prompt_processing() const {
         return phase == llama_moe_hot_cache_graph_phase::prompt_processing;
@@ -38,12 +37,13 @@ public:
             const llama_moe_hot_cache_graph_profile & profile);
 
     static bool reduce_merge_enabled(int64_t n_tokens, int64_t capacity);
-    static bool compact_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
     static bool dense_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
     static bool dense_enabled(
             llama_moe_hot_cache_graph_phase phase,
             int64_t n_tokens,
             const llama_moe_hot_cache_graph_profile & profile);
+    static bool indirect_cold_inputs_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
+    static bool fused_cold_down_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
     static bool weighted_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens);
     static llama_moe_hot_cache_pp_cold_backend cold_backend();
     static llama_moe_hot_cache_pp_cold_backend cold_backend(

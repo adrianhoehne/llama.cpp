@@ -29,8 +29,8 @@ static void clear_env() {
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_WORKLIST_ORDER", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_DENSE_MIN_TOKENS", nullptr);
-    set_env_var("LLAMA_MOE_HOT_CACHE_PP_COMPACT_COLD_REDUCE", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE", nullptr);
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_INDIRECT_COLD_INPUTS", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_BYPASS", nullptr);
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_BYPASS_MIN_TOKENS", nullptr);
@@ -72,7 +72,6 @@ static void test_phase_and_default_worklist_order() {
     require(pp.phase == llama_moe_hot_cache_graph_phase::prompt_processing);
     require(pp.worklist_order == llama_moe_hot_cache_worklist_order::expert_major);
     require(!pp.branch_reduce_merge);
-    require(!pp.compact_cold_reduce);
     require(pp.is_prompt_processing());
     require(std::string(llama_moe_hot_cache_graph_phase_name(pp.phase)) == "prompt_processing");
 
@@ -109,29 +108,6 @@ static void test_reduce_merge_modes() {
 
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", "off");
     require(!llama_moe_hot_cache_pp_policy::reduce_merge_enabled(128, 1024));
-}
-
-static void test_compact_cold_reduce_modes() {
-    clear_env();
-
-    require(!llama_moe_hot_cache_pp_policy::compact_cold_reduce_enabled(
-            llama_moe_hot_cache_graph_phase::warmup, 128));
-    require(!llama_moe_hot_cache_pp_policy::compact_cold_reduce_enabled(
-            llama_moe_hot_cache_graph_phase::prompt_processing, 1));
-    require(llama_moe_hot_cache_pp_policy::compact_cold_reduce_enabled(
-            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
-
-    set_env_var("LLAMA_MOE_HOT_CACHE_PP_REDUCE_MERGE", "on");
-    auto plan = llama_moe_hot_cache_pp_policy::build(
-            llama_moe_hot_cache_graph_phase::prompt_processing, 128, 1024, true, 8, {});
-    require(plan.branch_reduce_merge);
-    require(plan.compact_cold_reduce);
-
-    set_env_var("LLAMA_MOE_HOT_CACHE_PP_COMPACT_COLD_REDUCE", "off");
-    plan = llama_moe_hot_cache_pp_policy::build(
-            llama_moe_hot_cache_graph_phase::prompt_processing, 128, 1024, true, 8, {});
-    require(plan.branch_reduce_merge);
-    require(!plan.compact_cold_reduce);
 }
 
 static void test_weighted_cold_reduce_and_backend_modes() {
@@ -174,6 +150,20 @@ static void test_weighted_cold_reduce_and_backend_modes() {
 
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE", "on");
     require(llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+
+    require(llama_moe_hot_cache_pp_policy::indirect_cold_inputs_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+    require(!llama_moe_hot_cache_pp_policy::indirect_cold_inputs_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 1));
+    require(!llama_moe_hot_cache_pp_policy::indirect_cold_inputs_enabled(
+            llama_moe_hot_cache_graph_phase::decode, 128));
+
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_INDIRECT_COLD_INPUTS", "off");
+    require(!llama_moe_hot_cache_pp_policy::indirect_cold_inputs_enabled(
+            llama_moe_hot_cache_graph_phase::prompt_processing, 128));
+    set_env_var("LLAMA_MOE_HOT_CACHE_PP_INDIRECT_COLD_INPUTS", "on");
+    require(llama_moe_hot_cache_pp_policy::indirect_cold_inputs_enabled(
             llama_moe_hot_cache_graph_phase::prompt_processing, 128));
 
     set_env_var("LLAMA_MOE_HOT_CACHE_PP_COLD_BACKEND", "primary");
@@ -320,7 +310,6 @@ static void test_hot_cache_active_for_layer() {
 int main() {
     test_phase_and_default_worklist_order();
     test_reduce_merge_modes();
-    test_compact_cold_reduce_modes();
     test_weighted_cold_reduce_and_backend_modes();
     test_worklist_order_modes();
     test_bypass_hot_cache_for_prompt_processing();

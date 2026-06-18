@@ -207,8 +207,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # These tests cover internal helpers that are not exported from the Windows shared library.
     llama_build(test-moe-hot-cache-adapter.cpp)
     llama_test(test-moe-hot-cache-adapter)
-    llama_build(test-moe-hot-cache-branch-reduce.cpp)
-    llama_test(test-moe-hot-cache-branch-reduce)
+    llama_build(test-moe-hot-cache-indirect-mul-mat.cpp)
+    llama_test(test-moe-hot-cache-indirect-mul-mat)
     llama_build(test-moe-hot-cache-builder.cpp)
     llama_test(test-moe-hot-cache-builder)
     llama_build(test-moe-hot-cache-budget.cpp)
@@ -240,7 +240,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 
     set(LLAMA_MOE_HOT_CACHE_TEST_TARGETS
         test-moe-hot-cache-adapter
-        test-moe-hot-cache-branch-reduce
+        test-moe-hot-cache-indirect-mul-mat
         test-moe-hot-cache-builder
         test-moe-hot-cache-budget
         test-moe-hot-cache-parser

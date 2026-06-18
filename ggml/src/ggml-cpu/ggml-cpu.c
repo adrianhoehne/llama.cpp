@@ -1463,6 +1463,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
     const int64_t ir1_end,
     const char * src0_cur,
     const struct mmid_row_mapping * matrix_rows,
+    const struct ggml_tensor * row_ids,
     const size_t row_size,
     const bool src1_cont,
     const bool shared_input_row,
@@ -1498,7 +1499,12 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
                 //       the original src1 data pointer, so we should index using the indices directly
                 // TODO: this is a bit of a hack, we should probably have a better way to handle this
-                const int64_t src1_i12 = shared_input_row ? 0 : i12;
+                int64_t src1_i12 = shared_input_row ? 0 : i12;
+                if (row_ids != NULL) {
+                    const int32_t mapped_i12 = *(const int32_t *) ((const char *) row_ids->data + i12*row_ids->nb[0]);
+                    GGML_ASSERT(mapped_i12 >= 0 && mapped_i12 < ne12);
+                    src1_i12 = mapped_i12;
+                }
                 const char * src1_col = (const char *) wdata +
                     (src1_cont || src1->type != vec_dot_type
                     ? (i11      + src1_i12*ne11)*row_size
@@ -1524,6 +1530,98 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     return ptr;
 }
 
+static float ggml_mmid_token_reduce_weight(const struct ggml_tensor * weights, int64_t row) {
+    if (weights == NULL) {
+        return 1.0f;
+    }
+
+    return *(const float *) ((const char *) weights->data + row*weights->nb[2]);
+}
+
+static void ggml_compute_forward_mul_mat_id_token_reduce(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst,
+        const struct ggml_tensor * src0,
+        const struct ggml_tensor * src1,
+        const struct ggml_tensor * row_ids,
+        const struct ggml_tensor * token_ids,
+        const struct ggml_tensor * weights,
+        const int64_t * matrix_row_counts,
+        const struct mmid_row_mapping * matrix_rows,
+        const int64_t * active_matrix_count,
+        const int64_t * active_matrices,
+        const size_t row_size,
+        const bool src1_cont,
+        const bool shared_input_row,
+        const void * wdata) {
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const enum ggml_type type = src0->type;
+
+    ggml_vec_dot_t const vec_dot = type_traits_cpu[type].vec_dot;
+
+    const int64_t dr0 = (ne0 + nth - 1)/nth;
+    const int64_t ir0_start = dr0*ith;
+    const int64_t ir0_end = MIN(ir0_start + dr0, ne0);
+
+    if (ir0_start >= ir0_end) {
+        return;
+    }
+
+    const size_t local_row_bytes = (size_t) (ir0_end - ir0_start)*sizeof(float);
+    for (int64_t token = 0; token < ne1; ++token) {
+        memset((char *) dst->data + token*nb1 + ir0_start*nb0, 0, local_row_bytes);
+    }
+
+    const int64_t matrix_row_stride = token_ids->ne[0];
+    for (int64_t ia = 0; ia < *active_matrix_count; ++ia) {
+        const int64_t cur_a = active_matrices[ia];
+        const int64_t cne1 = matrix_row_counts[cur_a];
+        const char * src0_cur = (const char *) src0->data + cur_a * nb02;
+
+        for (int64_t ir1 = 0; ir1 < cne1; ++ir1) {
+            const struct mmid_row_mapping row_mapping = matrix_rows[cur_a*matrix_row_stride + ir1];
+            const int id = row_mapping.i1;
+            const int64_t i11 = id % ne11;
+            const int64_t i12 = row_mapping.i2;
+
+            const int32_t token = *(const int32_t *) ((const char *) token_ids->data + i12*token_ids->nb[0]);
+            if (token < 0 || token >= ne1) {
+                continue;
+            }
+
+            int64_t src1_i12 = shared_input_row ? 0 : i12;
+            if (row_ids != NULL) {
+                const int32_t mapped_i12 = *(const int32_t *) ((const char *) row_ids->data + i12*row_ids->nb[0]);
+                GGML_ASSERT(mapped_i12 >= 0 && mapped_i12 < ne12);
+                src1_i12 = mapped_i12;
+            }
+
+            const char * src1_col = (const char *) wdata +
+                (src1_cont || src1->type != type_traits_cpu[type].vec_dot_type
+                ? (i11      + src1_i12*ne11)*row_size
+                : (i11*nb11 + src1_i12*nb12));
+
+            const float weight = ggml_mmid_token_reduce_weight(weights, i12);
+            float * dst_col = (float *) ((char *) dst->data + token*nb1);
+
+            float tmp[16];
+            for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += 16) {
+                const int64_t ir0_block_end = MIN(iir0 + 16, ir0_end);
+                for (int64_t ir0 = iir0; ir0 < ir0_block_end; ++ir0) {
+                    vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
+                }
+                for (int64_t ir0 = iir0; ir0 < ir0_block_end; ++ir0) {
+                    dst_col[ir0] += tmp[ir0 - iir0]*weight;
+                }
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1531,6 +1629,11 @@ static void ggml_compute_forward_mul_mat_id(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
     const struct ggml_tensor * ids = dst->src[2];
+    // Optional logical-row to src1-row map, used by Hot-Cache PP to avoid materializing duplicate inputs.
+    const struct ggml_tensor * row_ids = dst->src[3];
+    // Optional token rows and weights, used by Hot-Cache PP to fuse down projection and token reduce.
+    const struct ggml_tensor * token_reduce_ids = dst->src[4];
+    const struct ggml_tensor * token_reduce_weights = dst->src[5];
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -1562,15 +1665,22 @@ static void ggml_compute_forward_mul_mat_id(
     const bool allow_negative_ids              = (flags & (1 << 1)) != 0;
     const bool skip_negative_id_output_zeroing = (flags & (1 << 2)) != 0;
     const bool shared_input_row                = (flags & (1 << 3)) != 0;
+    const bool indirect_src1_rows              = row_ids != NULL;
+    const bool token_reduce_rows               = token_reduce_ids != NULL;
 
     GGML_ASSERT(!shared_input_row || (allow_negative_ids && n_ids == 1 && ne13 == 1));
+    GGML_ASSERT(!indirect_src1_rows || (row_ids->type == GGML_TYPE_I32 && row_ids->ne[0] == ids->ne[1]));
+    GGML_ASSERT(!token_reduce_rows || (allow_negative_ids && n_ids == 1 && ne13 == 1));
+    GGML_ASSERT(!token_reduce_rows || (token_reduce_ids->type == GGML_TYPE_I32 && token_reduce_ids->ne[0] == ids->ne[1]));
+    GGML_ASSERT(!token_reduce_rows || token_reduce_weights == NULL || token_reduce_weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(!token_reduce_rows || token_reduce_weights == NULL || token_reduce_weights->ne[2] == ids->ne[1]);
 
     void * wdata_cur = params->wdata;
 
     const bool convert_valid_rows_only =
-        src1->type != vec_dot_type && allow_negative_ids && n_ids == 1 && ne13 == 1;
+        src1->type != vec_dot_type && allow_negative_ids && n_ids == 1 && ne13 == 1 && !indirect_src1_rows;
     const bool zero_invalid_rows_only =
-        allow_negative_ids && !skip_negative_id_output_zeroing && n_ids == 1 && ne13 == 1;
+        !token_reduce_rows && allow_negative_ids && !skip_negative_id_output_zeroing && n_ids == 1 && ne13 == 1;
 
     if (src1->type != vec_dot_type) {
         incr_ptr_aligned(&wdata_cur, ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
@@ -1631,7 +1741,7 @@ static void ggml_compute_forward_mul_mat_id(
     }
 
     if (ith == 0) {
-        if (allow_negative_ids && !skip_negative_id_output_zeroing && !zero_invalid_rows_only) {
+        if (!token_reduce_rows && allow_negative_ids && !skip_negative_id_output_zeroing && !zero_invalid_rows_only) {
             memset(dst->data, 0, ggml_nbytes(dst));
         }
 
@@ -1649,6 +1759,10 @@ static void ggml_compute_forward_mul_mat_id(
                 }
 
                 assert(i02 >= 0 && i02 < n_as);
+                if (indirect_src1_rows) {
+                    const int32_t src1_row = *(const int32_t *) ((const char *) row_ids->data + iid1*row_ids->nb[0]);
+                    GGML_ASSERT(src1_row >= 0 && src1_row < ne12);
+                }
 
                 if (matrix_row_counts[i02] == 0) {
                     active_matrices[*active_matrix_count] = i02;
@@ -1731,7 +1845,13 @@ static void ggml_compute_forward_mul_mat_id(
 
     ggml_barrier(params->threadpool);
 
-    for (int64_t ia = 0; ia < *active_matrix_count; ++ia) {
+    if (token_reduce_rows) {
+        const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+        ggml_compute_forward_mul_mat_id_token_reduce(
+                params, dst, src0, src1, row_ids, token_reduce_ids, token_reduce_weights,
+                matrix_row_counts, matrix_rows, active_matrix_count, active_matrices, row_size, src1_cont, shared_input_row, wdata);
+    } else for (int64_t ia = 0; ia < *active_matrix_count; ++ia) {
         const int64_t cur_a = active_matrices[ia];
         const int64_t cne1 = matrix_row_counts[cur_a];
 
@@ -1780,7 +1900,7 @@ static void ggml_compute_forward_mul_mat_id(
             ggml_compute_forward_mul_mat_id_one_chunk(
                 dst, src0, src1, ids, cur_a,
                 ir0_start, ir0_end, ir1_start, ir1_end,
-                src0_cur, matrix_rows, row_size, src1_cont, shared_input_row, wdata
+                src0_cur, matrix_rows, row_ids, row_size, src1_cont, shared_input_row, wdata
             );
 
             if (nth >= nchunk0 * nchunk1) {

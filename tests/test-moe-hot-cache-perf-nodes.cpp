@@ -54,7 +54,7 @@ static void test_branch_and_matmul_nodes() {
     require(llama_moe_layer_perf_node_classifier::is_expert_matmul_node("ffn_moe_cold_down-2"));
 
     require(llama_moe_layer_perf_node_classifier::is_hot_activation_node("ffn_moe_hot0_pp_dense_swiglu-2"));
-    require(llama_moe_layer_perf_node_classifier::is_cold_activation_node("ffn_moe_cold_compact_pp_dense_geglu-2"));
+    require(llama_moe_layer_perf_node_classifier::is_cold_activation_node("ffn_moe_cold_pp_dense_geglu-2"));
     require(llama_moe_layer_perf_node_classifier::is_activation_node("ffn_moe_silu-2"));
 }
 
@@ -74,7 +74,6 @@ static void test_routing_merge_and_gather_nodes() {
     require(!llama_moe_layer_perf_node_classifier::is_routing_node("ffn_moe_worklist-4"));
     require(!llama_moe_layer_perf_node_classifier::is_merge_node("ffn_moe_hot_src_slots-4"));
     require(!llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node("ffn_moe_hot_slots_reduced-4"));
-    require(!llama_moe_layer_perf_node_classifier::is_cold_gather_scatter_node("ffn_moe_cold_slots_reduced_compact_pp_dense-4"));
 }
 
 int main() {

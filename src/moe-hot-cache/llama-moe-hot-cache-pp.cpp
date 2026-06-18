@@ -51,15 +51,6 @@ static llama_moe_hot_cache_worklist_order pp_worklist_order_mode() {
     return llama_moe_hot_cache_worklist_order::token_major;
 }
 
-static bool pp_compact_cold_reduce_mode() {
-    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_COMPACT_COLD_REDUCE");
-    if (env == nullptr || env[0] == '\0') {
-        return true;
-    }
-
-    return !env_is_false(env);
-}
-
 static bool pp_dense_mode(bool default_enabled) {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_DENSE");
     if (env == nullptr || env[0] == '\0') {
@@ -86,6 +77,24 @@ static int64_t pp_dense_min_tokens() {
 
 static bool pp_weighted_cold_reduce_mode() {
     const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_WEIGHTED_COLD_REDUCE");
+    if (env == nullptr || env[0] == '\0') {
+        return true;
+    }
+
+    return !env_is_false(env);
+}
+
+static bool pp_indirect_cold_inputs_mode() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_INDIRECT_COLD_INPUTS");
+    if (env == nullptr || env[0] == '\0') {
+        return true;
+    }
+
+    return !env_is_false(env);
+}
+
+static bool pp_fused_cold_down_reduce_mode() {
+    const char * env = std::getenv("LLAMA_MOE_HOT_CACHE_PP_FUSED_COLD_DOWN_REDUCE");
     if (env == nullptr || env[0] == '\0') {
         return true;
     }
@@ -224,11 +233,6 @@ llama_moe_hot_cache_pp_execution_plan llama_moe_hot_cache_pp_policy::build(
             plan.branch_reduce_merge = n_tokens > 1 && reduce_merge_enabled(n_tokens, capacity);
         }
     }
-    plan.compact_cold_reduce =
-        plan.branch_reduce_merge &&
-        plan.phase == llama_moe_hot_cache_graph_phase::prompt_processing &&
-        compact_cold_reduce_enabled(phase, n_tokens);
-
     return plan;
 }
 
@@ -245,14 +249,6 @@ bool llama_moe_hot_cache_pp_policy::reduce_merge_enabled(int64_t n_tokens, int64
     return false;
 }
 
-bool llama_moe_hot_cache_pp_policy::compact_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
-    if (phase != llama_moe_hot_cache_graph_phase::prompt_processing || n_tokens <= 1) {
-        return false;
-    }
-
-    return pp_compact_cold_reduce_mode();
-}
-
 bool llama_moe_hot_cache_pp_policy::dense_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
     llama_moe_hot_cache_graph_profile profile;
     return dense_enabled(phase, n_tokens, profile);
@@ -267,6 +263,22 @@ bool llama_moe_hot_cache_pp_policy::dense_enabled(
     }
 
     return pp_dense_mode(profile.pp_dense) && n_tokens >= pp_dense_min_tokens();
+}
+
+bool llama_moe_hot_cache_pp_policy::indirect_cold_inputs_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
+    if (phase != llama_moe_hot_cache_graph_phase::prompt_processing || n_tokens <= 1) {
+        return false;
+    }
+
+    return pp_indirect_cold_inputs_mode();
+}
+
+bool llama_moe_hot_cache_pp_policy::fused_cold_down_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
+    if (phase != llama_moe_hot_cache_graph_phase::prompt_processing || n_tokens <= 1) {
+        return false;
+    }
+
+    return pp_fused_cold_down_reduce_mode();
 }
 
 bool llama_moe_hot_cache_pp_policy::weighted_cold_reduce_enabled(llama_moe_hot_cache_graph_phase phase, int64_t n_tokens) {
