@@ -56,9 +56,9 @@ static void test_update_mode_keeps_only_update_metrics() {
     require(contains(json, "\"hot1_slots_per_call\":3"));
     require(contains(json, "\"hot2_slots_total\":1"));
     require(contains(json, "\"hot2_slots_per_call\":1"));
-    require(contains(json, "\"parallel_hot_lane_wall_time_per_call_us\":10"));
-    require(contains(json, "\"parallel_cold_lane_wall_time_per_call_us\":20"));
-    require(contains(json, "\"parallel_join_wait_time_per_call_us\":5"));
+    require(!contains(json, "\"parallel_hot_lane_wall_time_per_call_us\""));
+    require(!contains(json, "\"parallel_cold_lane_wall_time_per_call_us\""));
+    require(!contains(json, "\"parallel_join_wait_time_per_call_us\""));
     require(contains(json, "\"experts\":[[1,5],[3,2]]"));
     require(contains(json, "\"hot_experts\":[[1,3]]"));
     require(contains(json, "\"cold_experts\":[[3,2]]"));
@@ -78,6 +78,9 @@ static void test_full_mode_serializes_raw_counts_as_cold() {
     layer.total_moe_time_us = 120;
     layer.expert_matmul_time_us = 40;
     layer.routing_time_us = 12;
+    layer.join_time_us = 30;
+    layer.hot_join_time_us = 10;
+    layer.cold_join_time_us = 20;
     layer.gate_up_time_us = 20;
     layer.activation_time_us = 10;
     layer.pp_dense_calls = 2;
@@ -102,6 +105,9 @@ static void test_full_mode_serializes_raw_counts_as_cold() {
     require(contains(json, "\"total_moe_time_per_call_us\":60"));
     require(contains(json, "\"expert_matmul_time_per_call_us\":20"));
     require(contains(json, "\"routing_time_per_call_us\":6"));
+    require(contains(json, "\"join_time_per_call_us\":15"));
+    require(contains(json, "\"hot_join_time_per_call_us\":5"));
+    require(contains(json, "\"cold_join_time_per_call_us\":10"));
     require(contains(json, "\"gate_up_time_per_call_us\":10"));
     require(contains(json, "\"activation_time_per_call_us\":5"));
     require(contains(json, "\"pp_dense_layer_calls\":2"));

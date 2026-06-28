@@ -74,7 +74,7 @@ static bool llama_moe_hot_cache_weighting_valid(const std::string & value) {
 }
 
 static bool llama_moe_hot_cache_device_strategy_valid(const std::string & value) {
-    return value == "warm" || value == "hot-even";
+    return value == "warm" || value == "hot-even" || value == "even-split";
 }
 
 static void llama_moe_hot_cache_set_weighting_env(const std::string & value) {
@@ -2497,11 +2497,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE_THIRD_AUTO_RESERVE_MIB"));
     add_opt(common_arg(
-        {"--moe-hot-cache-device-strategy"}, "{warm,hot-even}",
-        "experimental: distribute MoE hot-cache experts as warm lanes or per-layer hot-even lanes (default: warm)",
+        {"--moe-hot-cache-device-strategy"}, "{warm,hot-even,even-split}",
+        "experimental: distribute MoE hot-cache experts as warm lanes, per-layer hot-even lanes, or contiguous even-split layer bands (default: warm)",
         [](common_params & params, const std::string & value) {
             if (!llama_moe_hot_cache_device_strategy_valid(value)) {
-                throw std::invalid_argument("--moe-hot-cache-device-strategy must be one of: warm, hot-even");
+                throw std::invalid_argument("--moe-hot-cache-device-strategy must be one of: warm, hot-even, even-split");
             }
             params.moe_hot_cache_device_strategy = value;
         }

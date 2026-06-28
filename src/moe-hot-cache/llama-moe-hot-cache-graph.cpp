@@ -1097,6 +1097,8 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
 
     std::vector<ggml_tensor *> branch_outputs;
     branch_outputs.reserve(cache.lanes.size() + 1);
+    std::vector<bool> branch_output_is_cold;
+    branch_output_is_cold.reserve(cache.lanes.size() + 1);
     ggml_tensor * hot_count_total = nullptr;
 
     for (size_t lane_index = 0; lane_index < cache.lanes.size(); ++lane_index) {
@@ -1206,6 +1208,7 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
                 hot_branch.backend,
                 format("ffn_moe_hot%zu_slots", hot_branch.lane_index).c_str());
         branch_outputs.push_back(hot_branch.slots);
+        branch_output_is_cold.push_back(false);
     }
 
     ggml_tensor * cold_inputs = nullptr;
@@ -1246,9 +1249,11 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
         graph.cb(cold_out, "ffn_moe_cold_out", il);
         cold_slots = merge_compact_slots(cold_out, cold_backend, "ffn_moe_cold_slots");
         branch_outputs.push_back(cold_slots);
+        branch_output_is_cold.push_back(true);
     }
 
     GGML_ASSERT(!branch_outputs.empty());
+    GGML_ASSERT(branch_outputs.size() == branch_output_is_cold.size());
 
     ggml_backend_t merge_backend = llama_moe_hot_cache_primary_merge_backend(sched, model, il);
     ggml_tensor * out = branch_outputs[0];
@@ -1257,13 +1262,16 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
         if (merge_backend != nullptr) {
             ggml_backend_sched_set_tensor_backend(sched, out, merge_backend);
         }
+        graph.cb(out, branch_output_is_cold[i] ? "ffn_moe_join_cold" : "ffn_moe_join_hot", il);
         ggml_build_forward_expand(gf, out);
     }
 
     if (merge_backend != nullptr) {
         ggml_backend_sched_set_tensor_backend(sched, out, merge_backend);
     }
-    graph.cb(out, "ffn_moe_out", il);
+    if (branch_outputs.size() == 1) {
+        graph.cb(out, "ffn_moe_out", il);
+    }
 
     if (parallel_mode != 0 && !cparams.warmup && annotate_parallel_region && !hot_branches.empty()) {
         std::vector<ggml_tensor *> hot_counts;

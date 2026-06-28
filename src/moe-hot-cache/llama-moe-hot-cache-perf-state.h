@@ -33,6 +33,9 @@ struct llama_moe_layer_perf_layer {
     uint64_t worklist_time_us = 0;
     uint64_t routing_time_us = 0;
     uint64_t merge_time_us = 0;
+    uint64_t join_time_us = 0;
+    uint64_t hot_join_time_us = 0;
+    uint64_t cold_join_time_us = 0;
     uint64_t hot_gather_scatter_time_us = 0;
     uint64_t cold_gather_scatter_time_us = 0;
 

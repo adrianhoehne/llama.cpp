@@ -49,6 +49,9 @@ void llama_moe_layer_perf_state::reset_locked(bool count_overflow) {
         layer.worklist_time_us = 0;
         layer.routing_time_us = 0;
         layer.merge_time_us = 0;
+        layer.join_time_us = 0;
+        layer.hot_join_time_us = 0;
+        layer.cold_join_time_us = 0;
         layer.hot_gather_scatter_time_us = 0;
         layer.cold_gather_scatter_time_us = 0;
         layer.pp_dense_calls = 0;

@@ -86,6 +86,9 @@ static void test_reset_clears_counters_and_preserves_shape() {
     layer.hot_lane_branch_time_us[1] = 31;
     layer.hot_lane_expert_matmul_time_us[1] = 32;
     layer.hot_lane_gather_scatter_time_us[1] = 33;
+    layer.join_time_us = 34;
+    layer.hot_join_time_us = 35;
+    layer.cold_join_time_us = 36;
     layer.parallel_fallbacks = 10;
     layer.parallel_split_debug_samples = 11;
     layer.parallel_split_debug_hot_begin = 12;
@@ -121,6 +124,9 @@ static void test_reset_clears_counters_and_preserves_shape() {
     require(state.layers[0].hot_lane_branch_time_us[1] == 0);
     require(state.layers[0].hot_lane_expert_matmul_time_us[1] == 0);
     require(state.layers[0].hot_lane_gather_scatter_time_us[1] == 0);
+    require(state.layers[0].join_time_us == 0);
+    require(state.layers[0].hot_join_time_us == 0);
+    require(state.layers[0].cold_join_time_us == 0);
     require(state.layers[0].parallel_fallbacks == 0);
     require(state.layers[0].parallel_split_debug_samples == 0);
     require(state.layers[0].parallel_split_debug_hot_begin == -1);

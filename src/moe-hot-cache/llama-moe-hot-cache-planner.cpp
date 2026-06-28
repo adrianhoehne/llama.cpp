@@ -3,6 +3,7 @@
 #include "llama-model.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <limits>
 #include <random>
@@ -22,10 +23,14 @@ struct lane_state {
     std::unordered_map<uint32_t, size_t> selected_by_layer;
 };
 
-static bool env_flag_enabled(const char * name) {
+static std::vector<llama_moe_hot_cache_entry> random_fill_entries(
+        const std::vector<llama_moe_hot_cache_expert_size> & sizes,
+        const std::unordered_set<uint64_t> & selected);
+
+static bool env_flag_enabled_by_default(const char * name, bool default_value) {
     const char * value = std::getenv(name);
     if (value == nullptr || value[0] == '\0') {
-        return false;
+        return default_value;
     }
 
     const std::string v(value);
@@ -99,6 +104,169 @@ static size_t best_hot_even_lane(
     }
 
     return best;
+}
+
+// Return all MoE layers in model order so even-split can create contiguous layer bands.
+static std::vector<uint32_t> sorted_layers_from_sizes(
+        const std::vector<llama_moe_hot_cache_expert_size> & sizes) {
+    std::vector<uint32_t> layers;
+    layers.reserve(sizes.size());
+    for (const auto & size : sizes) {
+        layers.push_back(size.layer);
+    }
+
+    std::sort(layers.begin(), layers.end());
+    layers.erase(std::unique(layers.begin(), layers.end()), layers.end());
+    return layers;
+}
+
+// Split layers into contiguous lane-owned bands proportional to each lane budget.
+static std::vector<std::vector<uint32_t>> even_split_layers_by_lane(
+        const std::vector<llama_moe_hot_cache_expert_size> & sizes,
+        const std::vector<size_t> & lane_budget_bytes) {
+    std::vector<std::vector<uint32_t>> result(lane_budget_bytes.size());
+    const std::vector<uint32_t> layers = sorted_layers_from_sizes(sizes);
+    if (layers.empty()) {
+        return result;
+    }
+
+    size_t total_budget = 0;
+    for (const size_t budget : lane_budget_bytes) {
+        if (total_budget > std::numeric_limits<size_t>::max() - budget) {
+            total_budget = std::numeric_limits<size_t>::max();
+            break;
+        }
+        total_budget += budget;
+    }
+    if (total_budget == 0) {
+        return result;
+    }
+
+    size_t begin = 0;
+    long double cumulative_budget = 0.0L;
+    for (size_t lane = 0; lane < lane_budget_bytes.size(); ++lane) {
+        cumulative_budget += (long double) lane_budget_bytes[lane];
+        size_t end = layers.size();
+        if (lane + 1 < lane_budget_bytes.size()) {
+            const long double target =
+                cumulative_budget * (long double) layers.size() / (long double) total_budget;
+            end = (size_t) (target + 0.5L);
+        }
+
+        end = std::max(end, begin);
+        end = std::min(end, layers.size());
+        result[lane].assign(
+                layers.begin() + (std::ptrdiff_t) begin,
+                layers.begin() + (std::ptrdiff_t) end);
+        begin = end;
+    }
+
+    return result;
+}
+
+// Select lane-local experts round-robin by layer so each owned layer gets similar cache depth.
+static void select_even_split_lane_entries(
+        llama_moe_hot_cache_multi_plan & plan,
+        std::vector<lane_state> & states,
+        std::unordered_set<uint64_t> & selected,
+        const std::unordered_map<uint64_t, size_t> & size_by_expert,
+        size_t lane,
+        const std::vector<uint32_t> & layers,
+        std::unordered_map<uint32_t, std::vector<llama_moe_hot_cache_entry>> & entries_by_layer) {
+    std::unordered_map<uint32_t, size_t> offsets;
+    bool made_progress = true;
+    while (made_progress) {
+        made_progress = false;
+        for (const uint32_t layer : layers) {
+            auto entries_it = entries_by_layer.find(layer);
+            if (entries_it == entries_by_layer.end()) {
+                continue;
+            }
+
+            auto & entries = entries_it->second;
+            size_t & offset = offsets[layer];
+            while (offset < entries.size()) {
+                const llama_moe_hot_cache_entry & entry = entries[offset++];
+                const uint64_t entry_key = key(entry.layer, entry.expert);
+                if (selected.find(entry_key) != selected.end()) {
+                    continue;
+                }
+
+                const auto size_it = size_by_expert.find(entry_key);
+                if (size_it == size_by_expert.end()) {
+                    continue;
+                }
+
+                if (select_entry_into_lane(plan.lanes[lane], states[lane], entry, size_it->second)) {
+                    selected.insert(entry_key);
+                    made_progress = true;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Build an even-split plan: one lane owns one contiguous layer band, then fills that band evenly.
+static void select_even_split_multi_plan(
+        llama_moe_hot_cache_multi_plan & plan,
+        std::vector<lane_state> & states,
+        std::unordered_set<uint64_t> & selected,
+        const std::vector<llama_moe_hot_cache_entry> & observed,
+        const std::vector<llama_moe_hot_cache_expert_size> & sizes,
+        const std::vector<size_t> & lane_budget_bytes,
+        const std::unordered_map<uint64_t, size_t> & size_by_expert) {
+    const std::vector<std::vector<uint32_t>> layers_by_lane =
+        even_split_layers_by_lane(sizes, lane_budget_bytes);
+
+    std::unordered_map<uint32_t, size_t> lane_by_layer;
+    for (size_t lane = 0; lane < layers_by_lane.size(); ++lane) {
+        for (const uint32_t layer : layers_by_lane[lane]) {
+            lane_by_layer[layer] = lane;
+        }
+    }
+
+    std::vector<std::unordered_map<uint32_t, std::vector<llama_moe_hot_cache_entry>>> entries_by_lane_layer(
+            plan.lanes.size());
+    std::unordered_set<uint64_t> queued;
+    for (const auto & entry : observed) {
+        const uint64_t entry_key = key(entry.layer, entry.expert);
+        if (queued.find(entry_key) != queued.end() || size_by_expert.find(entry_key) == size_by_expert.end()) {
+            continue;
+        }
+
+        const auto lane_it = lane_by_layer.find(entry.layer);
+        if (lane_it == lane_by_layer.end()) {
+            continue;
+        }
+
+        entries_by_lane_layer[lane_it->second][entry.layer].push_back(entry);
+        queued.insert(entry_key);
+    }
+
+    if (env_flag_enabled_by_default("LLAMA_MOE_HOT_CACHE_FILL_RANDOM", true)) {
+        for (const auto & entry : random_fill_entries(sizes, queued)) {
+            const uint64_t entry_key = key(entry.layer, entry.expert);
+            const auto lane_it = lane_by_layer.find(entry.layer);
+            if (lane_it == lane_by_layer.end() || size_by_expert.find(entry_key) == size_by_expert.end()) {
+                continue;
+            }
+
+            entries_by_lane_layer[lane_it->second][entry.layer].push_back(entry);
+            queued.insert(entry_key);
+        }
+    }
+
+    for (size_t lane = 0; lane < plan.lanes.size(); ++lane) {
+        select_even_split_lane_entries(
+                plan,
+                states,
+                selected,
+                size_by_expert,
+                lane,
+                layers_by_lane[lane],
+                entries_by_lane_layer[lane]);
+    }
 }
 
 // Select one expert into the best available lane for the configured placement strategy.
@@ -273,8 +441,10 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
     }
 
     std::unordered_set<uint32_t> active_layers;
+    std::unordered_set<uint64_t> selected;
     for (const auto & entry : observed) {
-        const auto it = size_by_expert.find(key(entry.layer, entry.expert));
+        const uint64_t entry_key = key(entry.layer, entry.expert);
+        const auto it = size_by_expert.find(entry_key);
         if (it == size_by_expert.end()) {
             continue;
         }
@@ -295,6 +465,35 @@ llama_moe_hot_cache_plan llama_moe_hot_cache_select(
         plan.selected.push_back({ entry.layer, entry.expert, bytes });
         plan.used_bytes += cost;
         active_layers.insert(entry.layer);
+        selected.insert(entry_key);
+    }
+
+    if (env_flag_enabled_by_default("LLAMA_MOE_HOT_CACHE_FILL_RANDOM", true)) {
+        for (const auto & entry : random_fill_entries(sizes, selected)) {
+            const uint64_t entry_key = key(entry.layer, entry.expert);
+            const auto it = size_by_expert.find(entry_key);
+            if (it == size_by_expert.end()) {
+                continue;
+            }
+
+            const size_t bytes = it->second;
+            size_t cost = bytes;
+            if (active_layers.find(entry.layer) == active_layers.end()) {
+                if (cost > std::numeric_limits<size_t>::max() - bytes) {
+                    continue;
+                }
+                cost += bytes;
+            }
+
+            if (cost > budget_bytes || plan.used_bytes > budget_bytes - cost) {
+                continue;
+            }
+
+            plan.selected.push_back({ entry.layer, entry.expert, bytes });
+            plan.used_bytes += cost;
+            active_layers.insert(entry.layer);
+            selected.insert(entry_key);
+        }
     }
 
     return plan;
@@ -308,8 +507,11 @@ llama_moe_hot_cache_device_strategy llama_moe_hot_cache_parse_device_strategy(
     if (std::string(name) == "hot-even") {
         return llama_moe_hot_cache_device_strategy::hot_even;
     }
+    if (std::string(name) == "even-split") {
+        return llama_moe_hot_cache_device_strategy::even_split;
+    }
 
-    throw std::runtime_error("--moe-hot-cache-device-strategy must be one of: warm, hot-even");
+    throw std::runtime_error("--moe-hot-cache-device-strategy must be one of: warm, hot-even, even-split");
 }
 
 llama_moe_hot_cache_multi_plan llama_moe_hot_cache_select_multi(
@@ -338,6 +540,18 @@ llama_moe_hot_cache_multi_plan llama_moe_hot_cache_select_multi(
     std::unordered_set<uint64_t> selected;
     std::vector<lane_state> states(plan.lanes.size());
 
+    if (strategy == llama_moe_hot_cache_device_strategy::even_split) {
+        select_even_split_multi_plan(
+                plan,
+                states,
+                selected,
+                observed,
+                sizes,
+                lane_budget_bytes,
+                size_by_expert);
+        return plan;
+    }
+
     for (const auto & entry : observed) {
         const uint64_t entry_key = key(entry.layer, entry.expert);
         if (selected.find(entry_key) != selected.end()) {
@@ -352,7 +566,7 @@ llama_moe_hot_cache_multi_plan llama_moe_hot_cache_select_multi(
         select_entry_into_multi_plan(plan, states, selected, entry, size_it->second, strategy);
     }
 
-    if (env_flag_enabled("LLAMA_MOE_HOT_CACHE_FILL_RANDOM")) {
+    if (env_flag_enabled_by_default("LLAMA_MOE_HOT_CACHE_FILL_RANDOM", true)) {
         for (const auto & entry : random_fill_entries(sizes, selected)) {
             const auto size_it = size_by_expert.find(key(entry.layer, entry.expert));
             if (size_it == size_by_expert.end()) {

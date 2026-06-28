@@ -130,6 +130,9 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     uint64_t summary_routing_time_us = 0;
     uint64_t summary_worklist_time_us = 0;
     uint64_t summary_merge_time_us = 0;
+    uint64_t summary_join_time_us = 0;
+    uint64_t summary_hot_join_time_us = 0;
+    uint64_t summary_cold_join_time_us = 0;
     uint64_t summary_hot_branch_time_us = 0;
     uint64_t summary_cold_branch_time_us = 0;
     std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> summary_hot_lane_branch_time_us = {};
@@ -194,6 +197,9 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         summary_routing_time_us += layer.routing_time_us;
         summary_worklist_time_us += layer.worklist_time_us;
         summary_merge_time_us += layer.merge_time_us;
+        summary_join_time_us += layer.join_time_us;
+        summary_hot_join_time_us += layer.hot_join_time_us;
+        summary_cold_join_time_us += layer.cold_join_time_us;
         summary_hot_branch_time_us += layer.hot_branch_time_us;
         summary_cold_branch_time_us += layer.cold_branch_time_us;
         summary_hot_expert_matmul_time_us += layer.hot_expert_matmul_time_us;
@@ -254,15 +260,18 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         out << ",\"hot" << lane << "_slots_total\":" << summary_hot_lane_slots[lane];
         out << ",\"hot" << lane << "_slots_per_call\":" << per_call(summary_hot_lane_slots[lane], calls);
     }
-    out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(summary_parallel_hot_lane_wall_time_us, summary_calls);
-    out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(summary_parallel_cold_lane_wall_time_us, summary_calls);
-    out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(summary_parallel_join_wait_time_us, summary_calls);
     if (full_mode) {
+        out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(summary_parallel_hot_lane_wall_time_us, summary_calls);
+        out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(summary_parallel_cold_lane_wall_time_us, summary_calls);
+        out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(summary_parallel_join_wait_time_us, summary_calls);
         out << ",\"total_moe_time_per_call_us\":" << per_call(summary_total_moe_time_us, summary_calls);
         out << ",\"expert_matmul_time_per_call_us\":" << per_call(summary_expert_matmul_time_us, summary_calls);
         out << ",\"routing_time_per_call_us\":" << per_call(summary_routing_time_us, summary_calls);
         out << ",\"worklist_time_per_call_us\":" << per_call(summary_worklist_time_us, summary_calls);
         out << ",\"merge_time_per_call_us\":" << per_call(summary_merge_time_us, summary_calls);
+        out << ",\"join_time_per_call_us\":" << per_call(summary_join_time_us, summary_calls);
+        out << ",\"hot_join_time_per_call_us\":" << per_call(summary_hot_join_time_us, summary_calls);
+        out << ",\"cold_join_time_per_call_us\":" << per_call(summary_cold_join_time_us, summary_calls);
         out << ",\"hot_branch_time_per_call_us\":" << per_call(summary_hot_branch_time_us, summary_calls);
         out << ",\"cold_branch_time_per_call_us\":" << per_call(summary_cold_branch_time_us, summary_calls);
         for (size_t lane = 0; lane < LLAMA_MOE_LAYER_PERF_HOT_LANES; ++lane) {
@@ -349,16 +358,19 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
             out << "\"hot" << lane << "_slots_per_call\":" << hot_lane_slots_per_call(layer, lane, lane_slots_total, layer.calls) << ",";
         }
         out << "\"hot_slot_ratio\":" << ratio(hot_slots_total, slots_total);
-        out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls);
-        out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls);
-        out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(layer.parallel_join_wait_time_us, layer.calls);
 
         if (full_mode) {
+            out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls);
+            out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls);
+            out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(layer.parallel_join_wait_time_us, layer.calls);
             out << ",\"total_moe_time_per_call_us\":" << per_call(layer.total_moe_time_us, layer.calls);
             out << ",\"expert_matmul_time_per_call_us\":" << per_call(layer.expert_matmul_time_us, layer.calls);
             out << ",\"routing_time_per_call_us\":" << per_call(layer.routing_time_us, layer.calls);
             out << ",\"worklist_time_per_call_us\":" << per_call(layer.worklist_time_us, layer.calls);
             out << ",\"merge_time_per_call_us\":" << per_call(layer.merge_time_us, layer.calls);
+            out << ",\"join_time_per_call_us\":" << per_call(layer.join_time_us, layer.calls);
+            out << ",\"hot_join_time_per_call_us\":" << per_call(layer.hot_join_time_us, layer.calls);
+            out << ",\"cold_join_time_per_call_us\":" << per_call(layer.cold_join_time_us, layer.calls);
             out << ",\"hot_branch_time_per_call_us\":" << per_call(layer.hot_branch_time_us, layer.calls);
             out << ",\"cold_branch_time_per_call_us\":" << per_call(layer.cold_branch_time_us, layer.calls);
             for (size_t lane = 0; lane < LLAMA_MOE_LAYER_PERF_HOT_LANES; ++lane) {

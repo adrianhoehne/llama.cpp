@@ -58,6 +58,7 @@ struct llama_moe_hot_cache_plan {
 enum class llama_moe_hot_cache_device_strategy {
     warm,
     hot_even,
+    even_split,
 };
 
 struct llama_moe_hot_cache_multi_plan {

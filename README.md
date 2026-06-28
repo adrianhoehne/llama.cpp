@@ -30,6 +30,8 @@ The examples below use `llama-server` and keep the normal model path on the prim
 
 Use this when one CUDA device should hold the normal graph/KV path and as many cached experts as the automatic budget allows. Remaining experts stay on CPU via `--cpu-moe`.
 
+The planner fills unused hot-cache budget with deterministic fallback experts by default, even when they were not present in the perf data. Set `LLAMA_MOE_HOT_CACHE_FILL_RANDOM=0` to keep only observed experts.
+
 ```sh
 LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
 LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
@@ -53,7 +55,7 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 
 ### Two CUDA cards
 
-Use this when `CUDA0` should remain the primary card for graph/KV/router/final merge and `CUDA1` should act as an additional expert lane. `warm` fills the primary lane first, then the second lane. For similar cards, try `hot-even`.
+Use this when `CUDA0` should remain the primary card for graph/KV/router/final merge and `CUDA1` should act as an additional expert lane. `even-split` is the default recommendation for multi-GPU hot-cache setups: each lane owns a contiguous layer band and fills that band with the hottest experts that fit its budget. Use `warm` only when you want to fill the primary lane first, and `hot-even` only when you explicitly want per-layer experts balanced across similar cards.
 
 ```sh
 GGML_CUDA_P2P=1 \
@@ -77,7 +79,7 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache-second-device CUDA1 \
   --moe-hot-cache-second-max-mib -1 \
   --moe-hot-cache-second-auto-reserve-mib 512 \
-  --moe-hot-cache-device-strategy warm \
+  --moe-hot-cache-device-strategy even-split \
   --moe-hot-cache-pp-reduce-merge on
 ```
 
@@ -104,13 +106,13 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache-second-device CUDA1 \
   --moe-hot-cache-second-max-mib -1 \
   --moe-hot-cache-second-auto-reserve-mib 512 \
-  --moe-hot-cache-device-strategy warm \
+  --moe-hot-cache-device-strategy even-split \
   --moe-hot-cache-pp-reduce-merge on
 ```
 
 ### Three CUDA cards
 
-Use this when `CUDA0` is the primary card and `CUDA1`/`CUDA2` are additional expert lanes. This is the intended shape for one primary GPU plus two expert-only GPUs. Keep per-device reserve high enough for temporary buffers; reduce `--ctx-size` or `--ubatch-size` first if CUDA allocation fails.
+Use this when `CUDA0` is the primary card and `CUDA1`/`CUDA2` are additional expert lanes. This is the intended shape for one primary GPU plus two expert-only GPUs. `even-split` is recommended here as well so each GPU works on its own layer band instead of every layer spreading across every lane. Keep per-device reserve high enough for temporary buffers; reduce `--ctx-size` or `--ubatch-size` first if CUDA allocation fails.
 
 ```sh
 GGML_CUDA_P2P=1 \
@@ -137,7 +139,7 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --moe-hot-cache-third-device CUDA2 \
   --moe-hot-cache-third-max-mib -1 \
   --moe-hot-cache-third-auto-reserve-mib 512 \
-  --moe-hot-cache-device-strategy hot-even \
+  --moe-hot-cache-device-strategy even-split \
   --moe-hot-cache-pp-reduce-merge on
 ```
 
@@ -145,6 +147,7 @@ Notes:
 
 - `--moe-hot-cache-max-mib -1` auto-sizes a lane from currently free VRAM minus its reserve.
 - `--moe-hot-cache-max-mib 0` disables the primary expert lane while keeping secondary or tertiary expert lanes available.
+- `--moe-hot-cache-device-strategy even-split` is the recommended multi-GPU default. It assigns contiguous layer bands to lanes, then fills each owned band evenly within the lane budget.
 - `GGML_CUDA_P2P=1` enables CUDA peer-copy when the cards and driver support it; unsupported pairs fall back internally.
 - `LLAMA_MOE_HOT_CACHE_PARALLEL=force` is a debugging mode for valid parallel regions. Use `1`/`auto` for normal runs.
 - PP dense hot-cache is enabled by adapter profile for supported MoE paths. Use `LLAMA_MOE_HOT_CACHE_PP_DENSE=0` only for regression comparisons.

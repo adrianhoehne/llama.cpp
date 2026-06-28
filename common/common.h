@@ -570,7 +570,7 @@ struct common_params {
     int64_t moe_hot_cache_third_max_mib = 0; // max MiB for optional third MoE hot-cache expert lane
     uint64_t moe_hot_cache_third_auto_reserve_mib = 512; // MiB kept free when auto-sizing the third lane
     std::string moe_hot_cache_third_device; // backend device for optional third expert lane
-    std::string moe_hot_cache_device_strategy = "warm"; // MoE hot-cache device strategy: warm or hot-even
+    std::string moe_hot_cache_device_strategy = "warm"; // MoE hot-cache device strategy: warm, hot-even, or even-split
     std::string moe_hot_cache;           // path to /moe-layer-perf JSON
     float moe_hot_cache_update_rate = 0.0f; // fraction of hot-cache entries to update after each completed server run
     float moe_hot_cache_layer_curve = 0.5f; // MoE hot-cache layer-pressure weighting curve, 0 = flat, 1 = aggressive

@@ -320,6 +320,19 @@ bool llama_moe_layer_perf_node_classifier::is_merge_node(const char * name) {
            has_node_base(name, "ffn_moe_out");
 }
 
+bool llama_moe_layer_perf_node_classifier::is_join_node(const char * name) {
+    return has_node_base(name, "ffn_moe_join_hot") ||
+           has_node_base(name, "ffn_moe_join_cold");
+}
+
+bool llama_moe_layer_perf_node_classifier::is_hot_join_node(const char * name) {
+    return has_node_base(name, "ffn_moe_join_hot");
+}
+
+bool llama_moe_layer_perf_node_classifier::is_cold_join_node(const char * name) {
+    return has_node_base(name, "ffn_moe_join_cold");
+}
+
 bool llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node(const char * name) {
     if (contains(name, "slots_reduced")) {
         return false;

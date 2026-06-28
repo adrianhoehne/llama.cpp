@@ -35,6 +35,9 @@ public:
     static bool is_worklist_node(const char * name);
     static bool is_routing_node(const char * name);
     static bool is_merge_node(const char * name);
+    static bool is_join_node(const char * name);
+    static bool is_hot_join_node(const char * name);
+    static bool is_cold_join_node(const char * name);
     static bool is_hot_gather_scatter_node(const char * name);
     static bool is_cold_gather_scatter_node(const char * name);
     static bool is_hot_expert_matmul_node(const char * name);

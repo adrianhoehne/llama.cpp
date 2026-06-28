@@ -80,6 +80,10 @@ static void test_routing_merge_and_gather_nodes() {
 
     require(llama_moe_layer_perf_node_classifier::is_merge_node("ffn_moe_hot_cold_slots-4"));
     require(llama_moe_layer_perf_node_classifier::is_merge_node("ffn_moe_out-4"));
+    require(llama_moe_layer_perf_node_classifier::is_join_node("ffn_moe_join_hot-4"));
+    require(llama_moe_layer_perf_node_classifier::is_join_node("ffn_moe_join_cold-4"));
+    require(llama_moe_layer_perf_node_classifier::is_hot_join_node("ffn_moe_join_hot-4"));
+    require(llama_moe_layer_perf_node_classifier::is_cold_join_node("ffn_moe_join_cold-4"));
 
     require(llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node("ffn_moe_hot_src_slots-4"));
     require(llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node("ffn_moe_hot_inputs-4"));
@@ -89,6 +93,7 @@ static void test_routing_merge_and_gather_nodes() {
 
     require(!llama_moe_layer_perf_node_classifier::is_routing_node("ffn_moe_worklist-4"));
     require(!llama_moe_layer_perf_node_classifier::is_merge_node("ffn_moe_hot_src_slots-4"));
+    require(!llama_moe_layer_perf_node_classifier::is_join_node("ffn_moe_out-4"));
     require(!llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node("ffn_moe_hot_slots_reduced-4"));
 }
 
