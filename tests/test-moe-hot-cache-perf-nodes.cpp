@@ -23,6 +23,8 @@ static void test_parse_layer_from_name() {
 static void test_update_mode_nodes() {
     require(llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_topk-1"));
     require(llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_hot_count-1"));
+    require(llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_hot1_count-1"));
+    require(llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_hot2_count_pp_dense-1"));
     require(llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_cold_count-1"));
     require(llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_hot_expert_ids_compact-1"));
     require(llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_hot1_expert_ids_pp_dense-1"));
@@ -34,6 +36,20 @@ static void test_update_mode_nodes() {
     require(!llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_worklist_pp_dense-1"));
     require(!llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_worklist_multi_pp_dense-1 (view)"));
     require(!llama_moe_layer_perf_node_classifier::is_update_node("ffn_moe_out-1"));
+}
+
+static void test_hot_lane_from_name() {
+    require(llama_moe_layer_perf_node_classifier::hot_lane_from_name(nullptr) == -1);
+    require(llama_moe_layer_perf_node_classifier::hot_lane_from_name("ffn_moe_hot_count-1") == -1);
+    require(llama_moe_layer_perf_node_classifier::hot_lane_from_name("ffn_moe_hot0_count-1") == 0);
+    require(llama_moe_layer_perf_node_classifier::hot_lane_from_name("blk.7.ffn_moe_hot1_gate_up-1") == 1);
+    require(llama_moe_layer_perf_node_classifier::hot_lane_from_name("ffn_moe_hot2_pp_dense_out-1") == 2);
+    require(llama_moe_layer_perf_node_classifier::hot_lane_from_name("ffn_moe_hot3_count-1") == -1);
+
+    require(llama_moe_layer_perf_node_classifier::is_hot_lane_count_node("ffn_moe_hot0_count-1"));
+    require(llama_moe_layer_perf_node_classifier::is_hot_lane_count_node("ffn_moe_hot2_count_pp_dense-1"));
+    require(!llama_moe_layer_perf_node_classifier::is_hot_lane_count_node("ffn_moe_hot_count-1"));
+    require(!llama_moe_layer_perf_node_classifier::is_hot_lane_count_node("ffn_moe_hot1_gate-1"));
 }
 
 static void test_branch_and_matmul_nodes() {
@@ -79,6 +95,7 @@ static void test_routing_merge_and_gather_nodes() {
 int main() {
     test_parse_layer_from_name();
     test_update_mode_nodes();
+    test_hot_lane_from_name();
     test_branch_and_matmul_nodes();
     test_routing_merge_and_gather_nodes();
     return 0;

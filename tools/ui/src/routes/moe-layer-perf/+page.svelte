@@ -146,6 +146,42 @@
 					'Average measured time inside the hot-cache branch. This is an internal measurement and is not additive with lane wall time.'
 			},
 			{
+				key: 'hot0_slots_per_call',
+				label: 'Hot0 slots',
+				unit: 'count',
+				description: 'Average number of hot-cache slots routed to lane hot0 per layer call.'
+			},
+			{
+				key: 'hot0_branch_time_per_call_us',
+				label: 'Hot0 time',
+				unit: 'us',
+				description: 'Average measured time attributed to lane hot0.'
+			},
+			{
+				key: 'hot1_slots_per_call',
+				label: 'Hot1 slots',
+				unit: 'count',
+				description: 'Average number of hot-cache slots routed to lane hot1 per layer call.'
+			},
+			{
+				key: 'hot1_branch_time_per_call_us',
+				label: 'Hot1 time',
+				unit: 'us',
+				description: 'Average measured time attributed to lane hot1.'
+			},
+			{
+				key: 'hot2_slots_per_call',
+				label: 'Hot2 slots',
+				unit: 'count',
+				description: 'Average number of hot-cache slots routed to lane hot2 per layer call.'
+			},
+			{
+				key: 'hot2_branch_time_per_call_us',
+				label: 'Hot2 time',
+				unit: 'us',
+				description: 'Average measured time attributed to lane hot2.'
+			},
+			{
 				key: 'hot_gather_scatter_time_per_call_us',
 				label: 'Hot gather',
 				unit: 'us',
@@ -448,7 +484,7 @@
 		}
 
 		if (metric.unit === 'count') {
-			return formatInteger(value);
+			return Number.isInteger(value) ? formatInteger(value) : formatDecimal(value, value >= 100 ? 1 : 2);
 		}
 
 		const digits = value >= 100 ? 1 : value >= 10 ? 2 : 3;

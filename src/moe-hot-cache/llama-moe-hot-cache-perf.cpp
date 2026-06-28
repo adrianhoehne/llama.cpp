@@ -201,6 +201,7 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
 
     if (mode == LLAMA_MOE_LAYER_PERF_MODE_FULL && elapsed_us > 0) {
         const bool is_pp_dense = llama_moe_layer_perf_is_pp_dense_node(name);
+        const int hot_lane = llama_moe_layer_perf_node_classifier::hot_lane_from_name(name);
 
         g_llama_moe_layer_perf.add_locked(dst.total_moe_time_us, elapsed_us);
 
@@ -210,12 +211,18 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
 
         if (llama_moe_layer_perf_node_classifier::is_hot_branch_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.hot_branch_time_us, elapsed_us);
+            if (hot_lane >= 0) {
+                g_llama_moe_layer_perf.add_locked(dst.hot_lane_branch_time_us[(size_t) hot_lane], elapsed_us);
+            }
         } else if (llama_moe_layer_perf_node_classifier::is_cold_branch_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.cold_branch_time_us, elapsed_us);
         }
 
         if (llama_moe_layer_perf_node_classifier::is_hot_expert_matmul_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.hot_expert_matmul_time_us, elapsed_us);
+            if (hot_lane >= 0) {
+                g_llama_moe_layer_perf.add_locked(dst.hot_lane_expert_matmul_time_us[(size_t) hot_lane], elapsed_us);
+            }
         } else if (llama_moe_layer_perf_node_classifier::is_cold_expert_matmul_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.cold_expert_matmul_time_us, elapsed_us);
         }
@@ -230,6 +237,9 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
 
         if (llama_moe_layer_perf_node_classifier::is_hot_gather_scatter_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.hot_gather_scatter_time_us, elapsed_us);
+            if (hot_lane >= 0) {
+                g_llama_moe_layer_perf.add_locked(dst.hot_lane_gather_scatter_time_us[(size_t) hot_lane], elapsed_us);
+            }
         } else if (llama_moe_layer_perf_node_classifier::is_cold_gather_scatter_node(name)) {
             g_llama_moe_layer_perf.add_locked(dst.cold_gather_scatter_time_us, elapsed_us);
         }
@@ -299,6 +309,15 @@ bool llama_moe_layer_perf_eval_callback(ggml_tensor * t, bool ask, void * user_d
 
     if (llama_moe_layer_perf_node_classifier::is_topk_node(name)) {
         llama_moe_layer_perf_tensor_reader::count_topk_locked(g_llama_moe_layer_perf, (uint32_t) layer, t);
+    } else if (llama_moe_layer_perf_node_classifier::is_hot_lane_count_node(name)) {
+        const int hot_lane = llama_moe_layer_perf_node_classifier::hot_lane_from_name(name);
+        if (hot_lane >= 0) {
+            llama_moe_layer_perf_tensor_reader::count_hot_lane_worklist_count_locked(
+                    g_llama_moe_layer_perf,
+                    (uint32_t) layer,
+                    t,
+                    (uint32_t) hot_lane);
+        }
     } else if (llama_moe_layer_perf_node_classifier::is_multi_pp_worklist_node(name)) {
         llama_moe_layer_perf_tensor_reader::count_worklist_counts_locked(g_llama_moe_layer_perf, (uint32_t) layer, t, true);
     } else if (llama_moe_layer_perf_node_classifier::is_hot_count_node(name)) {
@@ -436,6 +455,8 @@ static llama_moe_layer_perf_json_layer_snapshot llama_moe_layer_perf_make_json_l
     dst.expert_hits_total = src.expert_hits_total;
     dst.hot_slots_total = src.hot_slots_total;
     dst.cold_slots_total = src.cold_slots_total;
+    dst.hot_lane_slots_total = src.hot_lane_slots_total;
+    dst.hot_lane_worklist_calls = src.hot_lane_worklist_calls;
     dst.hot_worklist_calls = src.hot_worklist_calls;
     dst.cold_worklist_calls = src.cold_worklist_calls;
 
@@ -443,6 +464,9 @@ static llama_moe_layer_perf_json_layer_snapshot llama_moe_layer_perf_make_json_l
     dst.expert_matmul_time_us = src.expert_matmul_time_us;
     dst.hot_branch_time_us = src.hot_branch_time_us;
     dst.cold_branch_time_us = src.cold_branch_time_us;
+    dst.hot_lane_branch_time_us = src.hot_lane_branch_time_us;
+    dst.hot_lane_expert_matmul_time_us = src.hot_lane_expert_matmul_time_us;
+    dst.hot_lane_gather_scatter_time_us = src.hot_lane_gather_scatter_time_us;
     dst.hot_expert_matmul_time_us = src.hot_expert_matmul_time_us;
     dst.cold_expert_matmul_time_us = src.cold_expert_matmul_time_us;
     dst.worklist_time_us = src.worklist_time_us;

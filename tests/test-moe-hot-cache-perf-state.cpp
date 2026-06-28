@@ -79,7 +79,13 @@ static void test_reset_clears_counters_and_preserves_shape() {
     layer.expert_hits_total = 6;
     layer.hot_slots_total = 7;
     layer.cold_slots_total = 8;
+    layer.hot_lane_slots_total[1] = 28;
+    layer.hot_lane_worklist_calls[1] = 29;
+    layer.hot_lane_zero_calls[1] = 30;
     layer.total_moe_time_us = 9;
+    layer.hot_lane_branch_time_us[1] = 31;
+    layer.hot_lane_expert_matmul_time_us[1] = 32;
+    layer.hot_lane_gather_scatter_time_us[1] = 33;
     layer.parallel_fallbacks = 10;
     layer.parallel_split_debug_samples = 11;
     layer.parallel_split_debug_hot_begin = 12;
@@ -109,6 +115,12 @@ static void test_reset_clears_counters_and_preserves_shape() {
     require(state.layers[0].calls == 0);
     require(state.layers[0].expert_hits_total == 0);
     require(state.layers[0].total_moe_time_us == 0);
+    require(state.layers[0].hot_lane_slots_total[1] == 0);
+    require(state.layers[0].hot_lane_worklist_calls[1] == 0);
+    require(state.layers[0].hot_lane_zero_calls[1] == 0);
+    require(state.layers[0].hot_lane_branch_time_us[1] == 0);
+    require(state.layers[0].hot_lane_expert_matmul_time_us[1] == 0);
+    require(state.layers[0].hot_lane_gather_scatter_time_us[1] == 0);
     require(state.layers[0].parallel_fallbacks == 0);
     require(state.layers[0].parallel_split_debug_samples == 0);
     require(state.layers[0].parallel_split_debug_hot_begin == -1);

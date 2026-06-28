@@ -31,6 +31,8 @@ static void test_update_mode_keeps_only_update_metrics() {
     layer.calls = 2;
     layer.hot_slots_total = 6;
     layer.cold_slots_total = 4;
+    layer.hot_lane_slots_total = { 2, 3, 1 };
+    layer.hot_lane_worklist_calls = { 2, 1, 1 };
     layer.hot_worklist_calls = 2;
     layer.cold_worklist_calls = 2;
     layer.parallel_hot_lane_wall_time_us = 20;
@@ -48,6 +50,12 @@ static void test_update_mode_keeps_only_update_metrics() {
     require(contains(json, "\"n_expert\":4"));
     require(contains(json, "\"updates\":3"));
     require(contains(json, "\"hot_slot_ratio\":0.6"));
+    require(contains(json, "\"hot0_slots_total\":2"));
+    require(contains(json, "\"hot0_slots_per_call\":1"));
+    require(contains(json, "\"hot1_slots_total\":3"));
+    require(contains(json, "\"hot1_slots_per_call\":3"));
+    require(contains(json, "\"hot2_slots_total\":1"));
+    require(contains(json, "\"hot2_slots_per_call\":1"));
     require(contains(json, "\"parallel_hot_lane_wall_time_per_call_us\":10"));
     require(contains(json, "\"parallel_cold_lane_wall_time_per_call_us\":20"));
     require(contains(json, "\"parallel_join_wait_time_per_call_us\":5"));
@@ -104,6 +112,39 @@ static void test_full_mode_serializes_raw_counts_as_cold() {
     require(contains(json, "\"pp_dense_hot_gate_up_time_per_call_us\":15"));
     require(contains(json, "\"pp_dense_cold_down_time_per_call_us\":7"));
     require(contains(json, "\"cold_experts\":[[1,5],[3,3]]"));
+}
+
+static void test_full_mode_serializes_hot_lane_metrics() {
+    llama_moe_layer_perf_json_snapshot snapshot;
+    snapshot.mode = LLAMA_MOE_LAYER_PERF_MODE_FULL;
+    snapshot.n_expert = 4;
+    snapshot.n_expert_used = 2;
+
+    llama_moe_layer_perf_json_layer_snapshot layer;
+    layer.calls = 2;
+    layer.hot_slots_total = 4;
+    layer.cold_slots_total = 4;
+    layer.hot_worklist_calls = 2;
+    layer.cold_worklist_calls = 2;
+    layer.hot_lane_slots_total = { 1, 3, 0 };
+    layer.hot_lane_worklist_calls = { 1, 2, 0 };
+    layer.total_moe_time_us = 100;
+    layer.hot_lane_branch_time_us = { 10, 20, 0 };
+    layer.hot_lane_expert_matmul_time_us = { 6, 12, 0 };
+    layer.hot_lane_gather_scatter_time_us = { 4, 8, 0 };
+    snapshot.layers.push_back(layer);
+
+    const std::string json = llama_moe_layer_perf_json_serializer::serialize(snapshot);
+    require(contains(json, "\"hot0_slots_total\":1"));
+    require(contains(json, "\"hot0_slots_per_call\":1"));
+    require(contains(json, "\"hot1_slots_total\":3"));
+    require(contains(json, "\"hot1_slots_per_call\":1.5"));
+    require(contains(json, "\"hot2_slots_total\":0"));
+    require(contains(json, "\"hot2_slots_per_call\":0"));
+    require(contains(json, "\"hot0_branch_time_per_call_us\":5"));
+    require(contains(json, "\"hot1_branch_time_per_call_us\":10"));
+    require(contains(json, "\"hot0_expert_matmul_time_per_call_us\":3"));
+    require(contains(json, "\"hot1_gather_scatter_time_per_call_us\":4"));
 }
 
 static void test_full_mode_derives_slots_from_branch_experts() {
@@ -165,6 +206,7 @@ int main() {
     test_disabled_json_is_minimal();
     test_update_mode_keeps_only_update_metrics();
     test_full_mode_serializes_raw_counts_as_cold();
+    test_full_mode_serializes_hot_lane_metrics();
     test_full_mode_derives_slots_from_branch_experts();
     test_full_mode_serializes_parallel_debug();
     return 0;

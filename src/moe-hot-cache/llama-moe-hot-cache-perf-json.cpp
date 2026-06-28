@@ -50,6 +50,15 @@ uint64_t effective_cold_slots_total(const llama_moe_layer_perf_json_layer_snapsh
     return sum_expert_counts(layer.cold_experts);
 }
 
+double hot_lane_slots_per_call(
+        const llama_moe_layer_perf_json_layer_snapshot & layer,
+        size_t lane,
+        uint64_t slots_total,
+        uint64_t fallback_calls) {
+    const uint64_t lane_calls = layer.hot_lane_worklist_calls[lane];
+    return lane_calls > 0 ? (double) slots_total / (double) lane_calls : per_call(slots_total, fallback_calls);
+}
+
 bool raw_counts_are_cold(const llama_moe_layer_perf_json_layer_snapshot & layer) {
     const bool has_branch_counts =
         has_expert_counts(layer.hot_experts) ||
@@ -114,6 +123,8 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     uint64_t summary_calls = 0;
     uint64_t summary_hot_slots = 0;
     uint64_t summary_cold_slots = 0;
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> summary_hot_lane_slots = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> summary_hot_lane_worklist_calls = {};
     uint64_t summary_total_moe_time_us = 0;
     uint64_t summary_expert_matmul_time_us = 0;
     uint64_t summary_routing_time_us = 0;
@@ -121,6 +132,9 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     uint64_t summary_merge_time_us = 0;
     uint64_t summary_hot_branch_time_us = 0;
     uint64_t summary_cold_branch_time_us = 0;
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> summary_hot_lane_branch_time_us = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> summary_hot_lane_expert_matmul_time_us = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> summary_hot_lane_gather_scatter_time_us = {};
     uint64_t summary_hot_expert_matmul_time_us = 0;
     uint64_t summary_cold_expert_matmul_time_us = 0;
     uint64_t summary_hot_gather_scatter_time_us = 0;
@@ -168,6 +182,13 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         summary_calls += layer.calls;
         summary_hot_slots += raw_as_cold ? 0 : effective_hot_slots_total(layer);
         summary_cold_slots += raw_as_cold ? layer.expert_hits_total : effective_cold_slots_total(layer);
+        for (size_t lane = 0; lane < LLAMA_MOE_LAYER_PERF_HOT_LANES; ++lane) {
+            summary_hot_lane_slots[lane] += raw_as_cold ? 0 : layer.hot_lane_slots_total[lane];
+            summary_hot_lane_worklist_calls[lane] += raw_as_cold ? 0 : layer.hot_lane_worklist_calls[lane];
+            summary_hot_lane_branch_time_us[lane] += layer.hot_lane_branch_time_us[lane];
+            summary_hot_lane_expert_matmul_time_us[lane] += layer.hot_lane_expert_matmul_time_us[lane];
+            summary_hot_lane_gather_scatter_time_us[lane] += layer.hot_lane_gather_scatter_time_us[lane];
+        }
         summary_total_moe_time_us += layer.total_moe_time_us;
         summary_expert_matmul_time_us += layer.expert_matmul_time_us;
         summary_routing_time_us += layer.routing_time_us;
@@ -227,6 +248,12 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
     out << "\"summary\":{";
     out << "\"layer_calls\":" << summary_calls;
     out << ",\"hot_slot_ratio\":" << ratio(summary_hot_slots, summary_slots);
+    for (size_t lane = 0; lane < LLAMA_MOE_LAYER_PERF_HOT_LANES; ++lane) {
+        const uint64_t calls = summary_hot_lane_worklist_calls[lane] > 0 ?
+            summary_hot_lane_worklist_calls[lane] : summary_calls;
+        out << ",\"hot" << lane << "_slots_total\":" << summary_hot_lane_slots[lane];
+        out << ",\"hot" << lane << "_slots_per_call\":" << per_call(summary_hot_lane_slots[lane], calls);
+    }
     out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(summary_parallel_hot_lane_wall_time_us, summary_calls);
     out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(summary_parallel_cold_lane_wall_time_us, summary_calls);
     out << ",\"parallel_join_wait_time_per_call_us\":" << per_call(summary_parallel_join_wait_time_us, summary_calls);
@@ -238,6 +265,11 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         out << ",\"merge_time_per_call_us\":" << per_call(summary_merge_time_us, summary_calls);
         out << ",\"hot_branch_time_per_call_us\":" << per_call(summary_hot_branch_time_us, summary_calls);
         out << ",\"cold_branch_time_per_call_us\":" << per_call(summary_cold_branch_time_us, summary_calls);
+        for (size_t lane = 0; lane < LLAMA_MOE_LAYER_PERF_HOT_LANES; ++lane) {
+            out << ",\"hot" << lane << "_branch_time_per_call_us\":" << per_call(summary_hot_lane_branch_time_us[lane], summary_calls);
+            out << ",\"hot" << lane << "_expert_matmul_time_per_call_us\":" << per_call(summary_hot_lane_expert_matmul_time_us[lane], summary_calls);
+            out << ",\"hot" << lane << "_gather_scatter_time_per_call_us\":" << per_call(summary_hot_lane_gather_scatter_time_us[lane], summary_calls);
+        }
         out << ",\"hot_expert_matmul_time_per_call_us\":" << per_call(summary_hot_expert_matmul_time_us, summary_calls);
         out << ",\"cold_expert_matmul_time_per_call_us\":" << per_call(summary_cold_expert_matmul_time_us, summary_calls);
         out << ",\"hot_gather_scatter_time_per_call_us\":" << per_call(summary_hot_gather_scatter_time_us, summary_calls);
@@ -311,6 +343,11 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
         out << "\"cold_slots_total\":" << cold_slots_total << ",";
         out << "\"hot_slots_per_call\":" << hot_slots_per_call << ",";
         out << "\"cold_slots_per_call\":" << cold_slots_per_call << ",";
+        for (size_t lane = 0; lane < LLAMA_MOE_LAYER_PERF_HOT_LANES; ++lane) {
+            const uint64_t lane_slots_total = raw_as_cold ? 0 : layer.hot_lane_slots_total[lane];
+            out << "\"hot" << lane << "_slots_total\":" << lane_slots_total << ",";
+            out << "\"hot" << lane << "_slots_per_call\":" << hot_lane_slots_per_call(layer, lane, lane_slots_total, layer.calls) << ",";
+        }
         out << "\"hot_slot_ratio\":" << ratio(hot_slots_total, slots_total);
         out << ",\"parallel_hot_lane_wall_time_per_call_us\":" << per_call(layer.parallel_hot_lane_wall_time_us, layer.calls);
         out << ",\"parallel_cold_lane_wall_time_per_call_us\":" << per_call(layer.parallel_cold_lane_wall_time_us, layer.calls);
@@ -324,6 +361,11 @@ std::string llama_moe_layer_perf_json_serializer::serialize(const llama_moe_laye
             out << ",\"merge_time_per_call_us\":" << per_call(layer.merge_time_us, layer.calls);
             out << ",\"hot_branch_time_per_call_us\":" << per_call(layer.hot_branch_time_us, layer.calls);
             out << ",\"cold_branch_time_per_call_us\":" << per_call(layer.cold_branch_time_us, layer.calls);
+            for (size_t lane = 0; lane < LLAMA_MOE_LAYER_PERF_HOT_LANES; ++lane) {
+                out << ",\"hot" << lane << "_branch_time_per_call_us\":" << per_call(layer.hot_lane_branch_time_us[lane], layer.calls);
+                out << ",\"hot" << lane << "_expert_matmul_time_per_call_us\":" << per_call(layer.hot_lane_expert_matmul_time_us[lane], layer.calls);
+                out << ",\"hot" << lane << "_gather_scatter_time_per_call_us\":" << per_call(layer.hot_lane_gather_scatter_time_us[lane], layer.calls);
+            }
             out << ",\"hot_expert_matmul_time_per_call_us\":" << per_call(layer.hot_expert_matmul_time_us, layer.calls);
             out << ",\"cold_expert_matmul_time_per_call_us\":" << per_call(layer.cold_expert_matmul_time_us, layer.calls);
             out << ",\"hot_gather_scatter_time_per_call_us\":" << per_call(layer.hot_gather_scatter_time_us, layer.calls);

@@ -132,6 +132,33 @@ static void test_count_worklist_count_ignores_invalid_inputs() {
     require(state.layers[0].hot_slots_total == 0);
 }
 
+static void test_count_hot_lane_worklist_count_reads_lane_without_aggregate() {
+    ggml_backend_ptr backend = make_cpu_backend();
+    auto ctx = make_ctx();
+
+    ggml_tensor * lane_count = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
+
+    llama_moe_layer_perf_state state;
+    state.ensure_shape_locked(1, 4, 2);
+
+    set_tensor_value<float>(lane_count, 4.2f);
+    llama_moe_layer_perf_tensor_reader::count_hot_lane_worklist_count_locked(state, 0, lane_count, 1);
+    require(state.layers[0].calls == 0);
+    require(state.layers[0].hot_worklist_calls == 0);
+    require(state.layers[0].hot_slots_total == 0);
+    require(state.layers[0].hot_lane_worklist_calls[1] == 1);
+    require(state.layers[0].hot_lane_slots_total[1] == 4);
+    require(state.layers[0].hot_lane_zero_calls[1] == 0);
+
+    set_tensor_value<float>(lane_count, 0.0f);
+    llama_moe_layer_perf_tensor_reader::count_hot_lane_worklist_count_locked(state, 0, lane_count, 1);
+    llama_moe_layer_perf_tensor_reader::count_hot_lane_worklist_count_locked(state, 0, lane_count, 4);
+    require(state.layers[0].hot_lane_worklist_calls[1] == 2);
+    require(state.layers[0].hot_lane_slots_total[1] == 4);
+    require(state.layers[0].hot_lane_zero_calls[1] == 1);
+}
+
 static void test_count_worklist_counts_reads_multi_lane_fields() {
     ggml_backend_ptr backend = make_cpu_backend();
     auto ctx = make_ctx();
@@ -201,6 +228,7 @@ int main() {
     test_count_topk_counts_valid_ids_and_call();
     test_count_worklist_count_reads_f32_and_i32();
     test_count_worklist_count_ignores_invalid_inputs();
+    test_count_hot_lane_worklist_count_reads_lane_without_aggregate();
     test_count_worklist_counts_reads_multi_lane_fields();
     test_count_branch_experts_reads_i32_and_f32();
     return 0;

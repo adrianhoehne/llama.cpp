@@ -3,11 +3,13 @@
 class llama_moe_layer_perf_node_classifier {
 public:
     static int parse_layer_from_name(const char * name);
+    static int hot_lane_from_name(const char * name);
 
     static bool is_any_node(const char * name);
     static bool is_update_node(const char * name);
     static bool is_topk_node(const char * name);
     static bool is_hot_count_node(const char * name);
+    static bool is_hot_lane_count_node(const char * name);
     static bool is_cold_count_node(const char * name);
     static bool is_hot_expert_ids_node(const char * name);
     static bool is_cold_ids_node(const char * name);

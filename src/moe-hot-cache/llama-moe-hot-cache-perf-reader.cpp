@@ -131,6 +131,40 @@ void llama_moe_layer_perf_tensor_reader::count_worklist_count_locked(
     }
 }
 
+void llama_moe_layer_perf_tensor_reader::count_hot_lane_worklist_count_locked(
+        llama_moe_layer_perf_state & state,
+        uint32_t layer,
+        ggml_tensor * t,
+        uint32_t lane) {
+    if (t == nullptr || layer >= state.layers.size() || lane >= LLAMA_MOE_LAYER_PERF_HOT_LANES) {
+        return;
+    }
+
+    if (ggml_nelements(t) <= 0) {
+        return;
+    }
+
+    uint64_t valid = 0;
+    if (t->type == GGML_TYPE_F32) {
+        float count = 0.0f;
+        ggml_backend_tensor_get(t, &count, 0, sizeof(count));
+        valid = count > 0.0f ? (uint64_t) (count + 0.5f) : 0;
+    } else if (t->type == GGML_TYPE_I32) {
+        int32_t count = 0;
+        ggml_backend_tensor_get(t, &count, 0, sizeof(count));
+        valid = count > 0 ? (uint64_t) count : 0;
+    } else {
+        return;
+    }
+
+    auto & dst = state.layers[layer];
+    state.add_locked(dst.hot_lane_worklist_calls[lane], 1);
+    state.add_locked(dst.hot_lane_slots_total[lane], valid);
+    if (valid == 0) {
+        state.add_locked(dst.hot_lane_zero_calls[lane], 1);
+    }
+}
+
 void llama_moe_layer_perf_tensor_reader::count_branch_experts_locked(
         llama_moe_layer_perf_state & state,
         uint32_t layer,

@@ -30,6 +30,9 @@ void llama_moe_layer_perf_state::reset_locked(bool count_overflow) {
         layer.expert_hits_total = 0;
         layer.hot_slots_total = 0;
         layer.cold_slots_total = 0;
+        layer.hot_lane_slots_total.fill(0);
+        layer.hot_lane_worklist_calls.fill(0);
+        layer.hot_lane_zero_calls.fill(0);
         layer.hot_worklist_calls = 0;
         layer.cold_worklist_calls = 0;
         layer.hot_zero_calls = 0;
@@ -38,6 +41,9 @@ void llama_moe_layer_perf_state::reset_locked(bool count_overflow) {
         layer.expert_matmul_time_us = 0;
         layer.hot_branch_time_us = 0;
         layer.cold_branch_time_us = 0;
+        layer.hot_lane_branch_time_us.fill(0);
+        layer.hot_lane_expert_matmul_time_us.fill(0);
+        layer.hot_lane_gather_scatter_time_us.fill(0);
         layer.hot_expert_matmul_time_us = 0;
         layer.cold_expert_matmul_time_us = 0;
         layer.worklist_time_us = 0;

@@ -1,14 +1,21 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <vector>
+
+static constexpr size_t LLAMA_MOE_LAYER_PERF_HOT_LANES = 3;
 
 struct llama_moe_layer_perf_layer {
     uint64_t calls = 0;
     uint64_t expert_hits_total = 0;
     uint64_t hot_slots_total = 0;
     uint64_t cold_slots_total = 0;
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_slots_total = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_worklist_calls = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_zero_calls = {};
     uint64_t hot_worklist_calls = 0;
     uint64_t cold_worklist_calls = 0;
     uint64_t hot_zero_calls = 0;
@@ -18,6 +25,9 @@ struct llama_moe_layer_perf_layer {
     uint64_t expert_matmul_time_us = 0;
     uint64_t hot_branch_time_us = 0;
     uint64_t cold_branch_time_us = 0;
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_branch_time_us = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_expert_matmul_time_us = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_gather_scatter_time_us = {};
     uint64_t hot_expert_matmul_time_us = 0;
     uint64_t cold_expert_matmul_time_us = 0;
     uint64_t worklist_time_us = 0;

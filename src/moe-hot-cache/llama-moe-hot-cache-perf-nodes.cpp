@@ -27,6 +27,26 @@ int llama_moe_layer_perf_node_classifier::parse_layer_from_name(const char * nam
     return std::atoi(dash);
 }
 
+int llama_moe_layer_perf_node_classifier::hot_lane_from_name(const char * name) {
+    const char * p = name == nullptr ? nullptr : std::strstr(name, "ffn_moe_hot");
+    if (p == nullptr) {
+        return -1;
+    }
+
+    p += std::strlen("ffn_moe_hot");
+    if (*p < '0' || *p > '9') {
+        return -1;
+    }
+
+    const int lane = *p - '0';
+    ++p;
+    if (lane < 0 || lane >= 3) {
+        return -1;
+    }
+
+    return *p == '_' || *p == '-' || *p == '\0' ? lane : -1;
+}
+
 bool llama_moe_layer_perf_node_classifier::contains(const char * name, const char * needle) {
     return name != nullptr && std::strstr(name, needle) != nullptr;
 }
@@ -146,6 +166,26 @@ bool llama_moe_layer_perf_node_classifier::is_hot_count_node(const char * name) 
     return has_node_base(name, "ffn_moe_hot_count");
 }
 
+bool llama_moe_layer_perf_node_classifier::is_hot_lane_count_node(const char * name) {
+    const char * p = name == nullptr ? nullptr : std::strstr(name, "ffn_moe_hot");
+    if (p == nullptr) {
+        return false;
+    }
+
+    p += std::strlen("ffn_moe_hot");
+    if (*p < '0' || *p > '2') {
+        return false;
+    }
+
+    ++p;
+    if (std::strncmp(p, "_count", 6) != 0) {
+        return false;
+    }
+
+    const char next = p[6];
+    return next == '\0' || next == '-' || next == '_';
+}
+
 bool llama_moe_layer_perf_node_classifier::is_cold_count_node(const char * name) {
     return has_node_base(name, "ffn_moe_cold_count");
 }
@@ -169,6 +209,7 @@ bool llama_moe_layer_perf_node_classifier::is_multi_pp_worklist_node(const char 
 bool llama_moe_layer_perf_node_classifier::is_update_node(const char * name) {
     return is_topk_node(name) ||
            is_hot_count_node(name) ||
+           is_hot_lane_count_node(name) ||
            is_cold_count_node(name) ||
            is_hot_expert_ids_node(name) ||
            is_cold_ids_node(name) ||

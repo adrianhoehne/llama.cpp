@@ -1,7 +1,9 @@
 #pragma once
 
 #include "llama-moe-hot-cache-perf.h"
+#include "llama-moe-hot-cache-perf-state.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -11,6 +13,8 @@ struct llama_moe_layer_perf_json_layer_snapshot {
     uint64_t expert_hits_total = 0;
     uint64_t hot_slots_total = 0;
     uint64_t cold_slots_total = 0;
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_slots_total = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_worklist_calls = {};
     uint64_t hot_worklist_calls = 0;
     uint64_t cold_worklist_calls = 0;
 
@@ -18,6 +22,9 @@ struct llama_moe_layer_perf_json_layer_snapshot {
     uint64_t expert_matmul_time_us = 0;
     uint64_t hot_branch_time_us = 0;
     uint64_t cold_branch_time_us = 0;
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_branch_time_us = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_expert_matmul_time_us = {};
+    std::array<uint64_t, LLAMA_MOE_LAYER_PERF_HOT_LANES> hot_lane_gather_scatter_time_us = {};
     uint64_t hot_expert_matmul_time_us = 0;
     uint64_t cold_expert_matmul_time_us = 0;
     uint64_t worklist_time_us = 0;
