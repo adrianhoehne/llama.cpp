@@ -2514,6 +2514,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_HOT_CACHE"));
     add_opt(common_arg(
+        {"--moe-hot-cache-warmup-prompt"}, "PROMPT",
+        "experimental: decode this prompt once after model load to warm MoE hot-cache CPU/GPU paths, then clear KV before serving",
+        [](common_params & params, const std::string & value) {
+            params.moe_hot_cache_warmup_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_HOT_CACHE_WARMUP_PROMPT"));
+    add_opt(common_arg(
         {"--moe-hot-cache-update-rate"}, "N",
         string_format("experimental: fraction of hot-cache entries to replace after each completed server run, 0.0-1.0 (default: %.2f)", params.moe_hot_cache_update_rate),
         [](common_params & params, const std::string & value_str) {

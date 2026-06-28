@@ -150,6 +150,7 @@ Notes:
 - `--moe-hot-cache-device-strategy even-split` is the recommended multi-GPU default. It assigns contiguous layer bands to lanes, then fills each owned band evenly within the lane budget.
 - `GGML_CUDA_P2P=1` enables CUDA peer-copy when the cards and driver support it; unsupported pairs fall back internally.
 - `LLAMA_MOE_HOT_CACHE_PARALLEL=force` is a debugging mode for valid parallel regions. Use `1`/`auto` for normal runs.
+- `--moe-hot-cache-warmup-prompt "..."` decodes a representative prompt once after model load, clears KV again, and then starts serving. Use it to warm first-touch CPU/GPU Hot-Cache paths before the first real request.
 - PP dense hot-cache is enabled by adapter profile for supported MoE paths. Use `LLAMA_MOE_HOT_CACHE_PP_DENSE=0` only for regression comparisons.
 - Dense PP only starts at `--moe-hot-cache-pp-dense-min-tokens N`, default `256`; set it per model in `model_config.ini` when a profile needs a different threshold.
 - `--moe-hot-cache-pp-min-hot-expert-ratio F` can keep low-coverage profiles on the normal PP path while still using the hot cache for TG.

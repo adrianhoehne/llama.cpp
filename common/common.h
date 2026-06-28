@@ -572,6 +572,7 @@ struct common_params {
     std::string moe_hot_cache_third_device; // backend device for optional third expert lane
     std::string moe_hot_cache_device_strategy = "warm"; // MoE hot-cache device strategy: warm, hot-even, or even-split
     std::string moe_hot_cache;           // path to /moe-layer-perf JSON
+    std::string moe_hot_cache_warmup_prompt; // prompt decoded once after load to warm MoE hot-cache CPU/GPU paths
     float moe_hot_cache_update_rate = 0.0f; // fraction of hot-cache entries to update after each completed server run
     float moe_hot_cache_layer_curve = 0.5f; // MoE hot-cache layer-pressure weighting curve, 0 = flat, 1 = aggressive
     std::string moe_hot_cache_weighting; // MoE hot-cache weighting mode

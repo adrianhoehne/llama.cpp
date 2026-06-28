@@ -1311,6 +1311,75 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
 }
 
+// Decode a real prompt once after loading so Hot-Cache paths pay first-touch costs before serving.
+static bool common_moe_hot_cache_warmup_prompt(
+        llama_context * lctx,
+        const common_params & params) {
+    if (params.moe_hot_cache_warmup_prompt.empty()) {
+        return true;
+    }
+
+    const llama_model * model = llama_get_model(lctx);
+    if (!llama_model_has_decoder(model)) {
+        LOG_WRN("%s: skipping MoE hot-cache warmup prompt because the model has no decoder\n", __func__);
+        return true;
+    }
+
+    std::vector<llama_token> tokens = common_tokenize(
+            lctx,
+            params.moe_hot_cache_warmup_prompt,
+            true,
+            params.parse_special);
+    if (tokens.empty()) {
+        LOG_WRN("%s: skipping empty MoE hot-cache warmup prompt after tokenization\n", __func__);
+        return true;
+    }
+
+    const uint32_t n_ctx = llama_n_ctx(lctx);
+    if (n_ctx > 0 && tokens.size() > n_ctx) {
+        LOG_WRN("%s: truncating MoE hot-cache warmup prompt from %zu to %u tokens to fit context\n",
+                __func__, tokens.size(), n_ctx);
+        tokens.resize(n_ctx);
+    }
+
+    const int32_t n_batch = std::max<int32_t>(1, params.n_batch);
+    const int32_t n_batch_alloc = (int32_t) std::min<size_t>(tokens.size(), (size_t) n_batch);
+    llama_batch batch = llama_batch_init(n_batch_alloc, 0, 1);
+
+    LOG_INF("%s: warming MoE hot-cache paths with prompt, n_tokens = %zu, n_batch = %d\n",
+            __func__, tokens.size(), n_batch);
+
+    llama_memory_clear(llama_get_memory(lctx), true);
+
+    bool ok = true;
+    const std::vector<llama_seq_id> seq_ids = { 0 };
+    for (size_t offset = 0; offset < tokens.size();) {
+        common_batch_clear(batch);
+
+        const size_t n = std::min<size_t>((size_t) n_batch, tokens.size() - offset);
+        for (size_t i = 0; i < n; ++i) {
+            common_batch_add(batch, tokens[offset + i], (llama_pos) (offset + i), seq_ids, false);
+        }
+
+        const int ret = llama_decode(lctx, batch);
+        if (ret != 0) {
+            LOG_ERR("%s: llama_decode() failed while warming MoE hot-cache prompt at token offset %zu: %d\n",
+                    __func__, offset, ret);
+            ok = false;
+            break;
+        }
+
+        offset += n;
+    }
+
+    llama_batch_free(batch);
+    llama_memory_clear(llama_get_memory(lctx), true);
+    llama_synchronize(lctx);
+    llama_perf_context_reset(lctx);
+
+    return ok;
+}
+
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
     common_init_result_ptr res(new common_init_result(params, model_only));
 
@@ -1422,6 +1491,10 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
         // reset samplers to reset RNG state after warmup to the seeded state
         res->reset_samplers();
+    }
+
+    if (!common_moe_hot_cache_warmup_prompt(lctx, params)) {
+        LOG_ERR("%s: MoE hot-cache warmup prompt failed; continuing with a loaded model\n", __func__);
     }
 
     return res;
