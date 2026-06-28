@@ -1076,6 +1076,25 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
         ? LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_NONE
         : LLAMA_MOE_HOT_CACHE_MUL_MAT_ID_FLAG_ALLOW_NEGATIVE_IDS;
 
+    const int parallel_mode = llama_moe_hot_cache_graph_tweaks::parallel_mode();
+    const int64_t parallel_min_slots = llama_moe_hot_cache_graph_tweaks::parallel_min_slots();
+    const bool annotate_parallel_region =
+        parallel_mode == 2 || parallel_min_slots == 0 || capacity >= parallel_min_slots;
+
+    struct hot_lane_branch {
+        size_t lane_index;
+        const llama_moe_hot_cache_layer_lane * lane;
+        ggml_tensor * count;
+        ggml_tensor * ids;
+        ggml_tensor * weights;
+        ggml_tensor * inputs;
+        ggml_tensor * slots;
+        ggml_backend_t backend;
+    };
+
+    std::vector<hot_lane_branch> hot_branches;
+    hot_branches.reserve(cache.lanes.size());
+
     std::vector<ggml_tensor *> branch_outputs;
     branch_outputs.reserve(cache.lanes.size() + 1);
     ggml_tensor * hot_count_total = nullptr;
@@ -1107,18 +1126,61 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
             lane_backend = llama_moe_hot_cache_backend_for_dev(sched, model.moe_hot_cache->devices[lane_index]);
         }
 
-        ggml_tensor * lane_inputs = ggml_repeat_4d(ctx0, cur, n_embd, capacity, 1, 1);
-        if (lane_backend != nullptr) {
-            ggml_backend_sched_set_tensor_backend(sched, lane_inputs, lane_backend);
-        }
-        graph.cb(lane_inputs, format("ffn_moe_hot%zu_inputs", lane_index).c_str(), il);
+        hot_branches.push_back({
+            lane_index,
+            &lane,
+            lane_count,
+            lane_ids,
+            lane_weights,
+            nullptr,
+            nullptr,
+            lane_backend,
+        });
+    }
 
-        const std::string branch_name = format("hot%zu", lane_index);
+    ggml_tensor * cold_count = nullptr;
+    ggml_tensor * cold_ids = nullptr;
+    ggml_tensor * cold_weights = nullptr;
+    ggml_backend_t cold_backend = nullptr;
+
+    if (llama_moe_hot_cache_layer_has_cold_experts(cache)) {
+        cold_backend = cparams.warmup ? nullptr : graph.backend_cpu;
+
+        cold_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID), GGML_TYPE_I32);
+        cold_ids = ggml_reshape_2d(ctx0, cold_ids, 1, capacity);
+        graph.cb(cold_ids, "ffn_moe_cold_ids_compact", il);
+        ggml_build_forward_expand(gf, cold_ids);
+
+        cold_weights = ggml_reshape_3d(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT), 1, 1, capacity);
+        graph.cb(cold_weights, "ffn_moe_cold_weights_compact", il);
+        ggml_build_forward_expand(gf, cold_weights);
+
+        cold_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT);
+        graph.cb(cold_count, "ffn_moe_cold_count", il);
+        ggml_build_forward_expand(gf, cold_count);
+    }
+
+    if (hot_count_total != nullptr) {
+        graph.cb(hot_count_total, "ffn_moe_hot_count", il);
+        ggml_build_forward_expand(gf, hot_count_total);
+    }
+
+    for (auto & hot_branch : hot_branches) {
+        const auto & lane = *hot_branch.lane;
+
+        ggml_tensor * lane_inputs = ggml_repeat_4d(ctx0, cur, n_embd, capacity, 1, 1);
+        if (hot_branch.backend != nullptr) {
+            ggml_backend_sched_set_tensor_backend(sched, lane_inputs, hot_branch.backend);
+        }
+        graph.cb(lane_inputs, format("ffn_moe_hot%zu_inputs", hot_branch.lane_index).c_str(), il);
+        hot_branch.inputs = lane_inputs;
+
+        const std::string branch_name = format("hot%zu", hot_branch.lane_index);
         ggml_tensor * lane_out = llama_moe_hot_cache_build_moe_ffn_with_ids(
                 graph,
                 lane_inputs,
-                lane_ids,
-                lane_weights,
+                hot_branch.ids,
+                hot_branch.weights,
                 lane.ffn_up_exps,
                 lane.ffn_up_exps_b,
                 lane.ffn_gate_exps,
@@ -1136,35 +1198,20 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
                 lane.ffn_down_exps_s,
                 hot_mul_mat_id_flags,
                 branch_name.c_str(),
-                lane_backend);
-        graph.cb(lane_out, format("ffn_moe_hot%zu_out", lane_index).c_str(), il);
+                hot_branch.backend);
+        graph.cb(lane_out, format("ffn_moe_hot%zu_out", hot_branch.lane_index).c_str(), il);
 
-        branch_outputs.push_back(merge_compact_slots(
+        hot_branch.slots = merge_compact_slots(
                 lane_out,
-                lane_backend,
-                format("ffn_moe_hot%zu_slots", lane_index).c_str()));
-    }
-    if (hot_count_total != nullptr) {
-        graph.cb(hot_count_total, "ffn_moe_hot_count", il);
-        ggml_build_forward_expand(gf, hot_count_total);
+                hot_branch.backend,
+                format("ffn_moe_hot%zu_slots", hot_branch.lane_index).c_str());
+        branch_outputs.push_back(hot_branch.slots);
     }
 
-    if (llama_moe_hot_cache_layer_has_cold_experts(cache)) {
-        ggml_backend_t cold_backend = cparams.warmup ? nullptr : graph.backend_cpu;
-        ggml_tensor * cold_ids = ggml_cast(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_ID), GGML_TYPE_I32);
-        cold_ids = ggml_reshape_2d(ctx0, cold_ids, 1, capacity);
-        graph.cb(cold_ids, "ffn_moe_cold_ids_compact", il);
-        ggml_build_forward_expand(gf, cold_ids);
-
-        ggml_tensor * cold_weights = ggml_reshape_3d(ctx0, view_worklist_field(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_WEIGHT), 1, 1, capacity);
-        graph.cb(cold_weights, "ffn_moe_cold_weights_compact", il);
-        ggml_build_forward_expand(gf, cold_weights);
-
-        ggml_tensor * cold_count = view_worklist_count(LLAMA_MOE_HOT_CACHE_WORKLIST_FIELD_COLD_COUNT);
-        graph.cb(cold_count, "ffn_moe_cold_count", il);
-        ggml_build_forward_expand(gf, cold_count);
-
-        ggml_tensor * cold_inputs = ggml_repeat_4d(ctx0, cur, n_embd, capacity, 1, 1);
+    ggml_tensor * cold_inputs = nullptr;
+    ggml_tensor * cold_slots = nullptr;
+    if (cold_count != nullptr) {
+        cold_inputs = ggml_repeat_4d(ctx0, cur, n_embd, capacity, 1, 1);
         if (cold_backend != nullptr) {
             ggml_backend_sched_set_tensor_backend(sched, cold_inputs, cold_backend);
         }
@@ -1197,7 +1244,8 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
                 "cold",
                 cold_backend);
         graph.cb(cold_out, "ffn_moe_cold_out", il);
-        branch_outputs.push_back(merge_compact_slots(cold_out, cold_backend, "ffn_moe_cold_slots"));
+        cold_slots = merge_compact_slots(cold_out, cold_backend, "ffn_moe_cold_slots");
+        branch_outputs.push_back(cold_slots);
     }
 
     GGML_ASSERT(!branch_outputs.empty());
@@ -1216,6 +1264,40 @@ static ggml_tensor * llama_moe_hot_cache_build_moe_hot_multi_from_logits(
         ggml_backend_sched_set_tensor_backend(sched, out, merge_backend);
     }
     graph.cb(out, "ffn_moe_out", il);
+
+    if (parallel_mode != 0 && !cparams.warmup && annotate_parallel_region && !hot_branches.empty()) {
+        std::vector<ggml_tensor *> hot_counts;
+        std::vector<ggml_tensor *> hot_starts;
+        std::vector<ggml_tensor *> hot_ends;
+        std::vector<ggml_tensor *> hot_outputs;
+        hot_counts.reserve(hot_branches.size());
+        hot_starts.reserve(hot_branches.size());
+        hot_ends.reserve(hot_branches.size());
+        hot_outputs.reserve(hot_branches.size());
+        for (const auto & hot_branch : hot_branches) {
+            hot_counts.push_back(hot_branch.count);
+            hot_starts.push_back(hot_branch.inputs);
+            hot_ends.push_back(hot_branch.slots);
+            hot_outputs.push_back(hot_branch.slots);
+        }
+
+        ggml_backend_sched_moe_hot_cache_multi_parallel_region(
+                sched,
+                il,
+                parallel_mode,
+                capacity,
+                (int) hot_counts.size(),
+                hot_counts.data(),
+                hot_starts.data(),
+                hot_ends.data(),
+                hot_outputs.data(),
+                cold_count,
+                cold_inputs,
+                cold_slots,
+                cold_slots,
+                out,
+                GGML_BACKEND_SCHED_MOE_HOT_CACHE_PARALLEL_FLAG_ALLOW_JOIN_BRIDGE);
+    }
     return out;
 }
 

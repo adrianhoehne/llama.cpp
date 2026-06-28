@@ -72,6 +72,25 @@ extern "C" {
             struct ggml_tensor * join,
             uint32_t flags);
 
+    // Experimental: annotate one MoE hot-cache fork/join region with multiple
+    // CUDA hot lanes and an optional CPU cold lane.
+    GGML_API void ggml_backend_sched_moe_hot_cache_multi_parallel_region(
+            ggml_backend_sched_t sched,
+            int32_t layer,
+            int mode,
+            int64_t max_slots,
+            int n_hot_lanes,
+            struct ggml_tensor ** hot_counts,
+            struct ggml_tensor ** hot_starts,
+            struct ggml_tensor ** hot_ends,
+            struct ggml_tensor ** hot_outputs,
+            struct ggml_tensor * cold_count,
+            struct ggml_tensor * cold_start,
+            struct ggml_tensor * cold_end,
+            struct ggml_tensor * cold_output,
+            struct ggml_tensor * join,
+            uint32_t flags);
+
     GGML_API int ggml_backend_sched_get_moe_hot_cache_parallel_perf(
             ggml_backend_sched_t sched,
             struct ggml_backend_sched_moe_hot_cache_parallel_perf * out,
