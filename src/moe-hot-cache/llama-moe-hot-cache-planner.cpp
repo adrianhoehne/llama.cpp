@@ -3,7 +3,9 @@
 #include "llama-model.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -19,6 +21,16 @@ struct lane_state {
     std::unordered_set<uint32_t> active_layers;
     std::unordered_map<uint32_t, size_t> selected_by_layer;
 };
+
+static bool env_flag_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+
+    const std::string v(value);
+    return v != "0" && v != "false" && v != "False" && v != "off" && v != "OFF";
+}
 
 static bool select_entry_into_lane(
         llama_moe_hot_cache_plan & lane,
@@ -87,6 +99,76 @@ static size_t best_hot_even_lane(
     }
 
     return best;
+}
+
+// Select one expert into the best available lane for the configured placement strategy.
+static bool select_entry_into_multi_plan(
+        llama_moe_hot_cache_multi_plan & plan,
+        std::vector<lane_state> & states,
+        std::unordered_set<uint64_t> & selected,
+        const llama_moe_hot_cache_entry & entry,
+        size_t bytes,
+        llama_moe_hot_cache_device_strategy strategy) {
+    const uint64_t entry_key = key(entry.layer, entry.expert);
+    if (selected.find(entry_key) != selected.end()) {
+        return false;
+    }
+
+    std::vector<size_t> lane_order(plan.lanes.size());
+    for (size_t i = 0; i < lane_order.size(); ++i) {
+        lane_order[i] = i;
+    }
+
+    if (strategy == llama_moe_hot_cache_device_strategy::hot_even) {
+        std::sort(lane_order.begin(), lane_order.end(), [&](size_t a, size_t b) {
+            const size_t a_count = states[a].selected_by_layer.count(entry.layer)
+                ? states[a].selected_by_layer.at(entry.layer)
+                : 0;
+            const size_t b_count = states[b].selected_by_layer.count(entry.layer)
+                ? states[b].selected_by_layer.at(entry.layer)
+                : 0;
+            if (a_count != b_count) {
+                return a_count < b_count;
+            }
+            if (plan.lanes[a].used_bytes != plan.lanes[b].used_bytes) {
+                return plan.lanes[a].used_bytes < plan.lanes[b].used_bytes;
+            }
+            return a < b;
+        });
+
+        const size_t preferred = best_hot_even_lane(plan.lanes, states, entry, lane_order);
+        if (preferred != std::numeric_limits<size_t>::max()) {
+            lane_order.erase(std::remove(lane_order.begin(), lane_order.end(), preferred), lane_order.end());
+            lane_order.insert(lane_order.begin(), preferred);
+        }
+    }
+
+    for (size_t lane : lane_order) {
+        if (select_entry_into_lane(plan.lanes[lane], states[lane], entry, bytes)) {
+            selected.insert(entry_key);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Append deterministic random fallback candidates so unused budget can hold coverage experts.
+static std::vector<llama_moe_hot_cache_entry> random_fill_entries(
+        const std::vector<llama_moe_hot_cache_expert_size> & sizes,
+        const std::unordered_set<uint64_t> & selected) {
+    std::vector<llama_moe_hot_cache_entry> result;
+    result.reserve(sizes.size());
+
+    for (const auto & size : sizes) {
+        if (selected.find(key(size.layer, size.expert)) == selected.end()) {
+            result.push_back({ size.layer, size.expert, 0 });
+        }
+    }
+
+    std::mt19937 rng(0x6d6f65u);
+    std::shuffle(result.begin(), result.end(), rng);
+    return result;
 }
 
 } // namespace
@@ -267,40 +349,17 @@ llama_moe_hot_cache_multi_plan llama_moe_hot_cache_select_multi(
             continue;
         }
 
-        std::vector<size_t> lane_order(plan.lanes.size());
-        for (size_t i = 0; i < lane_order.size(); ++i) {
-            lane_order[i] = i;
-        }
+        select_entry_into_multi_plan(plan, states, selected, entry, size_it->second, strategy);
+    }
 
-        if (strategy == llama_moe_hot_cache_device_strategy::hot_even) {
-            std::sort(lane_order.begin(), lane_order.end(), [&](size_t a, size_t b) {
-                const size_t a_count = states[a].selected_by_layer.count(entry.layer)
-                    ? states[a].selected_by_layer.at(entry.layer)
-                    : 0;
-                const size_t b_count = states[b].selected_by_layer.count(entry.layer)
-                    ? states[b].selected_by_layer.at(entry.layer)
-                    : 0;
-                if (a_count != b_count) {
-                    return a_count < b_count;
-                }
-                if (plan.lanes[a].used_bytes != plan.lanes[b].used_bytes) {
-                    return plan.lanes[a].used_bytes < plan.lanes[b].used_bytes;
-                }
-                return a < b;
-            });
-
-            const size_t preferred = best_hot_even_lane(plan.lanes, states, entry, lane_order);
-            if (preferred != std::numeric_limits<size_t>::max()) {
-                lane_order.erase(std::remove(lane_order.begin(), lane_order.end(), preferred), lane_order.end());
-                lane_order.insert(lane_order.begin(), preferred);
+    if (env_flag_enabled("LLAMA_MOE_HOT_CACHE_FILL_RANDOM")) {
+        for (const auto & entry : random_fill_entries(sizes, selected)) {
+            const auto size_it = size_by_expert.find(key(entry.layer, entry.expert));
+            if (size_it == size_by_expert.end()) {
+                continue;
             }
-        }
 
-        for (size_t lane : lane_order) {
-            if (select_entry_into_lane(plan.lanes[lane], states[lane], entry, size_it->second)) {
-                selected.insert(entry_key);
-                break;
-            }
+            select_entry_into_multi_plan(plan, states, selected, entry, size_it->second, strategy);
         }
     }
 
