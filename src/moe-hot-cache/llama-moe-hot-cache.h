@@ -231,6 +231,9 @@ std::vector<llama_moe_hot_cache_layer_observation> llama_moe_hot_cache_parse_per
 
 std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const std::string & json_str);
 
+bool llama_moe_hot_cache_perf_json_is_usable(const std::string & json_str);
+bool llama_moe_hot_cache_file_has_usable_perf_json(const char * path);
+
 llama_moe_hot_cache_plan llama_moe_hot_cache_select(
         const std::vector<llama_moe_hot_cache_entry> & observed,
         const std::vector<llama_moe_hot_cache_expert_size> & sizes,

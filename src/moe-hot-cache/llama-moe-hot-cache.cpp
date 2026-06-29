@@ -200,6 +200,29 @@ std::vector<llama_moe_hot_cache_entry> llama_moe_hot_cache_parse_perf_json(const
     return score_observations_default(observations);
 }
 
+bool llama_moe_hot_cache_perf_json_is_usable(const std::string & json_str) {
+    try {
+        const auto observations = llama_moe_hot_cache_parse_perf_json_observations(json_str);
+        return !observations.empty();
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+bool llama_moe_hot_cache_file_has_usable_perf_json(const char * path) {
+    if (path == nullptr || path[0] == '\0') {
+        return false;
+    }
+
+    std::ifstream file(path);
+    if (!file) {
+        return false;
+    }
+
+    const std::string json_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return llama_moe_hot_cache_perf_json_is_usable(json_str);
+}
+
 void llama_moe_hot_cache_init(llama_model & model, const llama_model_params & params, bool reserve_kv_cache) {
     if (!hot_cache_any_lane_enabled(params)) {
         return;

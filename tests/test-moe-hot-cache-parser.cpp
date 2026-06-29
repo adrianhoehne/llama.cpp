@@ -158,10 +158,31 @@ static void test_parser_rejects_invalid_json() {
     require(threw);
 }
 
+static void test_perf_json_usability() {
+    require(!llama_moe_hot_cache_perf_json_is_usable(""));
+    require(!llama_moe_hot_cache_perf_json_is_usable("{"));
+    require(!llama_moe_hot_cache_perf_json_is_usable(R"({
+        "enabled": true,
+        "schema": "llama.cpp.moe_layer_perf.v1",
+        "layers": []
+    })"));
+    require(!llama_moe_hot_cache_perf_json_is_usable(R"({
+        "enabled": true,
+        "schema": "llama.cpp.moe_layer_perf.v1",
+        "layers": [{ "layer": 0, "experts": [[1, 0]] }]
+    })"));
+    require(llama_moe_hot_cache_perf_json_is_usable(R"({
+        "enabled": true,
+        "schema": "llama.cpp.moe_layer_perf.v1",
+        "layers": [{ "layer": 0, "experts": [[1, 3]] }]
+    })"));
+}
+
 int main() {
     test_parse_observations_merges_branch_counts_and_timings();
     test_parse_opt_schema_and_compat_ranking_wrapper();
     test_parse_enabled_layer_slots();
     test_parser_rejects_invalid_json();
+    test_perf_json_usability();
     return 0;
 }

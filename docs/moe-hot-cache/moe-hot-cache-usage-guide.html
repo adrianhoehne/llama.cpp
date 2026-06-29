@@ -934,7 +934,13 @@ MoE hot-cache apply: mode = manual, rate = 100.00%, exchanged = ...</code></pre>
                 <td><code>--moe-hot-cache-warmup-prompt PROMPT</code></td>
                 <td><code>moe-hot-cache-warmup-prompt = PROMPT</code><br><code>LLAMA_ARG_MOE_HOT_CACHE_WARMUP_PROMPT</code></td>
                 <td>Text prompt, default unset</td>
-                <td>Decodes the supplied prompt once after model load, then clears KV and perf counters before serving. Use a representative PP prompt to pay first-touch CPU/GPU Hot-Cache costs before the first real request. The prompt is tokenized as raw text; pass a chat-formatted prompt when the warmup should match a chat template exactly.</td>
+                <td>Decodes the supplied prompt once after model load, then clears KV and regular llama timing counters before serving. MoE layer perf counters remain available for Auto-Learn. Use a representative PP prompt to pay first-touch CPU/GPU Hot-Cache costs before the first real request. The prompt is tokenized as raw text; pass a chat-formatted prompt when the warmup should match a chat template exactly.</td>
+              </tr>
+              <tr>
+                <td><code>--auto-learn</code></td>
+                <td><code>LLAMA_ARG_AUTO_LEARN</code></td>
+                <td>Boolean, default off</td>
+                <td>Requires <code>--moe-hot-cache</code>, at least one hot-cache lane budget, and <code>--moe-hot-cache-warmup-prompt</code>. If the hot-cache file is missing, invalid, or has no usable expert counts, the server first learns a full perf JSON from the warmup prompt without Hot-Cache lanes, overwrites the hot-cache file, and then reloads with Hot-Cache. After completed requests, the current perf counters are written back to the same file; runtime replacement still uses <code>--moe-hot-cache-update-rate</code>.</td>
               </tr>
               <tr>
                 <td><code>--moe-hot-cache-max-mib N</code></td>

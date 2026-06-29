@@ -1007,6 +1007,19 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         if (ctx_arg.params.moe_hot_cache_update_rate > 0.0f && !moe_hot_cache_any_lane) {
             throw std::invalid_argument("--moe-hot-cache-update-rate requires a MoE hot-cache lane budget");
         }
+        if (ctx_arg.params.moe_hot_cache_auto_learn) {
+            if (!moe_hot_cache_any_lane) {
+                throw std::invalid_argument("--auto-learn requires a MoE hot-cache lane budget");
+            }
+            if (ctx_arg.params.moe_hot_cache.empty()) {
+                throw std::invalid_argument("--auto-learn requires --moe-hot-cache");
+            }
+            if (ctx_arg.params.moe_hot_cache_warmup_prompt.empty()) {
+                throw std::invalid_argument("--auto-learn requires --moe-hot-cache-warmup-prompt");
+            }
+            ctx_arg.params.no_perf = false;
+            ctx_arg.params.sampling.no_perf = false;
+        }
         if (!ctx_arg.params.moe_layer_perf_out.empty()) {
             ctx_arg.params.no_perf = false;
             ctx_arg.params.sampling.no_perf = false;
@@ -2520,6 +2533,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_hot_cache_warmup_prompt = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_HOT_CACHE_WARMUP_PROMPT"));
+    add_opt(common_arg(
+        {"--auto-learn"},
+        "experimental: if the MoE hot-cache file is missing, invalid, or unusable, learn it from --moe-hot-cache-warmup-prompt, overwrite --moe-hot-cache, then load the hot-cache; subsequent updates reuse --moe-hot-cache-update-rate",
+        [](common_params & params) {
+            params.moe_hot_cache_auto_learn = true;
+            params.no_perf = false;
+            params.sampling.no_perf = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_AUTO_LEARN"));
     add_opt(common_arg(
         {"--moe-hot-cache-update-rate"}, "N",
         string_format("experimental: fraction of hot-cache entries to replace after each completed server run, 0.0-1.0 (default: %.2f)", params.moe_hot_cache_update_rate),

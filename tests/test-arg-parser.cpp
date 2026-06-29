@@ -106,6 +106,14 @@ int main(void) {
     argv = {"binary_name", "--no-mmap"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
+    {
+        common_params auto_learn_params;
+
+        // --auto-learn requires a hot-cache file, a lane budget, and a warmup prompt.
+        argv = {"binary_name", "--auto-learn", "--moe-hot-cache", "hot-cache.json", "--moe-hot-cache-max-mib", "1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), auto_learn_params, LLAMA_EXAMPLE_SERVER));
+    }
+
 
     printf("test-arg-parser: test valid usage\n\n");
 
@@ -126,6 +134,18 @@ int main(void) {
     assert(params.model.path == "abc.gguf");
     assert(params.n_predict == 6789);
     assert(params.n_batch == 9090);
+
+    {
+        common_params auto_learn_params;
+
+        argv = {"binary_name", "-m", "abc.gguf", "--auto-learn", "--moe-hot-cache", "hot-cache.json",
+                "--moe-hot-cache-max-mib", "1", "--moe-hot-cache-warmup-prompt", "hello"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), auto_learn_params, LLAMA_EXAMPLE_SERVER));
+        assert(auto_learn_params.moe_hot_cache_auto_learn == true);
+        assert(auto_learn_params.moe_hot_cache == "hot-cache.json");
+        assert(auto_learn_params.moe_hot_cache_warmup_prompt == "hello");
+        assert(auto_learn_params.no_perf == false);
+    }
 
     // --draft cannot be used outside llama-speculative
     argv = {"binary_name", "--spec-draft-n-max", "123"};

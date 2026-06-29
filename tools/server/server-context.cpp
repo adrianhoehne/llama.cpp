@@ -1016,6 +1016,12 @@ private:
             }
         }
 
+        if (params_base.moe_hot_cache_auto_learn && !llama_moe_hot_cache_file_has_usable_perf_json(params_base.moe_hot_cache.c_str())) {
+            if (!bootstrap_moe_hot_cache_from_warmup()) {
+                return false;
+            }
+        }
+
         llama_init = common_init_from_params(params_base);
 
         model_tgt = llama_init->model();
@@ -3820,33 +3826,48 @@ private:
         throw std::runtime_error("failed to choose a MoE hot-cache backup path");
     }
 
-    moe_hot_cache_disk_save_result save_moe_hot_cache_json_to_disk(const std::string & json_str) const {
+    // Write the hot-cache JSON to disk, optionally preserving the previous file for manual saves.
+    moe_hot_cache_disk_save_result write_moe_hot_cache_json_to_disk(const std::string & json_str, bool backup_existing) const {
         if (params_base.moe_hot_cache.empty()) {
             throw std::invalid_argument("--moe-hot-cache is required to save a hot-cache JSON to disk");
         }
 
         const std::filesystem::path cache_path(params_base.moe_hot_cache);
+        std::filesystem::path backup_path;
 
         std::error_code ec;
-        if (!std::filesystem::exists(cache_path, ec)) {
-            if (ec) {
+        if (backup_existing) {
+            if (!std::filesystem::exists(cache_path, ec)) {
+                if (ec) {
+                    throw std::runtime_error(string_format(
+                            "failed to inspect MoE hot-cache file '%s': %s",
+                            cache_path.string().c_str(),
+                            ec.message().c_str()));
+                }
                 throw std::runtime_error(string_format(
-                        "failed to inspect MoE hot-cache file '%s': %s",
-                        cache_path.string().c_str(),
-                        ec.message().c_str()));
+                        "MoE hot-cache file '%s' does not exist",
+                        cache_path.string().c_str()));
             }
-            throw std::runtime_error(string_format(
-                    "MoE hot-cache file '%s' does not exist",
-                    cache_path.string().c_str()));
-        }
 
-        const std::filesystem::path backup_path = next_moe_hot_cache_backup_path(cache_path);
-        if (!std::filesystem::copy_file(cache_path, backup_path, std::filesystem::copy_options::none, ec)) {
-            throw std::runtime_error(string_format(
-                    "failed to copy MoE hot-cache file '%s' to '%s': %s",
-                    cache_path.string().c_str(),
-                    backup_path.string().c_str(),
-                    ec ? ec.message().c_str() : "destination already exists"));
+            backup_path = next_moe_hot_cache_backup_path(cache_path);
+            if (!std::filesystem::copy_file(cache_path, backup_path, std::filesystem::copy_options::none, ec)) {
+                throw std::runtime_error(string_format(
+                        "failed to copy MoE hot-cache file '%s' to '%s': %s",
+                        cache_path.string().c_str(),
+                        backup_path.string().c_str(),
+                        ec ? ec.message().c_str() : "destination already exists"));
+            }
+        } else {
+            const std::filesystem::path parent = cache_path.parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                if (ec) {
+                    throw std::runtime_error(string_format(
+                            "failed to create MoE hot-cache directory '%s': %s",
+                            parent.string().c_str(),
+                            ec.message().c_str()));
+                }
+            }
         }
 
         std::ofstream file(cache_path, std::ios::binary | std::ios::trunc);
@@ -3867,6 +3888,65 @@ private:
             cache_path.string(),
             backup_path.string(),
         };
+    }
+
+    // Save a manually supplied hot-cache JSON and keep a numbered backup of the old file.
+    moe_hot_cache_disk_save_result save_moe_hot_cache_json_to_disk(const std::string & json_str) const {
+        return write_moe_hot_cache_json_to_disk(json_str, true);
+    }
+
+    // Build a usable hot-cache input file by running the configured warmup prompt without hot-cache lanes.
+    bool bootstrap_moe_hot_cache_from_warmup() {
+        SRV_INF("MoE hot-cache auto-learn: learning '%s' from --moe-hot-cache-warmup-prompt\n",
+                params_base.moe_hot_cache.c_str());
+
+        common_params learn_params = params_base;
+        learn_params.moe_hot_cache_max_mib = 0;
+        learn_params.moe_hot_cache_second_max_mib = 0;
+        learn_params.moe_hot_cache_third_max_mib = 0;
+        learn_params.no_perf = false;
+        learn_params.sampling.no_perf = false;
+
+        llama_moe_layer_perf_set_mode(LLAMA_MOE_LAYER_PERF_MODE_FULL);
+
+        common_init_result_ptr learn_init;
+        try {
+            learn_init = common_init_from_params(learn_params);
+        } catch (const std::exception & e) {
+            SRV_ERR("MoE hot-cache auto-learn failed during warmup model load: %s\n", e.what());
+            return false;
+        }
+
+        if (!learn_init || learn_init->model() == nullptr || learn_init->context() == nullptr) {
+            SRV_ERR("%s", "MoE hot-cache auto-learn failed: warmup model load did not create a context\n");
+            return false;
+        }
+
+        if (!llama_moe_layer_perf_has_data()) {
+            SRV_ERR("%s", "MoE hot-cache auto-learn failed: warmup prompt produced no MoE perf data\n");
+            return false;
+        }
+
+        const std::string perf_json = llama_moe_layer_perf_json(nullptr);
+        if (!llama_moe_hot_cache_perf_json_is_usable(perf_json)) {
+            SRV_ERR("%s", "MoE hot-cache auto-learn failed: warmup perf data is not usable as a hot-cache file\n");
+            return false;
+        }
+
+        try {
+            const auto disk_save = write_moe_hot_cache_json_to_disk(perf_json, false);
+            remember_moe_layer_perf_json(perf_json);
+            SRV_INF("MoE hot-cache auto-learn: wrote warmup perf data to '%s'\n",
+                    disk_save.path.c_str());
+        } catch (const std::exception & e) {
+            SRV_ERR("MoE hot-cache auto-learn failed to write '%s': %s\n",
+                    params_base.moe_hot_cache.c_str(), e.what());
+            return false;
+        }
+
+        learn_init.reset();
+        llama_moe_layer_perf_reset();
+        return true;
     }
 
     void set_moe_layer_perf_mode(llama_moe_layer_perf_mode mode) const {
@@ -3899,6 +3979,18 @@ private:
         }
 
         const std::string perf_json = get_moe_layer_perf_json();
+        if (params_base.moe_hot_cache_auto_learn && llama_moe_hot_cache_perf_json_is_usable(perf_json)) {
+            try {
+                const auto disk_save = write_moe_hot_cache_json_to_disk(perf_json, false);
+                SRV_INF("MoE hot-cache auto-learn: wrote updated perf data to '%s'\n",
+                        disk_save.path.c_str());
+            } catch (const std::exception & e) {
+                SRV_WRN("MoE hot-cache auto-learn: failed to write updated perf data to '%s': %s\n",
+                        params_base.moe_hot_cache.c_str(),
+                        e.what());
+            }
+        }
+
         const auto stats = llama_moe_hot_cache_update_from_perf_json(
                 *model_tgt,
                 perf_json,

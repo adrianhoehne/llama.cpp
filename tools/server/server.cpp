@@ -88,7 +88,11 @@ int llama_server(int argc, char ** argv) {
         return 1;
     }
 
-    llama_moe_layer_perf_set_initial_mode(params.no_perf);
+    if (params.moe_hot_cache_auto_learn) {
+        llama_moe_layer_perf_set_mode(LLAMA_MOE_LAYER_PERF_MODE_FULL);
+    } else {
+        llama_moe_layer_perf_set_initial_mode(params.no_perf);
+    }
 
     llama_backend_init();
     llama_numa_init(params.numa);

@@ -22,19 +22,11 @@ Supported:
 - DeepSeek2-family MoE models, including GLM Flash MoE GGUF exports
 - Native GLM4 MoE models
 
-## Cached-experts configuration examples
+## Quickstart: one GPU with Auto-Learn
 
-The examples below use `llama-server` and keep the normal model path on the primary CUDA device. Replace `MODEL.gguf` and `/path/to/moe-perf-data` with your model and the directory or JSON data produced for the hot-cache planner.
-
-### Default cached-experts, one CUDA card
-
-Use this when one CUDA device should hold the normal graph/KV path and as many cached experts as the automatic budget allows. Remaining experts stay on CPU via `--cpu-moe`.
-
-The planner fills unused hot-cache budget with deterministic fallback experts by default, even when they were not present in the perf data. Set `LLAMA_MOE_HOT_CACHE_FILL_RANDOM=0` to keep only observed experts.
+Use this when the model does not fit fully into VRAM and you want the server to learn the first hot-cache plan by itself. The file passed to `--moe-hot-cache` can be empty or contain an unusable perf JSON; with `--auto-learn`, the server runs `--moe-hot-cache-warmup-prompt` once without Hot-Cache lanes, writes the observed expert counters to that file, and then reloads with the Hot-Cache enabled.
 
 ```sh
-LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --model MODEL.gguf \
   --device CUDA0 \
@@ -43,10 +35,34 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --n-gpu-layers 99 \
   --cpu-moe \
   --ctx-size 4096 \
-  --ubatch-size 32 \
-  --flash-attn on \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
+  --moe-hot-cache /path/to/moe-perf-data.json \
+  --moe-hot-cache-max-mib -1 \
+  --moe-hot-cache-update-rate 0.25 \
+  --moe-hot-cache-warmup-prompt "Create a hello world in HTML" \
+  --auto-learn
+```
+
+On the first start, look for log lines beginning with `MoE hot-cache auto-learn`. On later starts, the same file is reused directly and updated after completed requests.
+
+## Cached-experts configuration examples
+
+The examples below use `llama-server` and keep the normal model path on the primary CUDA device. Replace `MODEL.gguf` and `/path/to/moe-perf-data` with your model and the directory or JSON data produced for the hot-cache planner.
+
+### Default cached-experts, one CUDA card
+
+Use this when one CUDA device should hold the normal graph/KV path and as many cached experts as the automatic budget allows. Remaining experts stay on CPU via `--cpu-moe`.
+
+The planner fills unused hot-cache budget with deterministic fallback experts by default, even when they were not present in the perf data.
+
+```sh
+./build/bin/llama-server \
+  --model MODEL.gguf \
+  --device CUDA0 \
+  --split-mode none \
+  --main-gpu 0 \
+  --n-gpu-layers 99 \
+  --cpu-moe \
+  --ctx-size 4096 \
   --moe-hot-cache /path/to/moe-perf-data \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
@@ -58,9 +74,6 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 Use this when `CUDA0` should remain the primary card for graph/KV/router/final merge and `CUDA1` should act as an additional expert lane. `even-split` is the default recommendation for multi-GPU hot-cache setups: each lane owns a contiguous layer band and fills that band with the hottest experts that fit its budget. Use `warm` only when you want to fill the primary lane first, and `hot-even` only when you explicitly want per-layer experts balanced across similar cards.
 
 ```sh
-GGML_CUDA_P2P=1 \
-LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --model MODEL.gguf \
   --device CUDA0 \
@@ -69,10 +82,6 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --n-gpu-layers 99 \
   --cpu-moe \
   --ctx-size 4096 \
-  --ubatch-size 32 \
-  --flash-attn on \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
   --moe-hot-cache /path/to/moe-perf-data \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
@@ -86,9 +95,6 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 For a small primary GPU that should only run graph/KV/router/final merge, disable the primary expert cache and place experts on the second device:
 
 ```sh
-GGML_CUDA_P2P=1 \
-LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --model MODEL.gguf \
   --device CUDA0 \
@@ -97,10 +103,6 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --n-gpu-layers 99 \
   --cpu-moe \
   --ctx-size 4096 \
-  --ubatch-size 32 \
-  --flash-attn on \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
   --moe-hot-cache /path/to/moe-perf-data \
   --moe-hot-cache-max-mib 0 \
   --moe-hot-cache-second-device CUDA1 \
@@ -112,12 +114,9 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 
 ### Three CUDA cards
 
-Use this when `CUDA0` is the primary card and `CUDA1`/`CUDA2` are additional expert lanes. This is the intended shape for one primary GPU plus two expert-only GPUs. `even-split` is recommended here as well so each GPU works on its own layer band instead of every layer spreading across every lane. Keep per-device reserve high enough for temporary buffers; reduce `--ctx-size` or `--ubatch-size` first if CUDA allocation fails.
+Use this when `CUDA0` is the primary card and `CUDA1`/`CUDA2` are additional expert lanes. This is the intended shape for one primary GPU plus two expert-only GPUs. `even-split` is recommended here as well so each GPU works on its own layer band instead of every layer spreading across every lane. Keep per-device reserve high enough for temporary buffers; reduce `--ctx-size` first if CUDA allocation fails.
 
 ```sh
-GGML_CUDA_P2P=1 \
-LLAMA_MOE_HOT_CACHE_CPU_DECODE_ROUTING=1 \
-LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
 ./build/bin/llama-server \
   --model MODEL.gguf \
   --device CUDA0 \
@@ -126,10 +125,6 @@ LLAMA_MOE_HOT_CACHE_PARALLEL=1 \
   --n-gpu-layers 99 \
   --cpu-moe \
   --ctx-size 4096 \
-  --ubatch-size 32 \
-  --flash-attn on \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
   --moe-hot-cache /path/to/moe-perf-data \
   --moe-hot-cache-max-mib -1 \
   --moe-hot-cache-auto-reserve-mib 1024 \
@@ -148,10 +143,9 @@ Notes:
 - `--moe-hot-cache-max-mib -1` auto-sizes a lane from currently free VRAM minus its reserve.
 - `--moe-hot-cache-max-mib 0` disables the primary expert lane while keeping secondary or tertiary expert lanes available.
 - `--moe-hot-cache-device-strategy even-split` is the recommended multi-GPU default. It assigns contiguous layer bands to lanes, then fills each owned band evenly within the lane budget.
-- `GGML_CUDA_P2P=1` enables CUDA peer-copy when the cards and driver support it; unsupported pairs fall back internally.
-- `LLAMA_MOE_HOT_CACHE_PARALLEL=force` is a debugging mode for valid parallel regions. Use `1`/`auto` for normal runs.
 - `--moe-hot-cache-warmup-prompt "..."` decodes a representative prompt once after model load, clears KV again, and then starts serving. Use it to warm first-touch CPU/GPU Hot-Cache paths before the first real request.
-- PP dense hot-cache is enabled by adapter profile for supported MoE paths. Use `LLAMA_MOE_HOT_CACHE_PP_DENSE=0` only for regression comparisons.
+- `--auto-learn` requires `--moe-hot-cache-warmup-prompt` and `--moe-hot-cache`. If the hot-cache file is empty, invalid, or unusable, the server first learns a full perf JSON from the warmup prompt without Hot-Cache lanes, overwrites `--moe-hot-cache`, then reloads with Hot-Cache. Later automatic updates reuse `--moe-hot-cache-update-rate` and write the current counters back to the same file.
+- PP dense hot-cache is enabled by adapter profile for supported MoE paths.
 - Dense PP only starts at `--moe-hot-cache-pp-dense-min-tokens N`, default `256`; set it per model in `model_config.ini` when a profile needs a different threshold.
 - `--moe-hot-cache-pp-min-hot-expert-ratio F` can keep low-coverage profiles on the normal PP path while still using the hot cache for TG.
 - A general speedup claim for two GPUs could not be validated on the available test hardware because the cards are very asymmetric. Treat the two-GPU examples as configuration starting points, not as benchmark guidance.
